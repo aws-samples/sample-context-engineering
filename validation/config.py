@@ -405,7 +405,7 @@ PRICING = Pricing()
 # --- Tool suite sizing -------------------------------------------------------------
 
 TARGET_SCHEMA_TOKENS = 63_000
-"""Schema budget per model call, matched to the session measured in concept.md.
+"""Schema budget per model call, matched to the measured session.
 
 That session showed ~63,000 tokens of tool schema on every one of its 33 calls — about
 85% of the floor of a call with an empty history — from an MCP banking server plus a web
