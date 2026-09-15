@@ -1,0 +1,8 @@
+# Python dependencies for the AgentCore runtime container.
+#
+# The forked Strands SDK under test is installed from its public git branch, pinned to a commit —
+# see agentcore/DEPLOY.md, which is the source of truth for the runtime requirements the CLI uses.
+# Versions are pinned exactly (==) for a reproducible container build.
+-r ../requirements.txt
+
+bedrock-agentcore==1.22.0
