@@ -35,6 +35,15 @@ from .config import RESULTS_DIR, RUN_CONFIGS
 _ORDER = ("baseline", "disclosure", "relevance", "graph", "all", "graph-all")
 """Reading order: the reference first, then one strategy at a time, then the two stacks."""
 
+NOISE_FLOOR_PCT = 20.0
+"""Token-delta magnitude, in percent, below which a single-replay run decides nothing.
+
+The harness's own measure is per configuration: ``compare.py``'s "Beats noise" column compares a
+delta against that configuration's peak-to-peak spread across replays. A single replay has no spread
+to compare against, so the headline note falls back to this figure — the spread this harness has
+measured on replayed runs, rounded to something a reader can hold.
+"""
+
 _COLORS = {
     "baseline": "#57606a",
     "disclosure": "#0969da",
@@ -390,6 +399,69 @@ def _headline_table(rows: list[Row]) -> str:
     )
 
 
+def _replays(rows: list[Row] | None) -> int:
+    """Return the run's replay count, or 1 when the rows are absent.
+
+    The page used to state one replay as a literal, which quietly became a false claim the first time
+    the harness was run with more.
+    """
+    return max((row.repeats for row in rows or []), default=1)
+
+
+def _headline_note(rows: list[Row]) -> str:
+    """Describe the result table's own figures, computed rather than written down.
+
+    The sentence this replaces named its percentages as literals, so it kept asserting the deltas of
+    whatever run it was written against while the table above it showed the current one. A note that
+    disagrees with the table it captions is worse than no note, so the figures are derived here.
+
+    ``NOISE_FLOOR_PCT`` is the decision threshold: a token delta smaller than the peak-to-peak spread
+    this harness has measured across replays is not a result, whatever its sign.
+
+    Args:
+        rows: Ordered rows for the run, baseline included.
+
+    Returns:
+        The caption as a plain sentence, already escaped for HTML.
+    """
+    base = next((row for row in rows if row.name == "baseline"), None)
+    others = [row for row in rows if base is None or row.name != base.name]
+    repeats = max((row.repeats for row in rows), default=1)
+    lead = f"{repeats} replay{'' if repeats == 1 else 's'} per configuration."
+    if base is None or not others:
+        return lead
+
+    deltas = [(row, delta_pct(row.total_tokens, base.total_tokens)) for row in others]
+    # A replayed run knows each configuration's own peak-to-peak spread, which is the harness's real
+    # test. Only a single replay, which has no spread, falls back to the measured rule of thumb.
+    decisive = [
+        (row, pct)
+        for row, pct in deltas
+        if abs(pct) >= (row.token_spread_pct if row.repeats > 1 and row.token_spread_pct else NOISE_FLOOR_PCT)
+    ]
+    best, best_pct = min(deltas, key=lambda pair: pair[1])
+    threshold = (
+        "each configuration's own replay spread"
+        if repeats > 1
+        else f"~{NOISE_FLOOR_PCT:.0f}%"
+    )
+
+    if not decisive:
+        return (
+            f"{lead} No configuration separates from the baseline by more than {threshold}, so this run "
+            f"supports no decision between them."
+        )
+
+    return (
+        f"{lead} {len(decisive)} of {len(others)} "
+        f"{'configuration separates' if len(decisive) == 1 else 'configurations separate'} from the "
+        f"baseline by more than {threshold}, the largest at {best_pct:+,.1f}% "
+        f"({html.escape(best.label)}), holding accuracy at {best.weighted_accuracy * 100:.1f}% against the "
+        f"baseline's {base.weighted_accuracy * 100:.1f}%. Smaller differences do not support a decision, "
+        f"because they are inside the noise this harness has already measured on replayed runs."
+    )
+
+
 def _slope(values: list[float]) -> float:
     """Least-squares slope against ordinal position, in units per turn."""
     count = len(values)
@@ -484,12 +556,10 @@ def build_html(
             "output, plus every auxiliary token the strategy spent on its own account: the graph's embedding "
             "calls. <strong>Cost</strong> applies the rates declared in "
             "<code>validation.config.PRICING</code> to measured units, embedding and rerank included — without "
-            "that, the three strategies that buy their saving with a second model call would rank better than "
+            "that, the strategies that buy their saving with a second model call would rank better than "
             "they are.</p>"
             f"{_headline_table(rows)}"
-            "<p class='note'>One replay per configuration. The three large differences — −54%, −81.9% and the "
-            "accuracy tie at 95.8% — support a decision; nothing under ~20% does, because that is inside the "
-            "noise this harness has already measured on replayed runs.</p></section>"
+            f"<p class='note'>{_headline_note(rows)}</p></section>"
         )
 
     return f"""<!doctype html>
@@ -504,7 +574,7 @@ def build_html(
 <main>
 <h1>Context strategies: cost, accuracy and the per-turn curve</h1>
 <p class="lede">{len(data)} configurations, {turns} turns each, sequential, live Bedrock,
-<strong>1 replay</strong>. Click a legend key to hide a series; hover it to highlight.</p>
+<strong>{_replays(rows)} replay{'' if _replays(rows) == 1 else 's'}</strong>. Click a legend key to hide a series; hover it to highlight.</p>
 {headline}
 {body}
 <section>
@@ -517,8 +587,8 @@ rather than a property of any strategy.</p>
 </section>
 <footer>
 Generated from <code>{html.escape(source)}</code> by <code>validation.chart</code>. Inline SVG, no
-library and no CDN — the file opens offline. One replay per configuration: differences under ~20% are
-inside the harness's noise.
+library and no CDN — the file opens offline. {_replays(rows)} replay{'' if _replays(rows) == 1 else 's'} per
+configuration: differences under ~{NOISE_FLOOR_PCT:.0f}% are inside the harness's noise.
 </footer>
 </main>
 <script>{_JS}</script>

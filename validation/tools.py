@@ -32,7 +32,7 @@ from .config import TARGET_SCHEMA_TOKENS
 
 # --- Synthetic financial fixtures ---------------------------------------------------
 #
-# Mirrors the session analysed in concept.md: an investment question, a connector that
+# Mirrors the measured session: an investment question, a connector that
 # breaks, and a return to the original subject. Values carry thousand and decimal
 # separators on purpose — that is what the offloader classifies as protected content
 # and refuses to paraphrase.

@@ -1,6 +1,6 @@
 """The conversation script every configuration replays.
 
-The shape is taken from the session analysed in ``concept.md``, because that session is
+The shape is taken from the measured session, because that session is
 what motivated all three strategies: a main subject, a long detour, and a return.
 
 **Topic lines are five turns or more.** This is the harness's second important calibration,
@@ -133,7 +133,7 @@ SCENARIO: tuple[Turn, ...] = (
         ),
         rationale=(
             "Closes line B at five turns with another heavy payload. Line B is now the "
-            "connector-debugging mass that concept.md measured at 44.7% of its session."
+            "connector-debugging mass measured at 44.7% of that session."
         ),
     ),
     # --- Line C: AWS infrastructure (5 turns) --------------------------------------
