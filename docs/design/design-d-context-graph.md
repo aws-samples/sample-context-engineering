@@ -19,7 +19,7 @@ Eight terms, and no other is invented in this document.
 | **tag** | one of the **5 identifiers** that define the card. Dynamic: they come out of the conversation, nothing is declared beforehand (§7.1) |
 | **full content** | the messages of the card as they are |
 | **resolution** | which of the three forms above enters the call: title, description or full content |
-| **score** | how relevant the card seems to the turn's question. Decides the resolution (§8) |
+| **score** | how relevant the card seems to the turn's question. Decides the resolution (§8). The SDK calls it a *note* — `compute_notes` — so the code and this document name the same quantity two ways |
 | **STM** | short-term memory. The graph is the STM of the session, and nothing in it crosses the session (§20) |
 
 The three resolutions, from cheapest to most expensive:
@@ -66,7 +66,7 @@ Two properties that come from the asymmetry with the log:
 - **Recovering does not read storage.** There is no block to assemble and no model call — a
   deactivated node is reactivated by clearing its mark, so what stopped being sent simply reappears.
   (This is the recover half of the "nothing is erased, what leaves stays recoverable" property; see
-  the historical note on idea C below.)
+  §19.2 on why there is no idea C.)
 
 What the score (§8) does is decide the resolution automatically on every turn. `expand` is the
 manual route, for when the score got it wrong.
@@ -1149,22 +1149,17 @@ longer acting on that event, a result there names none, so the hook registers no
 comes from the second path, the scan of the preview text — which is the path the code already
 declares makes hook order irrelevant. Same card, one event later.
 
-## 19.2 Historical note: D subsumes the Context Curator (idea C)
+## 19.2 Why there is no idea C
 
-An earlier approach — a background **context curator** — was considered and **not built as a separate
-mechanism**. It proposed a process running alongside the main agent that classified each conversation
-turn as *focus* or *background*, moved the background out of the resident context by marking it (never
-deleting it), and brought a subject back by clearing its mark when the conversation returned to it.
-Its guiding principle was "nothing is erased; what leaves the context stays recoverable," and its key
-insight was that the distinction that matters is not useful-vs-useless but **focus vs background** —
-what stopped being the subject should stop paying a per-turn toll without being lost.
+The practices are lettered A, B and D. The gap is not an omission: C would have been a background
+**context curator** — a process alongside the agent classifying each turn as *focus* or *background*,
+moving the background out of the resident context by marking it rather than deleting it, and bringing a
+subject back by clearing the mark.
 
-D absorbs that idea rather than sitting beside it. The focus/background separation becomes the graph's
-**activation/deactivation** of nodes over an immutable log: a deactivated node is exactly the curator's
-"marked background," and clearing the mark is D's recovery. Because D already reorganizes A and B into
-one graph with remove/recover, a standalone curator would have been a fourth parallel mechanism doing
-what the graph's activation already does — so C survives only as this note, and the active set is A, B,
-and D.
+That separation is exactly what the graph's **activation/deactivation** of nodes over an immutable log
+does: a deactivated node is the curator's marked background, and clearing the mark is D's recovery. A
+standalone curator would be a fourth mechanism doing what the graph's activation already does, so the
+active set is A, B and D.
 
 ## 20. The graph lives the session, and only the session
 

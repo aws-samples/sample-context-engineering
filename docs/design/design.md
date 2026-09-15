@@ -7,8 +7,8 @@ Detail of each approach at L200 level:
 
 - `design-a-relevance-filtering.md`
 - `design-b-progressive-tool-disclosure.md`
-- `design-d-context-graph.md` — reorganizes A and B into a single graph. It subsumes an earlier
-  background-curator idea (C), so there is no standalone C; the historical note is inside the D doc.
+- `design-d-context-graph.md` — reorganizes A and B into a single graph. It also covers what a
+  standalone curator idea (C) would have done, which is why the set is A, B and D; see §19.2 there.
 
 Status: **draft for discussion**
 
@@ -273,13 +273,13 @@ Why forget instead of accumulate: the conversation branches. If every visited su
 its detail resident, the cost would go back to growing without end. Forgetting keeps the cost
 flat.
 
-### On the earlier background-curator idea (C)
+### Why there is no idea C
 
-An earlier approach — a background *context curator* — proposed classifying each turn as focus or
-background and moving the background out of the resident context, bringing it back when the subject
-returned. It is **not a standalone approach here**: idea **D** (context graph) reorganizes A, B and
-that curator idea into one graph, where the focus/background separation becomes the graph's
-activation/deactivation over an immutable log. The full historical note is in `design-d-context-graph.md`.
+The lettering runs A, B, D. C would have been a background *context curator*: a mechanism classifying
+each turn as focus or background, moving the background out of the resident context and bringing it back
+when the subject returned. It is **not a standalone approach here** — idea **D** (context graph)
+reorganizes A, B and that separation into one graph, where focus/background becomes the graph's
+activation/deactivation over an immutable log. See §19.2 of `design-d-context-graph.md`.
 
 ### A note on retrieved memory (not one of the approaches)
 
@@ -534,6 +534,5 @@ to judge whether the graph pays for itself.
 4. Is the change of subject declared or inferred?
 5. Are the relevance thresholds fixed, or calibrated per use case? (They do not need to be
    answered to start — an argument in favor of exposing them as configuration.)
-   not.
-7. How conservative is the curator? The adjustment is between token cost and risk of a poor
+6. How conservative is the curator? The adjustment is between token cost and risk of a poor
    answer, and it is its only parameter that changes behavior visibly.

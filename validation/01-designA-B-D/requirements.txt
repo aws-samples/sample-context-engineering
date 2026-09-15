@@ -1,9 +1,7 @@
 # The context-engineering strategies under test are vended plugins of a forked Strands SDK.
 # We install it from the public fork, pinned to an immutable commit SHA (not a moving branch tip)
-# so the installed code is reproducible and auditable. The commit below is the tip of the
-# agent-tasks/context-graph branch that carries the graph — which subsumes relevance filtering,
-# progressive tool disclosure and the retired background curator — at the time the results were
-# measured.
+# so the installed code is reproducible and auditable. The commit below is the one the results in
+# results/ were measured against.
 # To hack on the SDK instead, clone the fork at this commit and swap this line for an editable install:
 #   git clone https://github.com/scandura/harness-sdk.git && git -C harness-sdk checkout c4083a04d35170b0626cfbdbb5e4926d9b35af20
 #   pip install -e harness-sdk/strands-py

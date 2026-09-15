@@ -3,14 +3,14 @@
 The tools are deterministic, so every factual question in the scenario has one correct
 answer that can be computed here rather than eyeballed. Computing it is the point: a
 hand-written expectation that happens to be wrong would mark correct answers as failures.
+
+This module is a check you run by hand, not part of a benchmark run — it prints the computed
+answers so they can be compared against the expectations in ``accuracy.py``:
+
+    .venv/bin/python -m src.ground_truth
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root, for `validation.` imports
-
-from validation.tools import _POSITIONS, _synthetic_statement
+from .tools import _POSITIONS, _synthetic_statement
 
 
 def brl(value: float) -> str:

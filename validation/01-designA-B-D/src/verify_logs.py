@@ -11,8 +11,8 @@ rather than inferred from timestamps — which matters because CloudWatch *metri
 the minute and cannot separate configurations that ran back to back.
 
 Usage:
-    python -m validation.verify_logs results/run-verify60.json
-    python -m validation.verify_logs results/run-verify60.json --per-call
+    python -m src.verify_logs results/run-verify60.json
+    python -m src.verify_logs results/run-verify60.json --per-call
 """
 
 from __future__ import annotations
@@ -263,8 +263,8 @@ def compare(payload: dict[str, Any], records: list[dict[str, Any]], *, per_call:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="validation.verify_logs", description=__doc__)
-    parser.add_argument("run_json", help="a run JSON produced by validation.run")
+    parser = argparse.ArgumentParser(prog="src.verify_logs", description=__doc__)
+    parser.add_argument("run_json", help="a run JSON produced by src.run")
     parser.add_argument("--tag", help="override the harness tag to look for (default: meta.log_tag)")
     parser.add_argument("--per-call", action="store_true", help="list every discrepant call, not just counts")
     parser.add_argument("--wait", type=int, default=45, metavar="SECONDS",

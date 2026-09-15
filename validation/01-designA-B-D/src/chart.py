@@ -1,6 +1,6 @@
 """Render the per-turn token curve as a self-contained HTML page.
 
-Reads the CSV that ``validation.compare --curve`` writes and emits one file with four charts. The
+Reads the CSV that ``src.compare --curve`` writes and emits one file with four charts. The
 split is deliberate: ``compare.py`` answers *what did each strategy cost* in Markdown that pastes
 into a pull request, and this answers *what shape did the cost have* in something you can hand to
 someone who will not read a table.
@@ -15,8 +15,8 @@ Interactivity is what SVG gives for free: ``<title>`` on each point is a native 
 the legend toggles series with one class swap. No hover engine, no layout pass, no build step.
 
 Usage:
-    python -m validation.chart validation/results/curve-comparison60.csv
-    python -m validation.chart <csv> --out validation/results/curve.html
+    python -m src.chart results/curve-comparison60.csv
+    python -m src.chart <csv> --out results/curve.html
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def load(csv_path: Path) -> dict[str, list[Point]]:
     """Read the curve CSV, grouped by configuration and ordered by turn.
 
     Args:
-        csv_path: Path to a ``curve-<tag>.csv`` written by ``validation.compare --curve``.
+        csv_path: Path to a ``curve-<tag>.csv`` written by ``src.compare --curve``.
 
     Returns:
         Points per configuration name, in reading order, each list sorted by turn.
@@ -360,7 +360,7 @@ def _headline_table(rows: list[Row]) -> str:
 
     First on the page because it is the answer, and the charts are the explanation. Its figures come
     from the run JSON rather than the curve CSV — accuracy, turn latency and the auxiliary bill are
-    not in the series — and from :func:`validation.compare.summary_rows`, so the HTML and the
+    not in the series — and from :func:`src.compare.summary_rows`, so the HTML and the
     Markdown report can never disagree about a cost.
 
     Args:
@@ -402,8 +402,8 @@ def _headline_table(rows: list[Row]) -> str:
 def _replays(rows: list[Row] | None) -> int:
     """Return the run's replay count, or 1 when the rows are absent.
 
-    The page used to state one replay as a literal, which quietly became a false claim the first time
-    the harness was run with more.
+    Read from the rows rather than stated in the page's text, so the count follows the run it
+    describes instead of asserting a number that only holds for a single-replay run.
     """
     return max((row.repeats for row in rows or []), default=1)
 
@@ -555,7 +555,7 @@ def build_html(
             "<p class='note'><strong>Total tokens</strong> is the agent's own <code>usage</code>, input plus "
             "output, plus every auxiliary token the strategy spent on its own account: the graph's embedding "
             "calls. <strong>Cost</strong> applies the rates declared in "
-            "<code>validation.config.PRICING</code> to measured units, embedding and rerank included — without "
+            "<code>src.config.PRICING</code> to measured units, embedding and rerank included — without "
             "that, the strategies that buy their saving with a second model call would rank better than "
             "they are.</p>"
             f"{_headline_table(rows)}"
@@ -586,7 +586,7 @@ rather than a property of any strategy.</p>
 {_shape_table(data)}
 </section>
 <footer>
-Generated from <code>{html.escape(source)}</code> by <code>validation.chart</code>. Inline SVG, no
+Generated from <code>{html.escape(source)}</code> by <code>src.chart</code>. Inline SVG, no
 library and no CDN — the file opens offline. {_replays(rows)} replay{'' if _replays(rows) == 1 else 's'} per
 configuration: differences under ~{NOISE_FLOOR_PCT:.0f}% are inside the harness's noise.
 </footer>
@@ -599,7 +599,7 @@ configuration: differences under ~{NOISE_FLOOR_PCT:.0f}% are inside the harness'
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="validation.chart",
+        prog="src.chart",
         description="Render the per-turn token curve CSV as a self-contained HTML page.",
     )
     parser.add_argument("csv", help="path to results/curve-<tag>.csv")

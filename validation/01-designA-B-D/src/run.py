@@ -1,11 +1,11 @@
 """Entry point: run the comparison and emit the metrics report.
 
 Usage:
-    python -m validation.run                          # all five configurations, full script
-    python -m validation.run --configs baseline all    # just two
-    python -m validation.run --turns 3                 # smoke run, first three turns
-    python -m validation.run --smoke                   # cheapest run that still exercises all three
-    python -m validation.run --report-only results/run-20260829-120000.json
+    python -m src.run                          # all five configurations, full script
+    python -m src.run --configs baseline all    # just two
+    python -m src.run --turns 3                 # smoke run, first three turns
+    python -m src.run --smoke                   # cheapest run that still exercises all three
+    python -m src.run --report-only results/run-20260829-120000.json
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def _preflight() -> bool:
 
     log_group = (logging_config.get("cloudWatchConfig") or {}).get("logGroupName")
     if log_group == INVOCATION_LOG_GROUP:
-        print(f"logs:    {log_group} (verify with validation/verify_logs.py)")
+        print(f"logs:    {log_group} (verify with src/verify_logs.py)")
     else:
         print(
             f"warning: bedrock invocation logging does not target {INVOCATION_LOG_GROUP} "
@@ -273,7 +273,7 @@ async def _main_async(args: argparse.Namespace) -> int:
         "account": ACCOUNT_ID,
         "region": REGION,
         "repeats": args.repeats,
-        # The join key for validation/verify_logs.py. Without it, finding a run's entries in
+        # The join key for src/verify_logs.py. Without it, finding a run's entries in
         # an account-wide log group means guessing at timestamps again.
         "log_tag": metrics.RUN_TAG,
         "log_group": INVOCATION_LOG_GROUP,
@@ -305,7 +305,7 @@ async def _main_async(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="validation.run",
+        prog="src.run",
         description="Compare context-graph, progressive-tool-disclosure and relevance-filtering.",
     )
     parser.add_argument(
@@ -335,7 +335,7 @@ def main() -> int:
             "drop the agent at turn N and build a new one over the same session for the rest. "
             "This is the shape an ephemeral runtime has, and the only way this harness exercises "
             "what graph persistence exists for: a long-lived process restores nothing, so the load "
-            "path never runs. Installs a FileSessionManager under validation/.sessions."
+            "path never runs. Installs a FileSessionManager under .sessions."
         ),
     )
     parser.add_argument(

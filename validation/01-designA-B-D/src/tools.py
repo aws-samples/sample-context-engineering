@@ -100,11 +100,11 @@ def _synthetic_statement(account_id: str, days: int) -> str:
 def _brl(value: float) -> str:
     """Format a number in Brazilian convention: thousands with '.', decimals with ','.
 
-    Formatting each field on its own rather than rewriting the finished line: the earlier
-    version applied the separator swap to the whole row, which turned the CSV commas into
-    dots and corrupted the descriptions ("PIX" became "PI."). That made the statement
-    unparseable and, worse, made the numbers in it untrustworthy — which is exactly the
-    property the offloader's protected-content guard is supposed to preserve.
+    Each field is formatted on its own rather than by rewriting the finished line. Swapping
+    separators across a whole CSV row turns its commas into dots and corrupts the descriptions
+    ("PIX" becomes "PI."), which makes the statement unparseable and its numbers
+    untrustworthy — exactly the property the offloader's protected-content guard exists to
+    preserve.
     """
     return f"R$ {value:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 

@@ -6,14 +6,17 @@
 > independent security review, least-privilege hardening, and operational readiness assessment
 > appropriate to your workload.
 
-Reproducible benchmark for the context-engineering ideas in this repo. It replays the **same**
-multi-turn conversation against a live Bedrock agent under two (or more) configurations and reports
-**accuracy, token consumption, latency and cost** side by side, so the difference between them is the
-strategy and nothing else.
+This directory holds the benchmark for practices **A, B and D**. It replays the **same** multi-turn
+conversation against a live Bedrock agent under two (or more) configurations and reports **accuracy,
+token consumption, latency and cost** side by side, so the difference between them is the strategy and
+nothing else.
 
-One directory, one harness — it covers **one or more ideas** at once and can target **more than one
-framework** (the token/cost path runs against Strands + Bedrock; the `agentcore/` path documents
-deploying the strategies to AgentCore Runtime). It is not tied to a single idea.
+It covers the three practices at once, and more than one framework: the token/cost path runs against
+Strands + Bedrock, and [`agentcore/DEPLOY.md`](agentcore/DEPLOY.md) documents deploying the same
+strategies to AgentCore Runtime.
+
+For the plugin wiring on its own — a minimal agent, without the benchmark around it — see
+[`how-to/01-designA-B-D-agent-sample.md`](../../how-to/01-designA-B-D-agent-sample.md).
 
 The strategies under test are:
 
@@ -44,7 +47,8 @@ live benchmark run does.
 
 ## The SDK dependency
 
-The strategies are vended plugins of a **forked Strands SDK**, published on a public fork. You do
+The strategies ship as **vended plugins** of a **forked Strands SDK** — plugins the SDK bundles itself,
+under `strands.vended_plugins`, rather than something you register. You do
 **not** need to clone anything — the harness installs it straight from git. `requirements.txt` pins the
 exact **commit SHA** the results in `results/` were measured against (an immutable reference, not a
 moving branch tip):
@@ -64,17 +68,32 @@ pip install -e harness-sdk/strands-py
 
 ---
 
+## Layout
+
+```
+run.sh              create the venv on first use, then run the benchmark
+report.sh           re-render an existing run's report — no Bedrock call
+requirements.txt    pinned dependencies, including the SDK
+src/                the harness itself (a Python package, invoked by the two scripts)
+agentcore/          deploying the same strategies to AgentCore Runtime
+results/            generated: one JSON, one Markdown report and one HTML page per run
+```
+
+`.venv/`, `.cache/`, `.artifacts/`, `.sessions/` and `results/` are all created here on first run.
+
+---
+
 ## Quick start — reproduce a run
 
-From the repo root. The first invocation creates the venv, installs the SDK from git, and installs
+From this directory. The first invocation creates the venv, installs the SDK from git, and installs
 Chromium; later invocations reuse them.
 
 ```bash
 # baseline vs all three strategies, 60 turns, one replay
-./validation/run.sh --configs baseline graph-all --total-turns 60 --tag myrun
+./run.sh --configs baseline graph-all --total-turns 60 --tag myrun
 ```
 
-Every run writes **three artifacts** to `validation/results/`, automatically:
+Every run writes **three artifacts** to `results/`, automatically:
 
 | File | What it is |
 |---|---|
@@ -85,7 +104,7 @@ Every run writes **three artifacts** to `validation/results/`, automatically:
 Open the HTML:
 
 ```bash
-open validation/results/curve-myrun.html
+open results/curve-myrun.html
 ```
 
 `report-latest.md` always points at the most recent run.
@@ -93,21 +112,21 @@ open validation/results/curve-myrun.html
 ### Other run shapes
 
 ```bash
-./validation/run.sh --smoke                          # cheap wiring check (verifies engagement, not effect)
-./validation/run.sh --configs baseline graph-all ... # any subset of configurations
-./validation/run.sh --repeats 3 --tag myrun          # averaged with spread — needed for deltas under ~20%
-./validation/run.sh --sequential                     # clean latency numbers (~5x slower)
+./run.sh --smoke                          # cheap wiring check (verifies engagement, not effect)
+./run.sh --configs baseline graph-all ... # any subset of configurations
+./run.sh --repeats 3 --tag myrun          # averaged with spread — needed for deltas under ~20%
+./run.sh --sequential                     # clean latency numbers (~5x slower)
 ```
 
 Valid configuration names: `baseline`, `disclosure`, `relevance`, `graph`, `all`, `graph-all`.
 
 ### Re-render without re-running (free)
 
-Change a price in `config.py`, or just regenerate the report/HTML from an existing run — no Bedrock call:
+Change a price in `src/config.py`, or just regenerate the report/HTML from an existing run — no Bedrock call:
 
 ```bash
-./validation/report.sh myrun            # rebuilds comparison-*.md, curve-*.csv and curve-*.html
-./validation/report.sh myrun --verify   # also reconciles the token counts against Bedrock's logs
+./report.sh myrun            # rebuilds comparison-*.md, curve-*.csv and curve-*.html
+./report.sh myrun --verify   # also reconciles the token counts against Bedrock's logs
 ```
 
 > The live `run.sh` already emits the HTML; `report.sh` is for re-rendering an old run or adding `--verify`.
@@ -134,29 +153,29 @@ signal and use `--repeats 3` before trusting anything under ~20%.
 The token harness above answers *what the strategies cost*. Running the same strategies as a real,
 deployed agent — to observe behaviour end to end — is done on **Amazon Bedrock AgentCore Runtime**.
 
-Deployment is a **manual, documented procedure** using the official `agentcore` CLI, not a scripted
-build: the container installs the forked SDK straight from its public git branch (pinned to a commit
-SHA), so there is no local wheel build. The full step-by-step — configure, create memory, deploy,
-invoke, tear down — is in [`agentcore/DEPLOY.md`](agentcore/DEPLOY.md).
+Deployment is a **documented procedure** using the official `agentcore` CLI (`npm install -g
+@aws/agentcore`). The CLI scaffolds its own project and provisions through CDK; you install the
+strategies in the entrypoint it generates. The full step-by-step — create, wire the strategies, declare
+dependencies, test locally, deploy, invoke, tear down — is in
+[`agentcore/DEPLOY.md`](agentcore/DEPLOY.md).
 
-`agentcore/` therefore holds only what that path needs: the how-to (`DEPLOY.md`), a `.env.example`
-for the runtime environment, and the container requirements. Everything is paid and account-changing,
-and `DEPLOY.md` flags each step accordingly.
+`agentcore/` holds what that path needs: the procedure (`DEPLOY.md`) and the pinned dependency list.
+Every step is paid and account-changing, and `DEPLOY.md` flags each one accordingly.
 
 ---
 
 ## How the numbers are produced (reference)
 
 - **Accuracy** — deterministic string checks against values computed from the mocked tools
-  (`accuracy.py` + `ground_truth.py`). No judge model, so it adds no latency and no variance.
+  (`src/accuracy.py` + `src/ground_truth.py`). No judge model, so it adds no latency and no variance.
 - **Token consumption** — measured **per model call** (a middleware captures the assembled messages
   and tool specs plus the provider's own `usage`), never from `accumulated_usage`, which reports a
   session running total and would make a per-call improvement look like a regression.
 - **Timing** — per model call, per turn, per run.
-- **Cost** — one cost model (`compare._row` + the rates in `config.PRICING`); auxiliary embedding/rerank
+- **Cost** — one cost model (`src/compare.py` + the rates in `src/config.py`); auxiliary embedding/rerank
   calls a strategy makes are priced separately, not hidden.
 
-**Two calibrations decide whether this measures anything** (`run.py` prints them at startup and warns
+**Two calibrations decide whether this measures anything** (`src/run.py` prints them at startup and warns
 on drift):
 
 | | Value | Why |
@@ -172,10 +191,10 @@ has neither blind spot; each request is stamped with metadata naming its configu
 join is exact:
 
 ```bash
-validation/.venv/bin/python -m validation.verify_logs validation/results/run-myrun.json --per-call
+.venv/bin/python -m src.verify_logs results/run-myrun.json --per-call
 ```
 
-Enabling the invocation log is account-wide state (not something a run configures); `run.py` checks it
+Enabling the invocation log is account-wide state (not something a run configures); `src/run.py` checks it
 during preflight and warns when a run will not be verifiable. Entries take 2–3 minutes to deliver.
 
 ---
@@ -184,7 +203,6 @@ during preflight and warns when a run will not be verifiable. Entries take 2–3
 
 - **`results/` runs carry the account id** (in each run's `meta`) and the full text of every answer.
   They are measurements, not code — scrub or omit them before publishing a specific run.
-- **The mocked tool fixtures name real financial institutions.** They contain no personal data (all
-  figures are synthetic, computed by `ground_truth.py`), but they are recognisable brands; a public demo
-  reads cleaner with fictional ones. Changing them means regenerating any recorded run, because the names
-  are ground truth in `accuracy.py`.
+- **The tool fixtures are synthetic.** The institutions are fictional and every figure is computed by
+  `src/ground_truth.py`. Changing a name means regenerating any recorded run, because the names are
+  ground truth in `src/accuracy.py`.

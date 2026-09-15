@@ -107,7 +107,10 @@ THRESHOLDS = Thresholds()
 
 # --- Paths -------------------------------------------------------------------------
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+"""The harness directory â€” one level above the ``src`` package, so generated data sits beside the
+run scripts instead of inside the source tree."""
+
 CACHE_DIR = ROOT / ".cache"
 """Downloaded AWS documentation, cached so runs are comparable and offline-repeatable."""
 
@@ -272,39 +275,38 @@ GRAPH_VARIANTS: dict[str, dict] = {
     # The pair for a 100-turn run. Identical but for `persist`, so a difference between them is the
     # persistence and nothing else -- and the difference only exists across a `--resume-at`, since a
     # long-lived process restores nothing and never runs the load path.
-    # The thresholds restated on the distribution the *corrected* propagation produces. Applying the
-    # structural weight once -- instead of twice -- roughly doubled what a hop hands over, which raised
-    # every note: measured over the same 133 scored Cards, the share below the floor fell from 19.5% to
-    # 3.8% and the share above the expansion threshold rose from 50% to 69%. So the ladder collapsed
-    # toward "everything whole" without either threshold being touched. These two put each threshold
-    # back at the position in the distribution it used to occupy: the floor sat 48% of the way from the
-    # minimum to the median, and the threshold at 95%.
+    # A threshold is a position in a distribution, not an absolute value, and propagation strength is
+    # part of that distribution: applying the structural weight once rather than twice roughly halves
+    # what a hop hands over, which moves every score and collapses the expand/collapse ladder without
+    # either threshold being touched. Measured over 133 scored Cards, the two thresholds below place
+    # the collapse floor 48% of the way from the minimum to the median and the expansion threshold at
+    # 95% -- the positions the ladder needs to have three working rungs.
     "gr-select-recal": {
-        "label": "Graph, selection + thresholds on the corrected note scale",
+        "label": "Graph, selection + thresholds calibrated on the score distribution",
         "recent_cards": 10,
         "select_top_k": 5,
         "collapse_floor": 0.52,
         "expand_threshold": 0.64,
         "notes": (
             "A threshold is only calibratable against the distribution of the pair it compares, and "
-            "propagation strength is part of that distribution. This is the same lesson that made "
-            "collapse_floor=0.15 unreachable, arriving from the other direction."
+            "propagation strength is part of that distribution. This is the same constraint that "
+            "makes a collapse_floor of 0.15 unreachable, arriving from the other direction."
         ),
     },
     "gr-select-rerank-recal": {
-        "label": "Graph, selection + rerank + thresholds on the corrected note scale",
+        "label": "Graph, selection + rerank + thresholds calibrated on the score distribution",
         "recent_cards": 10,
         "select_top_k": 5,
         "collapse_floor": 0.52,
         "expand_threshold": 0.64,
         "rerank": True,
-        "notes": "The cheapest arm measured, with the ladder restored to three working rungs.",
+        "notes": "The cheapest arm measured, with the ladder at three working rungs.",
     },
-    # The control for the recalibration, pinning the thresholds the defaults used to carry. Needed
-    # because the defaults moved: without it there is nothing to compare the new scale against except a
-    # run from a different commit, which changes more than the two numbers under test.
-    "gr-select-oldscale": {
-        "label": "Graph, selection + the thresholds the defaults used to carry",
+    # The control for the calibration above: it pins the thresholds lower in the distribution, so the
+    # comparison isolates the two numbers under test instead of confounding them with anything else
+    # that differs between two runs.
+    "gr-select-lowscale": {
+        "label": "Graph, selection + thresholds pinned lower in the distribution",
         "recent_cards": 10,
         "select_top_k": 5,
         "collapse_floor": 0.45,
@@ -412,11 +414,11 @@ That session showed ~63,000 tokens of tool schema on every one of its 33 calls â
 search gateway, a browser, a code interpreter and a calculator.
 
 This number is the harness's most important calibration, and getting it wrong understates
-the strategy under test. An earlier version of this suite carried 40 tools for ~10,900
-tokens of schema: only 41% of assembled input instead of 85%, six times less than the case
-that motivated the design. Progressive Tool Disclosure cut that by half and the total
-budget barely moved, which read as "the saving is small" when it actually meant "the
-scenario had little schema to save".
+the strategy under test. The budget has to reach the share of a call the motivating case
+showed: a suite carrying 40 tools for ~10,900 tokens of schema puts schema at 41% of
+assembled input instead of 85%, six times less than the case the design addresses. Halving
+that barely moves the total, which reads as "the saving is small" when it actually means
+"the scenario had little schema to save".
 
 The filler suite is generated until this budget is met, so the ratio between schema and
 history matches a real agent rather than whatever a hand-written tool list happened to add
