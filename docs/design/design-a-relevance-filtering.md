@@ -85,14 +85,14 @@ Why a strategy and not a plugin: the `Stash`, the retrieval tool, the target rou
 base offload strategy. As a strategy, relevance inherits all of that and is one ordered entry among
 others.
 
-Where it moved from. Relevance filtering used to live in `ContextOffloader`, selected by a
-`preview_strategy` parameter. That parameter is gone, and so are the offloader's exports of
-`Reranker`, `BedrockReranker` and `RerankerError` — everything public now comes from
-`strands.experimental.context_manager`, which exports `ContextManager`, `Offload`,
-`RelevanceConfig`, `Reranker`, `BedrockReranker` and `RerankerError`. The reason is not local to A:
-design `0015-context-manager` §7.3 retires the plugin — v1 warns when a `ContextOffloader` and a
-`ContextManager` are both set, v2 removes the plugin (issue #3489). A strategy that only existed
-inside the plugin would have been retired with it.
+Where the public API lives. Everything relevance filtering needs is exported from
+`strands.experimental.context_manager`: `ContextManager`, `Offload`, `RelevanceConfig`, `Reranker`,
+`BedrockReranker` and `RerankerError`. `ContextOffloader` exports none of them, and it has no
+`preview_strategy` parameter — relevance is a strategy of the context manager, not a mode of the
+offloader. That is deliberate rather than incidental: the two cannot both rewrite the same result, since
+the offloader replaces it with a positional preview as it arrives, which is what relevance would then be
+scoring. Installing both is a configuration error, and a strategy that existed only inside the plugin
+would be tied to that error.
 
 ## 4. Hook point
 
@@ -185,8 +185,10 @@ A 100 thousand token result in 2.5k chunks gives 40 chunks — one query, one se
 of magnitude cheaper than an LLM pass over the same 100 thousand tokens.
 
 Constraints to respect: text only, and a distinct client (`bedrock-agent-runtime`) from the one
-used for inference. Model availability by region is limited — the default model is
-`amazon.rerank-v1:0`, resolved to a foundation-model ARN in the client's region.
+used for inference. Model availability by region is limited — the SDK default is
+`amazon.rerank-v1:0`, resolved to a foundation-model ARN in the client's region. The benchmark in this
+repo passes `cohere.rerank-v3-5:0` instead, which is why its relevance threshold is far lower: the two
+models return scores on different absolute scales.
 
 Which is why the reranker is built **lazily**, on first use, not in the strategy constructor:
 `Offload.relevance(...)` has to be declarable in a `ContextManager` pipeline without any AWS client
@@ -233,19 +235,17 @@ number be rewritten.
   placeholder. Producing a placeholder for a binary is `offload:truncate`'s job, not this one.
 - A scorer failure leaves the block unchanged. It never leaves the agent without a result.
 
-Two guards from the offloader did **not** come across, and both are worth stating rather than
-assuming:
+Two guards the offloader has, the strategy does not, and both are worth stating rather than assuming:
 
-- **The delegation-tool guard is gone.** `ContextOffloader` skips a result produced by an
-  `_AgentAsTool` with `delegate=True`, because that result becomes the final user-facing answer and
-  there is no following call to retrieve what was left out. Nothing in `_context_manager` does the
-  equivalent. Whether the pipeline needs it, or whether targeting by `tool::` name is considered
-  sufficient, is not settled by the code.
-- **The prefix fallback is gone.** The offloader's relevance path fell back to the positional slice
-  on a `RerankerError`. The strategy returns `None`, which means "skip this block", so an oversized
-  result survives a scoring failure at full size until a later strategy in the pipeline reduces it.
-  The reranker module's own docstrings still describe the caller as falling back to the positional
-  preview; that text is stale relative to `RelevanceStrategy._replace_block`.
+- **No delegation-tool guard.** `ContextOffloader` skips a result produced by an `_AgentAsTool` with
+  `delegate=True`, because that result becomes the final user-facing answer and there is no following
+  call to retrieve what was left out. Nothing in `_context_manager` does the equivalent. Whether the
+  pipeline needs it, or whether targeting by `tool::` name is sufficient, is not settled by the code.
+- **No prefix fallback.** On a `RerankerError` the strategy returns `None`, which means "skip this
+  block", so an oversized result survives a scoring failure at full size until a later strategy in the
+  pipeline reduces it. The offloader's relevance path instead falls back to the positional slice. The
+  reranker module's docstrings describe that fallback as the caller's behaviour, which does not hold for
+  `RelevanceStrategy._replace_block`.
 
 ## 8. Failure modes
 

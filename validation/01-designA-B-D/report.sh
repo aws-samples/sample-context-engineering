@@ -2,8 +2,8 @@
 #
 # Build the full report for a run that already exists.
 #
-#   ./validation/report.sh cm60              # everything from results/run-cm60.json
-#   ./validation/report.sh cm60 --verify     # also check the tokens against Bedrock's logs
+#   ./report.sh cm60              # everything from results/run-cm60.json
+#   ./report.sh cm60 --verify     # also check the tokens against Bedrock's logs
 #
 # Reads results/run-<tag>.json and writes, beside it:
 #
@@ -12,11 +12,10 @@
 #   curve-<tag>.html      the deliverable: result table plus four charts, self-contained
 #
 # It never calls Bedrock unless --verify is passed, so re-rendering is free. To change a price and
-# re-render, edit Pricing in config.py and run this again — do not re-run the measurement.
+# re-render, edit PRICING in src/config.py and run this again — do not re-run the measurement.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(dirname "$HERE")"
 PY="$HERE/.venv/bin/python"
 RESULTS="$HERE/results"
 
@@ -36,19 +35,19 @@ VERIFY=0
 RUN_JSON="$RESULTS/run-$TAG.json"
 if [[ ! -f "$RUN_JSON" ]]; then
   echo "no such run: $RUN_JSON" >&2
-  echo "run it first with: ./validation/run.sh --total-turns 60 --tag $TAG" >&2
+  echo "run it first with: ./run.sh --total-turns 60 --tag $TAG" >&2
   exit 1
 fi
 
 if [[ ! -x "$PY" ]]; then
-  echo "venv missing at $HERE/.venv — run ./validation/run.sh once to create it" >&2
+  echo "venv missing at $HERE/.venv — run ./run.sh once to create it" >&2
   exit 1
 fi
 
-cd "$ROOT"
+cd "$HERE"
 
 echo "==> comparison table and per-turn series"
-"$PY" -m validation.compare "$RUN_JSON" --curve
+"$PY" -m src.compare "$RUN_JSON" --curve
 
 CURVE_CSV="$RESULTS/curve-$TAG.csv"
 if [[ ! -f "$CURVE_CSV" ]]; then
@@ -59,13 +58,13 @@ fi
 echo "==> HTML report"
 # --run is implicit: chart.py derives run-<tag>.json from the CSV name. Passed explicitly so a
 # missing file fails here rather than silently rendering a page with no result table.
-"$PY" -m validation.chart "$CURVE_CSV" --run "$RUN_JSON"
+"$PY" -m src.chart "$CURVE_CSV" --run "$RUN_JSON"
 
 if [[ "$VERIFY" == "1" ]]; then
   echo "==> verifying tokens against Bedrock invocation logs"
   # Needs credentials and only reads CloudWatch. Non-fatal: a log-group lag should not
   # invalidate a report that is already written.
-  "$PY" -m validation.verify_logs "$RUN_JSON" || echo "note: verification did not complete"
+  "$PY" -m src.verify_logs "$RUN_JSON" || echo "note: verification did not complete"
 fi
 
 echo

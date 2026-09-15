@@ -1,8 +1,10 @@
-# Python dependencies for the AgentCore runtime container.
+# Dependencies for the deployed AgentCore agent.
 #
-# The forked Strands SDK under test is installed from its public git branch, pinned to a commit —
-# see agentcore/DEPLOY.md, which is the source of truth for the runtime requirements the CLI uses.
-# Versions are pinned exactly (==) for a reproducible container build.
--r ../requirements.txt
-
+# The AgentCore CLI declares dependencies in the generated app/<Agent>/pyproject.toml, not in a
+# requirements file. This is the pinned list to copy into it — see DEPLOY.md step 3.
+#
+# The forked Strands SDK carrying the strategies is installed from its public fork, pinned to an
+# immutable commit SHA rather than a moving branch tip.
+strands-agents @ git+https://github.com/scandura/harness-sdk.git@c4083a04d35170b0626cfbdbb5e4926d9b35af20#subdirectory=strands-py
 bedrock-agentcore==1.22.0
+boto3==1.40.0

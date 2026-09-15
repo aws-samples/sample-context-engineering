@@ -4,14 +4,13 @@ The shape is taken from the measured session, because that session is
 what motivated all three strategies: a main subject, a long detour, and a return.
 
 **Topic lines are five turns or more.** This is the harness's second important calibration,
-alongside the schema budget, and an earlier version got it wrong. That version used
-two-turn topics, and the history strategy measured a 0.1% saving — which read as "the
-strategy does nothing" when it actually meant "there was nothing worth compacting".
-Compacting a two-turn subject removes two turns of history; the case the design was built
-for had *four* turns of connector debugging accumulating 3,080,381 input tokens, 44.7% of
-the session, still being resent on every subsequent turn. A topic line has to carry real
-mass before removing it can save anything, so each line here accumulates five or more turns
-of tool results before the conversation moves on.
+alongside the schema budget, and the line length is what decides whether it measures anything.
+Compacting a two-turn subject removes two turns of history — too little to register, so the
+history strategy reads as doing nothing when the truth is there was nothing worth compacting.
+The case the design was built for had *four* turns of connector debugging accumulating
+3,080,381 input tokens, 44.7% of the session, still being resent on every subsequent turn. A
+topic line has to carry real mass before removing it can save anything, so each line here
+accumulates five or more turns of tool results before the conversation moves on.
 
 Four phases:
 

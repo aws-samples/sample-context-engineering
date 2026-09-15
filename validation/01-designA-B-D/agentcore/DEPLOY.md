@@ -1,4 +1,4 @@
-# Deploying the runtime with the `agentcore` CLI
+# Deploying the agent with the AgentCore CLI
 
 > **⚠️ Not for production use.** This deployment guide is provided for **experimentation and
 > benchmark reproduction only**. The IAM roles, permissions, and configurations below are minimal
@@ -6,136 +6,180 @@
 > independent security review, least-privilege hardening, and operational readiness assessment
 > appropriate to your workload.
 
-This is the **manual, do-it-yourself** path to run the strategies on **Amazon Bedrock AgentCore
-Runtime**, using the official `agentcore` CLI. 
+Run the three context practices as a real, deployed agent on **Amazon Bedrock AgentCore Runtime**,
+using the official `agentcore` CLI.
 
-> **Paid + account-changing.** Deploying creates an ECR repository and image, an IAM execution role,
-> an AgentCore Memory resource and an AgentCore Runtime, and running the agent spends on Bedrock.
-> `agentcore destroy` removes them. The token benchmark in `validation/` runs without any of this.
+> **Paid + account-changing.** Deploying provisions an AgentCore Runtime endpoint and its supporting
+> resources through AWS CDK, and running the agent spends on Bedrock. Step 8 tears it down. The token
+> benchmark in `validation/01-designA-B-D/` runs without any of this.
+
+The CLI answers *how the strategies behave* as a deployed agent. It does not measure token cost — that
+is the benchmark's job, and the two are independent.
 
 ## Prerequisites
 
-- **AWS credentials** for an account with these Bedrock models enabled in your region
-  (`us-east-1` by default): `us.anthropic.claude-opus-4-8`, `cohere.rerank-v3-5:0`,
-  `cohere.embed-multilingual-v3`. Resolved through the standard AWS chain (SSO session, exported
-  keys, an instance role) or a named profile.
-- **The `agentcore` CLI.** Two exist — pick one:
-  - **`@aws/agentcore` (npm) — recommended.** The current, supported CLI: `npm install -g @aws/agentcore@1`.
-  - **`bedrock-agentcore-starter-toolkit` (pip).** Already in this repo's venv, but it prints a
-    deprecation notice pointing at the npm CLI. Fine for a quick try; do not build on it.
-- **Docker** only if you choose a local build. The default cloud path (below) builds in CodeBuild and
-  needs no local Docker.
-- **X-Ray Transaction Search** enabled on the account (one-time, account-wide) if you want traces —
-  it is a prerequisite, not something the deploy creates.
+- **Node.js 20 or later.** The CLI ships as an npm package.
+- **Python 3.10 or later** for the agent code.
+- **AWS credentials**, resolved through the standard AWS chain (SSO session, exported keys, a named
+  profile), for an account with these Bedrock models enabled in your region (`us-east-1` by default):
+  `us.anthropic.claude-opus-4-8`, `cohere.rerank-v3-5:0`, `cohere.embed-multilingual-v3`.
+- **IAM permissions** to call the AgentCore APIs and to assume the CDK bootstrap roles the deploy uses.
+- **Docker** only if you choose the `Container` build type. The default `CodeZip` build needs no Docker.
 
-## 1. Point the requirements at the git branch (no wheel)
-
-The container installs the forked SDK from the public branch, pinned to a **commit SHA** for
-reproducibility (not the moving branch tip). Create `validation/agentcore/requirements-runtime.txt`:
-
-```
-# Forked Strands SDK, from the public branch, pinned to a commit for reproducibility.
-strands-agents @ git+https://github.com/scandura/harness-sdk.git@c4083a04d35170b0626cfbdbb5e4926d9b35af20#subdirectory=strands-py
-bedrock-agentcore==1.22.0
-playwright==1.55.0
-html2text==2024.2.26
-boto3==1.40.0
-```
-
-The SDK is pinned to a full commit SHA (an immutable reference), not a branch name — the value above is
-the commit the results were measured against; replace it with another commit SHA if you deploy a
-different version. This is what removes the `hatch build` step: the SDK is fetched from git at container
-build time, so no wheel is produced or copied.
-
-## 2. Configure the agent
-
-From the repo root. `configure` records the entrypoint, the requirements file, and the execution
-role; `--requirements-file` is the key that ties the runtime to the git-based requirements above.
+Install the CLI:
 
 ```bash
-agentcore configure \
-  --entrypoint validation/agentcore/runtime.py \
-  --name context_strategy_validation \
-  --requirements-file validation/agentcore/requirements-runtime.txt
+npm install -g @aws/agentcore
+agentcore --version
 ```
 
-Let it auto-create the ECR repository and the execution role, or pass `--ecr` / `--execution-role`
-to reuse existing ones. The execution role needs, at minimum: Bedrock `InvokeModel` + `Rerank` on the
-model ARNs above, and the `bedrock-agentcore` memory read/append actions on the memory ARN from step 3.
+> If `--version` errors instead of printing a version, an older `agentcore` from the
+> `bedrock-agentcore-starter-toolkit` pip package is shadowing the npm one on your `PATH`. That package
+> is deprecated. Run `pip uninstall bedrock-agentcore-starter-toolkit`, open a new terminal, retry.
 
-## 3. Create the Memory resource
+## 1. Create the project
 
-Short-term only (no long-term extraction strategies), matching what the harness measures:
+The CLI scaffolds the project — it does not deploy a loose script, so there is no entrypoint path to
+pass. Run it outside this repo, or in a directory of your own:
 
 ```bash
-agentcore memory create --name context_strategy_validation
-# note the memory id it prints — you pass it to the runtime as AGENTCORE_MEMORY_ID
+agentcore create \
+  --project-name ContextStrategies \
+  --name ContextAgent \
+  --language Python \
+  --framework Strands \
+  --model-provider Bedrock \
+  --memory short-term \
+  --build CodeZip
 ```
 
-## 4. Deploy
+`agentcore create` with no flags runs an interactive wizard instead. It produces:
 
-The default (no flags) builds an ARM64 container in the cloud with CodeBuild and deploys it — **no
-local Docker required**:
+```
+ContextStrategies/
+├── agentcore/
+│   ├── agentcore.json      agents, memory stores, gateways — what gets provisioned
+│   ├── aws-targets.json    accounts and regions to deploy to
+│   └── cdk/
+└── app/
+    └── ContextAgent/
+        ├── main.py         the entrypoint you edit in step 2
+        └── pyproject.toml  the dependencies
+```
+
+## 2. Install the strategies in `main.py`
+
+This is the step that matters: the entrypoint is where you choose which practices the deployed agent
+runs. Take the wiring from
+[`how-to/01-designA-B-D-agent-sample.md`](../../../how-to/01-designA-B-D-agent-sample.md) — it shows each
+plugin alone and the three combined — and build the agent inside the generated `main.py`.
+
+Read the strategy choice from the environment so one deployment can be redeployed as any configuration
+rather than hardcoding one:
+
+```python
+import os
+
+STRATEGY = os.environ.get("CONTEXT_STRATEGY", "graph-all")
+```
+
+## 3. Declare the dependencies
+
+Add the forked SDK to `app/ContextAgent/pyproject.toml`, pinned to an immutable **commit SHA** rather
+than a moving branch tip. [`requirements.txt`](requirements.txt) beside this file carries the same pins
+and is the list to copy from:
+
+```toml
+dependencies = [
+  "strands-agents @ git+https://github.com/scandura/harness-sdk.git@c4083a04d35170b0626cfbdbb5e4926d9b35af20#subdirectory=strands-py",
+  "bedrock-agentcore==1.22.0",
+  "boto3==1.40.0",
+]
+```
+
+The SHA above is the commit the benchmark results were measured against — replace it to deploy a
+different version. Nothing is built locally: the SDK is fetched from git when the artifact is packaged.
+
+## 4. Test locally, before spending on a deploy
 
 ```bash
-agentcore deploy --agent context_strategy_validation
+cd ContextStrategies
+agentcore dev
 ```
 
-Two alternatives when you need them:
+`agentcore dev` creates the virtualenv, installs the dependencies, starts a local server with hot
+reload, and opens the agent inspector in your browser so you can chat with the agent and read its
+traces. Model calls are real and billed; the runtime is not yet provisioned.
+
+## 5. Deploy
+
+Preview first — this shows what CDK would provision, and changes nothing:
 
 ```bash
-agentcore deploy --local          # run the container locally (needs Docker/Finch/Podman)
-agentcore deploy --local-build    # build locally, deploy to the cloud runtime
+agentcore deploy --dry-run
 ```
 
-Pass the strategy configuration and the memory id to the runtime as environment variables (the
-entrypoint `runtime.py` reads them): `CONTEXT_STRATEGY` (e.g. `graph-all` or `baseline`),
-`AGENTCORE_MEMORY_ID` (from step 3), and optionally `AGENTCORE_ACTOR_ID` (a role/workload name, never
-a person). Set them via your `configure`/`deploy` environment or the CLI's env options.
-
-## 5. Invoke and check
+Then deploy:
 
 ```bash
-agentcore status  --agent context_strategy_validation           # config + runtime + endpoint state
-agentcore invoke  --agent context_strategy_validation '{"prompt": "Como estão meus investimentos hoje?"}'
-agentcore obs     --agent context_strategy_validation           # spans / traces / logs
+agentcore deploy
 ```
 
-To observe the deployed runtime, invoke it and read its traces through the CLI:
+It packages the code, synthesizes and provisions through CDK, creates the Runtime endpoint, and wires up
+CloudWatch logging and observability. The first deploy takes a few minutes while CDK bootstraps the
+account; later ones are faster. `agentcore deploy --diff` shows the CDK diff of a subsequent change.
+
+## 6. Memory
+
+`--memory short-term` in step 1 already declared it. To add memory to a project created without it:
 
 ```bash
-agentcore invoke --agent context_strategy_validation '{"prompt": "Como estão meus investimentos hoje?"}'
-agentcore obs    --agent context_strategy_validation   # spans / traces / logs (2–3 min to reach CloudWatch)
-agentcore status --agent context_strategy_validation   # runtime ARN, log group, endpoint state
+agentcore add memory
+agentcore deploy          # provisions what add wrote into agentcore.json
 ```
 
-Spans take 2–3 minutes to reach CloudWatch after invocation.
+Short-term only is what the benchmark's scenario matches: a single session, nothing extracted across
+sessions.
 
-## 6. Tear down
+## 7. Invoke and observe
 
 ```bash
-agentcore destroy --agent context_strategy_validation --dry-run          # preview first
-agentcore destroy --agent context_strategy_validation --delete-ecr-repo  # remove image + repo
-agentcore memory  delete <memory-id>                                     # remove the memory resource
+agentcore status                                        # deployed resources and their state
+agentcore invoke --prompt "How are my investments today?"
+agentcore invoke --prompt "And the statement?" --session-id abc123   # continue the conversation
+agentcore logs --since 15m                              # runtime logs
+agentcore traces                                        # spans, 2-3 min to reach CloudWatch
 ```
 
-`destroy` removes the runtime, the ECR images, the CodeBuild project and the execution role (only if
-no other agent uses it). Use `--dry-run` before the real run.
+`--session-id` is what makes a multi-turn conversation, which is the only condition under which these
+practices do anything: they act on accumulated context, so a single prompt shows nothing.
+
+## 8. Tear down
+
+Paid resources stay until you remove them. There is no single destroy command — you remove the resource
+from the project config, then deploy to reconcile:
+
+```bash
+agentcore remove          # pick the runtime/memory to remove from agentcore.json
+agentcore deploy          # CDK deprovisions what was removed
+agentcore status          # confirm nothing is left deployed
+```
+
+`agentcore status --state deployed` lists anything still provisioned. Check it before you walk away.
 
 ## Scope and limitations
 
-This deployment path exists solely to **reproduce benchmark measurements** on AgentCore Runtime. It is
-not a production deployment reference:
+This deployment path exists solely to **run the practices as a deployed agent**. It is not a production
+deployment reference:
 
-- **IAM roles** — The auto-created execution role has the minimum permissions to run the benchmark.
-  Production deployments should scope resource ARNs, add condition keys, and apply permission
-  boundaries per your organization's security standards.
-- **No operational infrastructure** — No CloudWatch alarms, auto-scaling, health checks, or disaster
-  recovery configuration is included.
-- **No Bedrock Guardrails** — The harness invokes models without content filtering or PII masking.
+- **IAM roles** — The roles CDK creates carry the minimum permissions to run the agent. Production
+  deployments should scope resource ARNs, add condition keys, and apply permission boundaries per your
+  organization's security standards.
+- **No operational infrastructure** — No alarms, auto-scaling, health checks, or disaster recovery
+  configuration is included.
+- **No Bedrock Guardrails** — The agent invokes models without content filtering or PII masking.
   Production workloads should configure [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html).
-- **Tear-down is manual** — You must run `agentcore destroy` (step 6) to remove paid resources.
-  There is no automated cleanup.
+- **Tear-down is manual** — Step 8 is not automatic. Unremoved resources keep costing.
 
----
-
+For the full command surface, see the
+[AgentCore CLI reference](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-cli-reference.html).

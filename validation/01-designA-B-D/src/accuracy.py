@@ -293,9 +293,9 @@ CHECKS: dict[str, tuple[Check, ...]] = {
             weight=2.0,
             critical=True,
         ),
-        # Phrased narrowly on purpose. An earlier version forbade a bare "I did not pull",
-        # which marked a correct answer wrong: the model gave the FinBank figures and then noted
-        # it had not fetched the *SampleBank* positions and offered to. That is accurate
+        # Phrased narrowly on purpose. Forbidding a bare "I did not pull" would mark a correct
+        # answer wrong: the model can give the FinBank figures and then note that it had not
+        # fetched the *SampleBank* positions, offering to. That is accurate
         # scoping, not lost context. A negative check has to name the failure it is looking
         # for — here, an inability to recall the positions from the opening turn — or it
         # penalises precision.

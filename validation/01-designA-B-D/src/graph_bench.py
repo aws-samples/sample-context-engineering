@@ -27,8 +27,8 @@ What each arm isolates:
 
 Run::
 
-    validation/.venv/bin/python -m validation.graph_bench            # every offline arm
-    validation/.venv/bin/python -m validation.graph_bench --rerank   # adds the rerank arm
+    .venv/bin/python -m src.graph_bench            # every offline arm
+    .venv/bin/python -m src.graph_bench --rerank   # adds the rerank arm
 
 Only the embedding and rerank arms reach the network, and both are cached by the shared embedder,
 so the whole sweep costs a handful of calls rather than a run.
@@ -78,7 +78,7 @@ def newest_session(root: Path = SESSIONS_DIR) -> Path:
     candidates = sorted(root.glob("session_*/agents/*/messages"), key=lambda path: path.stat().st_mtime)
     if not candidates:
         raise FileNotFoundError(
-            f"no recorded session under {root}. Produce one with: ./validation/run.sh "
+            f"no recorded session under {root}. Produce one with: ./run.sh "
             "--configs gr-long-persist --total-turns 24 --resume-at 12 --tag corpus"
         )
     return candidates[-1].parent
@@ -744,7 +744,7 @@ def render(payload: dict[str, Any]) -> str:
 
 def main() -> int:
     """Entry point."""
-    parser = argparse.ArgumentParser(prog="validation.graph_bench", description=__doc__)
+    parser = argparse.ArgumentParser(prog="src.graph_bench", description=__doc__)
     parser.add_argument("--session", metavar="DIR", help="recorded session agent directory")
     parser.add_argument("--recent-cards", type=int, default=10)
     parser.add_argument("--select-top-k", type=int, default=5)

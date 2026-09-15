@@ -1,6 +1,6 @@
 """The comparison table: baseline against each strategy, on tokens, accuracy, latency and cost.
 
-Separate from :mod:`validation.report`, which is a diagnostic document — every counter a
+Separate from :mod:`src.report`, which is a diagnostic document — every counter a
 strategy exposes, so a number that looks wrong can be traced to the mechanism that produced it.
 This module answers the other question, the one asked before any of that matters: *what did each
 strategy cost, and what did it buy?* Six columns, one row per configuration.
@@ -8,7 +8,7 @@ strategy cost, and what did it buy?* Six columns, one row per configuration.
 **Cost here is measured units times a declared rate.** The units come from the run: provider
 ``usage`` for the agent, the graph's embedding calls counted after its cache, and rerank search
 units counted as Bedrock bills them. The rates come from
-:data:`validation.config.PRICING`. So a wrong price is fixed by editing that class and
+:data:`src.config.PRICING`. So a wrong price is fixed by editing that class and
 re-rendering, never by re-running.
 
 **Auxiliary calls are the point of the cost column.** Two strategies here spend on a second
@@ -17,8 +17,8 @@ agent's tokens would rank exactly those two too favourably, because their saving
 bill that does not appear in the agent's usage.
 
 Usage:
-    python -m validation.compare results/run-comparison.json
-    python -m validation.compare results/run-comparison.json --out results/comparison.md
+    python -m src.compare results/run-comparison.json
+    python -m src.compare results/run-comparison.json --out results/comparison.md
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ def ordered_names(payload: dict[str, Any]) -> list[str]:
 def summary_rows(payload: dict[str, Any]) -> list[Row]:
     """Return one :class:`Row` per configuration, in reading order.
 
-    Public because the HTML renderer in :mod:`validation.chart` needs the same figures: accuracy,
+    Public because the HTML renderer in :mod:`src.chart` needs the same figures: accuracy,
     latency and cost live in the run JSON and not in the curve CSV, so both readers derive them here
     rather than each computing a cost of its own.
 
@@ -307,7 +307,7 @@ def build_comparison(payload: dict[str, Any]) -> str:
         )
     lines.append("")
     lines.append(
-        "Rates are declared in `validation.config.PRICING`, not read from the Price List API — that API "
+        "Rates are declared in `src.config.PRICING`, not read from the Price List API — that API "
         "carries no usage type for this account's agent model, embedding model or rerank model, so a "
         "lookup would silently match something else. Edit the rates and re-render; the units do not change."
     )
@@ -610,7 +610,7 @@ def write_comparison(payload: dict[str, Any], out_path: Path) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="validation.compare",
+        prog="src.compare",
         description="Render the strategy comparison table from a run JSON.",
     )
     parser.add_argument("run_json", help="path to results/run-<tag>.json")
