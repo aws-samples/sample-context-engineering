@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[project]
+name = "strands-context-graph"
+version = "0.1.0"
+description = "Short-term memory as a graph of Cards for Strands Agents: one Card per turn, derived by deterministic scan, projected at Title, Description or Full Content"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Strands Agents community" }]
+keywords = ["strands", "agents", "context", "graph", "plugin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The only runtime dependency, pinned to a range with a real upper bound. The plugin derives Cards by regex scan and
+# scores them through the SDK's Bedrock path, so it needs no graph library and no similarity library. The upper bound
+# is a major bound because the plugin depends on private SDK symbols (see the README's private-API caveats).
+dependencies = ["strands-agents>=1.44.0,<2.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/strands-agents/harness-sdk"
+"Bug Tracker" = "https://github.com/strands-agents/harness-sdk/issues"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strands_context_graph"]
+
+
+[tool.hatch.envs.hatch-static-analysis]
+installer = "uv"
+dependencies = [
+    "mypy>=1.15.0,<3.0.0",
+    "ruff>=0.13.0,<0.17.0",
+    "strands-agents>=1.44.0,<2.0.0",
+]
+python = "3.10"
+
+# Static-analysis scripts are spelled out so mypy runs as part of the linter gate.
+[tool.hatch.envs.hatch-static-analysis.scripts]
+format-check = ["ruff format --check"]
+format-fix = ["ruff format"]
+lint-check = ["ruff check", "mypy ./src"]
+lint-fix = ["ruff check --fix"]
+
+
+[tool.hatch.envs.hatch-test]
+installer = "uv"
+dependencies = [
+    "pytest>=9.0.0,<10.0.0",
+    "pytest-asyncio>=1.0.0,<1.5.0",
+    "pytest-timeout>=2.0.0,<3.0.0",
+    "hypothesis>=6.100.0,<7.0.0",
+]
+
+[[tool.hatch.envs.hatch-test.matrix]]
+python = ["3.13", "3.12", "3.11", "3.10"]
+
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+follow_untyped_imports = true
+ignore_missing_imports = false
+
+
+[tool.ruff]
+line-length = 120
+include = ["src/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "B",   # flake8-bugbear
+    "D",   # pydocstyle
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "G",   # logging format
+    "I",   # isort
+    "LOG", # logging
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.lint.per-file-ignores]
+"!src/**/*.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+timeout = 90
