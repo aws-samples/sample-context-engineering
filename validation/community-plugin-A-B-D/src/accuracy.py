@@ -363,6 +363,132 @@ CHECKS: dict[str, tuple[Check, ...]] = {
 }
 
 
+FILLER_CHECKS: dict[str, tuple[Check, ...]] = {
+    # Expectations for the scored filler, keyed by the *kind* its label carries rather than by the
+    # label itself -- there is one turn per generated label and a dictionary entry per label would not
+    # survive a change of script length. Every check below asserts a literal the mocked tool returns
+    # identically for every account, which is the criterion scenario.SCORED_FILLER_SPECS selects on.
+    #
+    # Each kind carries exactly one critical check, on the most distinctive thing the tool returns.
+    # A grounding check, deliberately: what it asks is "did the answer come from the tool", which is
+    # the question a long conversation puts at risk. Computation is the spine's job -- C3 is where the
+    # agent has to average the datapoint series rather than quote it.
+    "allocation": (
+        Check(
+            name="allocation-shares",
+            all_of=("42,1", "35,8", "22,1"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "projection": (
+        Check(
+            name="projection-values",
+            any_of=("51.204,77", "7,06"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "connector": (
+        Check(name="connector-state", any_of=("DEGRADED", "degraded"), critical=True),
+        Check(
+            name="connector-root-cause",
+            all_of=("MFA_CHALLENGE_TIMEOUT",),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "logs": (
+        Check(
+            name="log-error-classes",
+            any_of=("MFA_CHALLENGE_TIMEOUT", "TLS_HANDSHAKE_RESET"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "metrics": (
+        Check(
+            name="names-the-series",
+            any_of=("AWS/Lambda", "Duration", "duration"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "iam": (
+        Check(
+            name="role-policies",
+            any_of=("ReadOnlyAccess", "connector-secrets-read"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+    "objects": (
+        Check(
+            name="object-keys",
+            any_of=("statements/", ".csv"),
+            weight=2.0,
+            critical=True,
+        ),
+    ),
+}
+"""Expectations for the generated scored turns, looked up by the kind in the label.
+
+Keyed by kind and not by label because the labels are generated: the number of them follows the
+script's length, so a per-label entry would go stale the first time ``--total-turns`` changed.
+"""
+
+UNIVERSAL_CHECKS: tuple[Check, ...] = (
+    # Applied to every scored turn, on top of its own expectations. A negative check, so it costs a
+    # turn nothing unless the answer volunteers the claim: it only fires when the model states an
+    # account count, and every count it could state is wrong, because the fixture holds five.
+    #
+    # Measured before this existed: the full stack claimed six accounts in 36 of 42 filler turns,
+    # duplicating one identifier and mislabelling two institutions, while the four single-strategy
+    # configurations never did. That is folding drift -- the list came back from a Card's Description
+    # instead of the tool result -- and it is exactly the failure a context strategy has to be judged
+    # on. It scored as nothing, because filler carried no expectation at all.
+    Check(
+        name="no-fabricated-account-count",
+        none_of=(
+            "6 accounts",
+            "six accounts",
+            "7 accounts",
+            "seven accounts",
+            "4 accounts",
+            "four accounts",
+        ),
+        weight=1.0,
+        critical=True,
+    ),
+)
+"""Checks every scored turn carries, whatever else it asserts.
+
+The place for a claim that is wrong no matter which question produced it. Kept deliberately small: a
+universal check that fires on a legitimate answer would corrupt every figure at once.
+"""
+
+
+def _checks_for(label: str) -> tuple[Check, ...] | None:
+    """Return the expectations for ``label``, or ``None`` when the turn is unscored.
+
+    Two lookups, in order. The hand-written spine is keyed by its exact label. A generated scored turn
+    is keyed by the *kind* after the first dash, which is how one static expectation serves however
+    many turns the script's length produces.
+
+    Args:
+        label: The turn's label.
+
+    Returns:
+        The checks, or ``None`` for a label neither lookup knows -- an unscored filler turn, whose
+        label carries the kind ``filler`` on purpose so it matches nothing here.
+    """
+    checks = CHECKS.get(label)
+    if checks is not None:
+        return checks
+    _, _, kind = label.partition("-")
+    return FILLER_CHECKS.get(kind)
+
+
 @dataclass
 class TurnScore:
     """Accuracy outcome for one turn."""
@@ -397,13 +523,18 @@ class TurnScore:
 
 
 def score_turn(label: str, answer: str) -> TurnScore:
-    """Score one answer against the expectations for its turn."""
-    checks = CHECKS.get(label)
+    """Score one answer against the expectations for its turn.
+
+    The universal checks are appended to whatever the turn asserts on its own, so a claim that is
+    wrong regardless of the question is caught on every scored turn rather than on the one that
+    happened to ask about it.
+    """
+    checks = _checks_for(label)
     if not checks:
         return TurnScore(label=label, scored=False)
 
     score = TurnScore(label=label)
-    for check in checks:
+    for check in (*checks, *UNIVERSAL_CHECKS):
         score.total += check.weight
         ok, reason = check.evaluate(answer or "")
         if ok:
