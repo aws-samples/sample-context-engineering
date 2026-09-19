@@ -248,68 +248,164 @@ PHASES = ("line-a", "line-b", "line-c", "return")
 
 # --- the long script ---------------------------------------------------------------------
 #
-# Selection and persistence both answer to conversation *length*, and eighteen turns cannot
-# show either. The final block costs one entry per Card in every call, so its price is linear
-# in the number of turns and invisible at eighteen; and the rebuild scan measured 30ms over an
-# 18-turn conversation against 2.9s over a 200-turn one.
+# The eighteen hand-written turns above are the spine: the same order, the same expectations, so
+# accuracy stays comparable across script lengths. What ``--total-turns`` adds is conversation, and
+# there are two kinds of it.
 #
-# The eighteen scored turns are not touched: they stay the accuracy spine, in the same order,
-# with the same expectations, so accuracy remains comparable across script lengths. What the
-# filler adds is mass — real tool calls producing real payloads, and therefore real Cards —
-# and it is deliberately *unscored*: `accuracy.score_turn` returns `scored=False` for a label
-# it has no checks for, so filler cannot move the accuracy figure in either direction.
+# **Scored filler** carries expectations of its own, keyed by the *kind* in its label rather than by
+# the label itself (see ``accuracy.FILLER_CHECKS``). Its prompts are the ones whose answer the mocked
+# tools return identically for every account, so one static expectation is correct for all of them.
+# The script targets HALF of the requested turns being scored: 60 turns means 30 scored, of which 18
+# are the spine and 12 are filler.
 #
-# The return turns stay last, which is the whole point of lengthening the script: they now ask
-# about facts established eighty turns earlier rather than thirteen.
+# **Unscored filler** is the rest. It is where the heavy payloads live -- a 30-day statement export is
+# the biggest single result in the suite -- and it carries no expectation because its answer depends
+# on the account, on a window the agent chooses, or on both.
+#
+# Both kinds now ask about accounts that EXIST. They used to interpolate a running index, so "account
+# 11" matched nothing in the fixture: measured over 60 turns, 36 of 42 filler turns made no tool call
+# at all, and the full stack answered 36 of them by claiming six accounts where there are five,
+# duplicating one identifier and mislabelling two institutions. Unscored turns cannot fail, so that
+# drift was invisible -- which is exactly why half the script is scored now.
 
-FILLER_PROMPTS = (
-    "What is the current balance of account {index} and how did it change over the last week?",
-    "Show me the transactions of account {index} over the last 30 days.",
-    "What does the asset class allocation look like on account {index}?",
-    "Project the yield of account {index} over 12 months in the base scenario.",
-    "Is the TestBank connector syncing account {index} normally?",
-    "Pull the error logs of the NeoBank connector for account {index}.",
-    "What are the duration metrics of the Lambda that processes account {index}?",
-    "Describe the IAM role that account {index} uses to write to S3.",
-    "How much would it cost to run the processing of account {index} in another region?",
-    "What objects exist in the statements bucket of account {index}?",
+SCORED_FILLER_SPECS: tuple[tuple[str, str], ...] = (
+    (
+        "allocation",
+        "What does the asset class allocation look like on account {account}?",
+    ),
+    (
+        "projection",
+        "Project the yield of account {account} over 12 months in the base scenario.",
+    ),
+    (
+        "connector",
+        "Is the FinBank Invest connector syncing account {account} normally?",
+    ),
+    (
+        "logs",
+        "Pull the error logs of the NeoBank connector while it syncs account {account}.",
+    ),
+    (
+        "metrics",
+        "What are the duration metrics of the Lambda that processes account {account}?",
+    ),
+    (
+        "iam",
+        "Describe the IAM role that account {account} uses to write to S3.",
+    ),
+    (
+        "objects",
+        "What objects exist in the statements bucket for account {account}?",
+    ),
+)
+"""``(kind, prompt)`` pairs whose answers the mocked tools return identically for every account.
+
+That independence is the whole selection criterion: it is what lets one static expectation in
+``accuracy.FILLER_CHECKS`` be correct for every turn built from the pair, without the harness having
+to derive a per-account expectation at runtime. The ``kind`` is what the label carries and what the
+expectation is looked up by.
+
+Phrased like the spine's turns -- no hint about which tool to call -- so tool selection stays the
+model's job and the disclosure strategy is tested rather than bypassed.
+"""
+
+UNSCORED_FILLER_PROMPTS: tuple[str, ...] = (
+    "What is the current balance of account {account} and how did it change over the last week?",
+    "Show me the transactions of account {account} over the last 30 days.",
+    "How much would it cost to run the processing of account {account} in another region?",
+    "Which Lambda function configuration is behind the export for account {account}?",
 )
 """Prompts that add mass without adding expectations.
 
-Ten shapes cycled with a changing index, so each one is a distinct subject with its own Card and
-its own tool result rather than a repeat the offloader would serve from one reference. Phrased
-like the scored turns — no hint about which tool to call — so tool selection stays the model's job.
+Each one's answer depends on the account, on a window the agent picks, or on an argument it chooses,
+so there is no single string a static expectation could require. The statement export in particular
+is the heaviest result in the suite, which is what this filler is here to contribute.
 """
 
 
-def long_script(total: int = 100) -> tuple[Turn, ...]:
-    """The scored script padded to ``total`` turns, with the return turns kept last.
+def _scored_filler_positions(filler_count: int, scored_count: int) -> frozenset[int]:
+    """Return the filler positions that carry expectations, spread evenly across the run.
+
+    Spread rather than grouped, because a scored turn's value is the depth it sits at: the point of
+    lengthening the script is to ask a checkable question after the history has grown, and clustering
+    the checks at one end would measure one depth many times instead of many depths once.
 
     Args:
-        total: How many turns the script should carry. Values at or below the scored count return
-            the scored script unchanged, so a short run is exactly the script it always was.
+        filler_count: How many filler turns the script has room for.
+        scored_count: How many of them must carry expectations.
+
+    Returns:
+        The positions, as offsets into the filler sequence.
+    """
+    if scored_count <= 0 or filler_count <= 0:
+        return frozenset()
+    if scored_count >= filler_count:
+        return frozenset(range(filler_count))
+    return frozenset(round(k * filler_count / scored_count) for k in range(scored_count))
+
+
+def long_script(total: int = 100) -> tuple[Turn, ...]:
+    """The scored spine padded to ``total`` turns, with the return turns kept last.
+
+    Half of ``total`` is scored, the spine included: at 60 turns that is 30 scored turns, 18 of them
+    the hand-written spine and 12 built from :data:`SCORED_FILLER_SPECS`. The spine is the floor, so a
+    ``total`` below twice its length simply yields the spine's own count rather than dropping any of
+    it -- an expectation is never removed to hit a ratio.
+
+    Args:
+        total: How many turns the script should carry. Values at or below the spine's length return
+            the spine unchanged, so a short run is exactly the script it always was.
 
     Returns:
         The turns, in order: the opening scored lines, then the filler, then the return.
     """
-    scored = SCENARIO
-    opening = tuple(turn for turn in scored if turn.phase != "return")
-    closing = tuple(turn for turn in scored if turn.phase == "return")
+    from .tools import account_ids
 
-    needed = total - len(scored)
-    if needed <= 0:
-        return scored
+    spine = SCENARIO
+    opening = tuple(turn for turn in spine if turn.phase != "return")
+    closing = tuple(turn for turn in spine if turn.phase == "return")
 
-    filler = tuple(
-        Turn(
-            label=f"F{index:03d}-filler",
-            phase="filler",
-            prompt=FILLER_PROMPTS[index % len(FILLER_PROMPTS)].format(index=index + 1),
-            rationale="Unscored mass: a real tool result, a real Card, and no expectation of its own.",
-        )
-        for index in range(needed)
-    )
-    return (*opening, *filler, *closing)
+    filler_count = total - len(spine)
+    if filler_count <= 0:
+        return spine
+
+    accounts = account_ids()
+    # The spine is the floor: never negative, so a short run scores the spine and nothing more.
+    scored_needed = max(0, total // 2 - len(spine))
+    scored_positions = _scored_filler_positions(filler_count, scored_needed)
+
+    filler: list[Turn] = []
+    scored_seen = 0
+    for position in range(filler_count):
+        account = accounts[position % len(accounts)]
+        if position in scored_positions:
+            kind, template = SCORED_FILLER_SPECS[scored_seen % len(SCORED_FILLER_SPECS)]
+            # The kind travels in the label, which is how accuracy.score_turn finds the expectation
+            # without a dictionary entry per generated turn.
+            filler.append(
+                Turn(
+                    label=f"S{scored_seen:03d}-{kind}",
+                    phase="filler-scored",
+                    prompt=template.format(account=account),
+                    rationale=(
+                        "Scored mass: a real tool result and a checkable answer, asked at this depth "
+                        "of the conversation."
+                    ),
+                )
+            )
+            scored_seen += 1
+        else:
+            template = UNSCORED_FILLER_PROMPTS[position % len(UNSCORED_FILLER_PROMPTS)]
+            filler.append(
+                Turn(
+                    label=f"F{position:03d}-filler",
+                    phase="filler",
+                    prompt=template.format(account=account),
+                    rationale="Unscored mass: a real tool result, and no expectation of its own.",
+                )
+            )
+
+    return (*opening, *tuple(filler), *closing)
 
 
 def turns(

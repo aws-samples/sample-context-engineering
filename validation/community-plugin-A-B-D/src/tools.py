@@ -733,3 +733,17 @@ def all_tools() -> list[Any]:
     from .web import fetch_web_page
 
     return [*CORE_TOOLS, fetch_web_page, *FILLER_TOOLS]
+
+
+def account_ids() -> tuple[str, ...]:
+    """Return the account identifiers the fixture actually holds, in listing order.
+
+    Exposed so the scenario's filler turns can ask about accounts that exist. They used to ask about
+    a running index -- "account 11" -- which matches nothing here, so the agent had nothing to ground
+    on: measured, 36 of 42 filler turns made no tool call at all, and the full stack answered 36 of
+    them by inventing a sixth account and mislabelling two institutions.
+
+    Read from the fixture rather than restated in the scenario, so a changed fixture cannot leave the
+    prompts asking about an account that no longer exists.
+    """
+    return tuple(account["id"] for account in _ACCOUNTS)

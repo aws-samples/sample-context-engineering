@@ -58,6 +58,8 @@ from .config import (
     ARTIFACTS_DIR,
     AWS_PROFILE,
     EMBED_MODEL_ID,
+    GRAPH_ALONE,
+    GRAPH_WITH_RELEVANCE,
     REGION,
     RERANK_MODEL_ID,
     RUN_CONFIGS,
@@ -347,11 +349,20 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         matcher = _MeteredMatcher(EMBED_MODEL_ID, boto_session=session)
         config.extra["_matcher"] = matcher
 
+        # Which tuning applies is a measured result, not a preference: with the relevance filter
+        # installed the payload is already a preview by the time the Card is derived, so folding
+        # harder costs recall without buying tokens. See the two docstrings in config.
+        tuning = GRAPH_WITH_RELEVANCE if config.relevance else GRAPH_ALONE
+        config.extra["_graph_tuning"] = (
+            "with-relevance" if config.relevance else "alone"
+        )
+
         graph = ContextGraph(
-            expand_threshold=THRESHOLDS.expand_threshold,
-            collapse_floor=THRESHOLDS.collapse_floor,
-            link_threshold=THRESHOLDS.link_threshold,
-            description_tokens=THRESHOLDS.description_tokens,
+            expand_threshold=tuning.expand_threshold,
+            collapse_floor=tuning.collapse_floor,
+            link_threshold=tuning.link_threshold,
+            description_tokens=tuning.description_tokens,
+            body_budget=tuning.body_budget,
             min_cards=THRESHOLDS.min_cards,
             matcher=matcher,
         )
@@ -544,6 +555,10 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
 
     counters["live_messages_at_end"] = len(agent.messages)
     counters["registered_tools"] = len(agent.tool_names)
+    if "_graph_tuning" in config.extra:
+        # Which of the two measured tunings this arm ran under. Without it, two graph runs are
+        # indistinguishable in the record even though they folded differently.
+        counters["graph_tuning"] = config.extra["_graph_tuning"]
     if "_graph_artifact_tool_dropped" in config.extra:
         # Recorded because it changes what the model could reach, and a reader comparing two runs
         # has to be able to see which one had one artifact path and which had two.
