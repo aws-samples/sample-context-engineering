@@ -1,0 +1,136 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[project]
+name = "strands-relevance-filter"
+version = "0.1.0"
+description = "Relevance filtering of oversized tool results for Strands Agents: rewrite the result on the public AfterToolCallEvent hook into a budget-bounded, verbatim preview and offload the raw content to a store"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Strands Agents community" }]
+keywords = ["strands", "agents", "context", "relevance", "rerank", "plugin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# The SDK supplies Plugin, @hook, @tool, AfterToolCallEvent, ToolContext and ToolResult: the plugin attaches to the
+# public hook surface only, so the lower bound is the first release exposing it and the upper bound excludes the next
+# major line. boto3/botocore are runtime dependencies because the default reranker (BedrockReranker) and the S3Store
+# talk to AWS; both are built lazily, so an install that supplies its own Reranker and Store never constructs a client.
+dependencies = [
+    "strands-agents>=1.44.0,<2.0.0",
+    "boto3>=1.26.0,<2.0.0",
+    "botocore>=1.29.0,<2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/strands-agents/harness-sdk"
+"Bug Tracker" = "https://github.com/strands-agents/harness-sdk/issues"
+
+# The development group: the property suite (hypothesis), the async test runner in strict mode, mocked boto for the
+# BedrockReranker and S3Store contract tests (moto), and the lint/type gate.
+[dependency-groups]
+dev = [
+    "hypothesis>=6.100.0,<7.0.0",
+    "pytest>=9.0.0,<10.0.0",
+    "pytest-asyncio>=1.0.0,<1.5.0",
+    "moto>=5.0.0,<6.0.0",
+    "ruff>=0.13.0,<0.17.0",
+    "mypy>=1.15.0,<3.0.0",
+]
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strands_relevance_filter"]
+
+
+[tool.hatch.envs.hatch-static-analysis]
+installer = "uv"
+dependencies = [
+    "mypy>=1.15.0,<3.0.0",
+    "ruff>=0.13.0,<0.17.0",
+    "strands-agents>=1.44.0,<2.0.0",
+]
+python = "3.10"
+
+# Static-analysis scripts are spelled out so mypy runs as part of the linter gate.
+[tool.hatch.envs.hatch-static-analysis.scripts]
+format-check = ["ruff format --check"]
+format-fix = ["ruff format"]
+lint-check = ["ruff check", "mypy ./src"]
+lint-fix = ["ruff check --fix"]
+
+
+[tool.hatch.envs.hatch-test]
+installer = "uv"
+dependencies = [
+    "pytest>=9.0.0,<10.0.0",
+    "pytest-asyncio>=1.0.0,<1.5.0",
+    "pytest-timeout>=2.0.0,<3.0.0",
+    "hypothesis>=6.100.0,<7.0.0",
+    "moto>=5.0.0,<6.0.0",
+]
+
+[[tool.hatch.envs.hatch-test.matrix]]
+python = ["3.13", "3.12", "3.11", "3.10"]
+
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+follow_untyped_imports = true
+ignore_missing_imports = false
+
+
+[tool.ruff]
+line-length = 120
+include = ["src/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+# "UP" carries UP045 (Optional[X] -> X | None), which is what keeps the codebase on the X | None spelling the SDK's
+# AGENTS.md mandates.
+select = [
+    "B",   # flake8-bugbear
+    "D",   # pydocstyle
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "G",   # logging format
+    "I",   # isort
+    "LOG", # logging
+    "UP",  # pyupgrade
+]
+
+[tool.ruff.lint.per-file-ignores]
+"!src/**/*.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 90

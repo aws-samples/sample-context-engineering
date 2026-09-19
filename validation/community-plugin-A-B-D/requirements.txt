@@ -1,0 +1,20 @@
+# The three strategies under test are COMMUNITY PLUGINS: standalone packages that attach to the
+# SDK's extension surface, installed alongside an unmodified strands-agents from PyPI. This is the
+# difference from validation/01-designA-B-D, which installs a forked SDK and uses its vended
+# plugins.
+#
+# Installed editable from the repository so a run measures the code in this checkout, which is the
+# code a reader can read. The paths are relative to this file's directory; run.sh cd's there first.
+-e ../../community-plugins/strands-context-graph
+-e ../../community-plugins/strands-progressive-tool-disclosure
+-e ../../community-plugins/strands-relevance-filter
+
+# The unmodified SDK. The three packages each pin this range themselves (>=1.44.0,<2.0.0) because
+# they couple to a private middleware seam; it is restated here so the resolved version is visible
+# in one place rather than inferred from three.
+strands-agents>=1.44.0,<2.0.0
+
+# The web tool and the harness's own dependencies.
+playwright==1.55.0
+html2text==2024.2.26
+boto3==1.40.0
