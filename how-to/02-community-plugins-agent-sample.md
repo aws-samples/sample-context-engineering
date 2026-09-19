@@ -17,8 +17,8 @@ This is the shape the benchmark under
 [`validation/community-plugin-A-B-D/`](../validation/community-plugin-A-B-D/README.md) measures.
 Start here for the wiring; go there for what it costs.
 
-**Read [the three gotchas](#three-things-that-will-bite-you) before wiring all three together.** Two
-of them cost a measured benchmark run its answers, and neither fails loudly.
+**Read [the four gotchas](#four-things-that-will-bite-you) before wiring all three together.** Two of
+them cost a measured benchmark run its answers, and none of them fails loudly.
 
 ## What you need
 
@@ -268,7 +268,7 @@ The three plugins compose without fighting: the filter acts on tool results as t
 rewrites the per-call message list, and disclosure rewrites the per-call tool list. None of them
 mutates `agent.messages` or the tool registry.
 
-## Three things that will bite you
+## Four things that will bite you
 
 ### 1. Two retrieval tools for one job, and only one can answer
 
@@ -306,13 +306,38 @@ be re-derived, not carried over.
 
 The same holds for the graph's three thresholds against its embedding model.
 
+### 4. The graph should fold *less* when the relevance filter is present
+
+The two act on the same content, one after the other. The filter replaces an oversized payload with an
+800-token preview on `AfterToolCallEvent`; the graph derives its Card **after** that, so the Card's
+numeric lines come from the preview rather than from the raw result.
+
+That inverts the tuning. Values measured as an improvement for the graph alone, applied to all three
+together, lost five materially correct turns while moving tokens 1.2%:
+
+| Arm | `expand_threshold` / `description_tokens` | Tokens | Materially correct |
+|---|---|---:|:--:|
+| graph alone | 0.55 / 100 (defaults) | 9,045,017 | 23/30 |
+| graph alone | **0.62 / 250** | **8,462,341** | **24/30** |
+| all three | 0.55 / 100 (defaults) | 2,406,570 | **21/30** |
+| all three | 0.62 / 250 | 2,377,270 | **16/30** |
+
+*Folding harder buys nothing once the filter has already compressed the evidence — it only costs
+recall.* One replay each, on Haiku 4.5, so read the direction rather than the quantity.
+
+If you install both, start from the package defaults for the graph. If you run the graph alone, a
+larger `description_tokens` is the cheapest accuracy you can buy: the budget is spent on
+`Card.numeric_lines`, which are exact substrings of the turn's own text, so more budget means more
+figures survive verbatim instead of being re-rendered from a paraphrase — which is where a `42,1%`
+turns into `42.1%` and fails a check that the arithmetic would have passed.
+
 ## Where the effect shows up
 
 Not in one turn. The practices act on what a growing conversation carries forward, so a single question
 against a single tool shows almost nothing — the schema floor is small and there is no history yet. The
 difference appears over dozens of turns with a realistic tool count, which is what the benchmark
-replays: **83% fewer tokens for the same 17 of 18 materially correct turns**, at $35.88 against
-$203.65.
+replays: **82% fewer tokens for the same 28 of 30 materially correct turns**, at $40.07 against
+$217.50, and three seconds faster per turn.
 
 The values above are close to the benchmark's, which tunes them to the case it measures. See
 [`validation/community-plugin-A-B-D/src/config.py`](../validation/community-plugin-A-B-D/src/config.py)

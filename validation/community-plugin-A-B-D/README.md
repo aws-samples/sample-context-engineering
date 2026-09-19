@@ -77,7 +77,7 @@ harnesses render through the same reporting path.
 
 ```bash
 # all five configurations, 60 turns
-./run.sh --total-turns 60 --tag cm60
+./run.sh --total-turns 60 --tag op60
 
 # cheap wiring check (verifies engagement, not effect)
 ./run.sh --smoke
@@ -96,13 +96,14 @@ per-turn charts, no assets, no server).
 
 ## Three differences that are configuration, not detail
 
-**1. The baseline installs no plugin at all.** The vended harness put its `ContextOffloader` in
-every configuration, the baseline included, because without it the 60k–250k character payloads were
-expected to overflow the window. Here the baseline is the unmodified agent: every payload enters the
-history whole and stays there. That is the honest control — it measures the cost of doing nothing.
+**1. The baseline installs no plugin at all.** The vended harness put its `ContextOffloader` in every
+configuration, the baseline included, so nothing could overflow the window. Here the control is the
+unmodified agent and every payload enters the history whole.
 
-Measured: it does **not** overflow. All 60 turns completed on Opus 4.8, with zero errors, at
-13.5M input tokens. So the comparison has a complete control rather than a truncated one.
+Measured: it completes, but only just, and only on a large-context model. All 60 turns finished at
+14.4M input tokens with a **peak of 204,439 tokens on a single call** — above Haiku 4.5's entire
+window. The baseline is what makes the comparison honest; it is also the arm that decides which models
+this benchmark can run on.
 
 **2. The graph is ephemeral.** The community plugin keeps its state in a weakly-keyed map and writes
 nothing to `agent.state`, so there is no load path and no resume to measure. The sibling harness's
@@ -115,54 +116,132 @@ logs failures only, so the graph's evidence here is read off its end-of-run stat
 
 ---
 
+## The graph is tuned per configuration, and that is a measured result
+
+`src/config.py` carries two sets of graph thresholds, not one, selected on whether the relevance
+filter is also installed. Each run records which it used, under `graph_tuning`.
+
+| | `GRAPH_ALONE` | `GRAPH_WITH_RELEVANCE` |
+|---|---:|---:|
+| `expand_threshold` | 0.62 | 0.55 (package default) |
+| `description_tokens` | 250 | 100 (package default) |
+| `body_budget` | 60,000 | none |
+
+The split exists because applying one set to both was measured and it lost. On Haiku 4.5, same script,
+one replay each:
+
+| Arm | Tuning | Tokens | Peak call | Accuracy | Materially correct | Ladder full/desc/title |
+|---|---|---:|---:|---:|:--:|:--:|
+| graph | defaults | 9,045,017 | 139,917 | 85.0% | 23/30 | 17/10/6 |
+| graph | **tuned** | **8,462,341** | **119,342** | **89.0%** | **24/30** | **12/15/6** |
+| all | defaults | 2,406,570 | 49,863 | 81.9% | **21/30** | 21/7/5 |
+| all | tuned | 2,377,270 | 40,622 | 74.8% | **16/30** | 13/15/7 |
+
+*Tuned, the graph alone improves on both axes; the same values applied to all three lose five
+materially correct turns while moving tokens 1.2%.*
+
+The mechanism is that **the two strategies compete for the same job**. With the filter installed, an
+oversized payload is already an 800-token preview by the time the Card is derived, so the Card's
+numeric lines come from that preview rather than from the raw result: a larger Description budget has
+little left to preserve, and stepping Cards off a full-content rung the filter already shrank costs
+recall without buying tokens. *When relevance has already compressed the evidence, the graph should
+fold less, not more.*
+
+### What the tuning actually fixed
+
+Not lost information. The graph was answering `42.1%` where the tool had emitted `42,1%` — the right
+figures, reformatted — and this harness scores that as wrong on purpose: an assistant that restates a
+value in its own format has introduced an error class.
+
+`compose_description` copies `Card.numeric_lines` **verbatim** and the budget decides only *how many*
+of those lines get in, appending `(+N numeric lines omitted)` for the rest. At 100 tokens a Card whose
+turn carried a real payload keeps a handful, so a later turn answering from that Card re-renders the
+figure from its own paraphrase, and that is where the separator flips. Measured: the graph answered one
+allocation turn with **no tool call at all**, reading a truncated Card instead.
+
+Caveat: the tuning was derived on Haiku and has not been isolated on Opus — the Opus run applies it,
+but there is no Opus measurement with the defaults on this script to compare against. One replay each,
+so treat the one-turn accuracy gain as inside the noise and the five-turn regression as the direction
+it points. `--repeats 3` is what would settle either.
+
+---
+
 ## What the run measured
 
-60 turns, five configurations, Opus 4.8, one replay each, zero errors.
+60 turns, five configurations, Claude Opus 4.8, one replay each, zero errors, zero calls refused by
+the context window. **Half the script is scored**: 30 of the 60 turns carry expectations — the 18
+hand-written spine plus 12 generated — and the other 30 are unscored mass.
 
-| Configuration | Total tokens | Δ vs baseline | Accuracy | Materially correct | Cost (USD) |
-|---|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) | 13,476,549 | — | 97.2% | 17/18 | $203.65 |
-| Progressive Tool Disclosure only | 9,405,879 | −30.2% | 94.4% | 17/18 | $142.83 |
-| Relevance Filtering only | 12,258,604 | −9.0% | 95.8% | 17/18 | $185.44 |
-| Context Graph only | 9,663,413 | −28.3% | 91.5% | 15/18 | $146.17 |
-| All three combined | 2,296,820 | **−83.0%** | 94.4% | 17/18 | **$35.88** |
+| Configuration | Total tokens | Δ vs baseline | Accuracy | Materially correct | Turn (s) | Cost (USD) |
+|---|---:|---:|---:|:--:|---:|---:|
+| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7 | $217.50 |
+| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8 | $144.30 |
+| Relevance Filtering only | 12,766,237 | −11.2% | 96.9% | **29/30** | 11.7 | $193.33 |
+| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8 | $157.30 |
+| **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7** | **$40.07** |
 
-All three engaged, and the evidence says they decided rather than merely ran: the graph ended with
-44 Cards and 92 Links and a **three-rung ladder** in use (18 Cards at full content, 4 at
-Description, 22 at Title), the relevance filter fired and spent 7 rerank search units, and the
-disclosure catalog held the schema budget down.
+*The full stack sends 82% fewer tokens for the same 28 of 30 materially correct turns as the
+unmodified agent, at a sixth of the cost and three seconds faster per turn — the turn times are
+measured with all five configurations running concurrently, so read them as relative to each other
+rather than as isolated latency.*
 
-The full stack sends **83% fewer tokens for the same 17 of 18 materially correct turns** as the
-unmodified agent, at a sixth of the cost. It makes more model calls to do it — 104 against the
-baseline's 87 — which is the trade the strategies make: a retrieval cycle is cheap next to resending
-a 60k-character payload on every subsequent turn.
+All three engaged, and the evidence says they decided rather than merely ran: the graph ended with a
+**three-rung ladder** in use (12 Cards at full content, 14 at Description, 7 at Title when run alone),
+the relevance filter fired and spent rerank search units, and the disclosure catalog held the schema
+budget down.
+
+It makes more model calls to do it — 101 against the baseline's 87 — which is the trade the practices
+make: a retrieval cycle is cheap next to resending a 60k-character payload on every subsequent turn.
+It is also the *fastest* per turn despite those extra calls, because each one carries far less.
+
+### The same run on Claude Haiku 4.5
+
+Worth stating because one strategy changes sign between the two models, which means no
+single-strategy figure should be quoted without naming the model it came from.
+
+| Configuration | Total tokens | Δ vs baseline | Accuracy | Materially correct | Turn (s) | Cost (USD) |
+|---|---:|---:|---:|:--:|---:|---:|
+| Baseline (no plugin) | 11,038,450 | — | 85.8% | 21/30 | 6.6 | $11.10 |
+| Progressive Tool Disclosure only | 9,844,491 | −10.8% | 87.4% | 22/30 | 7.4 | $9.93 |
+| Relevance Filtering only | 13,418,624 | **+21.6%** | 70.9% | 19/30 | 9.4 | $13.53 |
+| Context Graph only | 8,498,825 | −23.0% | 89.0% | **24/30** | 7.3 | $8.58 |
+| **All three combined** | **2,431,848** | **−78.0%** | 81.9% | 21/30 | **5.5** | **$2.52** |
+
+*Haiku is ~15x cheaper per token and reaches the same conclusion about the full stack, but it is a
+weaker model and it retrieves more — which is what flips relevance filtering from a saving to a cost.*
+
+**Relevance filtering costs 21.6% *more* than doing nothing on Haiku and saves 11.2% on Opus.** Every
+`retrieve_context` result becomes a conversation message and then rides along on every later call, so
+a model that retrieves repeatedly pays for the same content many times. Haiku did exactly that and
+exceeded the window outright on four calls (201,035 tokens against a 200,000 limit); Opus answered
+from the preview more often and never overflowed.
+
+Peak input on a single call, Opus: baseline 204,439 — above Haiku's entire window, which is why the
+baseline is only runnable here on a model with more than 200k of context; relevance 174,062;
+disclosure 149,681; graph 147,948; all three 49,943.
 
 ### Against the vended run
 
-Same scenario and same model, so the absolute totals compare. The baselines do not — the vended one
-carried an offloader — and neither do the single-strategy rows, since **every** vended configuration
-carried that offloader and therefore a much smaller history than its community counterpart. The
-honest comparison is the full stack, where both sides control payload, schema and history:
+**Not comparable any more, and the earlier claim of parity should not be repeated as a like-for-like.**
+The vended figures in [`../../README-vended-plugins.md`](../../README-vended-plugins.md) were measured
+on the previous version of this script — 18 scored turns, and a filler that asked about accounts the
+fixture did not hold, so 36 of 42 filler turns made no tool call and contributed almost no payload
+mass. This script grounds every filler turn, which is why its baseline carries 14.4M input tokens
+where the vended one carried 11.3M.
 
-| | Vended (`graph-all`) | Community (`all`) |
-|---|---:|---:|
-| Total tokens | 2,255,712 | 2,296,820 (+1.8%) |
-| Cost | $35.33 | $35.88 |
-| Weighted accuracy | 95.8% | 94.4% |
-| Materially correct | 17/18 | 17/18 |
-
-**Parity.** The headline claim of the whole collection — roughly 80% fewer tokens at the same
-answer quality — survives the move off the forked SDK onto three community packages and an
-unmodified `strands-agents`. Getting there took one wiring fix, recorded next.
+The strategies' *direction* and *relative* ordering agree across both. Settling whether the two
+packagings reach the same absolute number would mean re-running the vended harness on the corrected
+script, which has not been done.
 
 ---
 
 ## The accuracy regression, and the fix
 
-The first measurement of the full stack scored **84.5% weighted, 15 of 18 materially correct** —
-clearly below the vended stack's 95.8% / 17 of 18. Of the three turns it got wrong, **two came from
-one root cause**: `A5-statement` scored **0.00** where every other configuration scored 1.00, and
-`R2-cross-reference` then failed because it asks about the fact A5 was supposed to establish.
+Measured when the two plugins were first combined, on the earlier 18-scored-turn version of this
+script: the full stack scored **84.5% weighted, 15 of 18 materially correct**, below each strategy on
+its own. Of the three turns it got wrong, **two came from one root cause**: `A5-statement` scored
+**0.00** where every other configuration scored 1.00, and `R2-cross-reference` then failed because it
+asks about the fact A5 was supposed to establish.
 
 The model said what went wrong in its own answer:
 
@@ -197,10 +276,11 @@ Re-measured with that one change, same 60 turns:
 | Before | 84.5% | 15/18 | 0.00 | 0.70 |
 | **After** | **94.4%** | **17/18** | **1.00** | **1.00** |
 
+*One de-duplication at the wiring site recovered both turns; the figures are on the earlier
+18-scored-turn script, which is where the regression was found.*
+
 A5's tool calls became `list_investment_transactions`, `list_investment_transactions`,
-`retrieve_context` — the right tool, and no `expand_artifact`. The one turn still wrong,
-`C1-lambda-docs`, fails the same check in the graph-only arm and is a wording expectation about AWS
-documentation ("retries the function **twice**"), not a context-engineering failure.
+`retrieve_context` — the right tool, and no `expand_artifact`.
 
 **Worth upstreaming:** the two packages should either share a reference store or agree on one
 retrieval tool. Until they do, installing both means de-duplicating the overlap at the wiring site.
@@ -214,12 +294,12 @@ retrieval tool. Until they do, installing both means de-duplicating the overlap 
   two packages carry **641 passing tests** between them
   (`strands-context-graph` 560 passed / 1 skipped, `strands-progressive-tool-disclosure` 81 passed),
   so strategy A's only verification here is this harness.
-- **The model does not search; it guesses and gets corrected.** Across 60 turns the disclosure
-  plugin recorded **5 searches and 14 premature cancellations**: the catalog names a tool, the model
-  calls it straight away with no arguments, the pre-call guard cancels and exposes the schema, and
-  the model retries. The guard works — nothing is lost — but each occurrence costs one model cycle,
-  which is why the full stack makes more model calls than the baseline (104 vs 87) while sending far
-  fewer tokens.
+- **The model does not search; it guesses and gets corrected.** Across 60 turns on Opus the disclosure
+  plugin recorded **1 search against 15 premature cancellations** when run alone, and 3 against 14 in
+  the full stack: the catalog names a tool, the model calls it straight away with no arguments, the
+  pre-call guard cancels and exposes the schema, and the model retries. The guard works — nothing is
+  lost — but each occurrence costs one model cycle, which is why disclosure makes 100 model calls
+  against the baseline's 87 while sending 34% fewer tokens.
 
 ---
 
@@ -240,7 +320,7 @@ trusting anything under ~20%.
 ### Verifying tokens against Bedrock
 
 ```bash
-.venv/bin/python -m src.verify_logs results/run-cm60.json --per-call
+.venv/bin/python -m src.verify_logs results/run-op60.json --per-call
 ```
 
 Each request is stamped with metadata naming its configuration, turn and call, so the join against
