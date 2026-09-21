@@ -333,8 +333,11 @@ class RelevanceFilter(Plugin):
 
         Raises:
             ValueError: If the reference is unknown, the content is binary and
-                ``pattern``/``line_range``/``context_lines`` were supplied, or ``line_range`` falls
-                outside the content.
+                ``pattern``/``line_range``/``context_lines`` were supplied, or ``line_range`` *starts*
+                outside the content — its ``start`` is below 1, above ``end``, or past the last line.
+                An ``end`` past the last line is **not** an error: the span is clamped to the content,
+                the way ``sed -n 'start,$p'`` behaves, so asking for more lines than exist returns
+                everything from ``start`` onwards.
         """
         store = self._store
         if store is None:  # pragma: no cover - init_agent always resolves a store first.

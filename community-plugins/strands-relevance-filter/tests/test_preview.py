@@ -296,6 +296,31 @@ def test_assemble_preview_never_exceeds_budget():
     assert len(out) <= budget
 
 
+def test_assemble_preview_closing_marker_counts_a_partly_shown_line_as_omitted():
+    """A truncation inside the FIRST line of the last chunk reports every source line as omitted.
+
+    Not an off-by-one: the rule is that a line the reader cannot see in full counts as missing, and
+    when the cut lands inside line 1 that makes line 1 itself the first unshown line. The count is a
+    safe lower bound for a follow-up ``line_range`` -- it never under-reports what is still needed --
+    so it can exceed the number of completely untouched lines.
+    """
+    # One chunk spanning the whole text, and a budget that dies part-way through its first line.
+    text = "\n".join(f"line{i}" for i in range(1, 30))
+    chunks = _chunk_text(text, chunk_tokens=1_000)
+    assert len(chunks) == 1
+    assert chunks[0].end_line == 29
+
+    out = _assemble_preview(chunks, [chunks[0]], budget_chars=30)
+
+    # A fragment of line 1 did reach the preview -- verbatim, as a prefix of the source -- and the
+    # marker still claims all 29 lines, because that fragment is not the whole line.
+    rendered = out.split("\n", 1)[0]
+    assert rendered
+    assert text.startswith(rendered)
+    assert rendered != "line1"  # a fragment, not the complete line
+    assert "29 lines omitted" in out
+
+
 def test_assemble_preview_truncated_final_chunk_gets_closing_marker():
     # One big chunk spanning many lines; budget cuts inside it at a line boundary,
     # so lines after the cut are omitted and a closing marker must report them.

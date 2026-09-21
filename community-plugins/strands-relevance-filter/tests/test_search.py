@@ -69,6 +69,22 @@ def test_search_content_line_range_outside_content_raises():
         _search_content(_SAMPLE, line_range=(3, 1))
 
 
+def test_search_content_line_range_end_past_last_line_is_clamped_not_rejected():
+    """An over-large ``end`` is clamped, the way ``sed -n 'start,$p'`` behaves.
+
+    Only ``start`` is validated against the content length. This is the half of the contract that
+    is easy to get wrong in the other direction: the docstring used to say a range "falls outside
+    the content" raises, which reads as rejecting this call too. It does not, and a caller that
+    wraps it in ``except ValueError`` expecting to catch an over-wide span would never see it fire.
+    """
+    out = _search_content(_SAMPLE, line_range=(2, 9999))
+
+    # Everything from ``start`` onwards came back, and nothing before it.
+    assert "bravo" in out
+    assert "echo" in out
+    assert "alpha" not in out
+
+
 # --------------------------------------------------------------------------- #
 # _search_content — pattern
 # --------------------------------------------------------------------------- #

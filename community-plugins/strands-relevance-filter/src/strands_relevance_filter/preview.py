@@ -301,6 +301,14 @@ def _trailing_gap_marker(chunk: Chunk, kept: str, total_lines: int) -> str:
     The line that got cut in the middle counts as omitted: the model needs to fetch it
     again to see it whole.
 
+    One consequence worth knowing, because the number can look wrong: a truncation falling
+    inside the *first* line of the last chunk makes ``first_unshown_line`` that line itself,
+    so the marker reports every line of the source as omitted — "29 lines omitted" on a
+    29-line text — even though a fragment of line 1 was rendered. That is the rule above
+    applied consistently rather than an off-by-one: the partially shown line is not readable
+    in full, so it is counted as missing. The count is therefore a safe lower bound on what a
+    follow-up ``line_range`` should ask for, never an exact tally of untouched lines.
+
     Args:
         chunk: The chunk that was truncated.
         kept: The prefix of ``chunk.text`` that made it into the preview.
