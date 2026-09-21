@@ -31,7 +31,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from .config import PRICING, RESULTS_DIR, RUN_CONFIGS
+from . import config
+from .config import AGENT_MODEL_ID, PRICING, RESULTS_DIR, RUN_CONFIGS
 
 _ORDER = ("baseline", "disclosure", "relevance", "graph", "all", "graph-all")
 """Reading order: the reference first, then one strategy at a time, then the two stacks.
@@ -111,6 +112,14 @@ class Row:
     rerank_cost: float
     embed_calls: int
     search_units: int
+    cache_read: float = 0.0
+    """Input tokens served from a prompt cache. Non-zero even on an uncached run against a model
+    that caches implicitly, which the OpenAI models do on the Converse path."""
+    cache_write: float = 0.0
+    """Input tokens written to a prompt cache."""
+    cache_cost_is_bound: bool = False
+    """True when the model declares no cache rates and cache traffic was billed at the uncached
+    input rate, making this row's cost an upper bound rather than a figure."""
 
     @property
     def cost(self) -> float:
@@ -120,6 +129,44 @@ class Row:
 
 def _cost(tokens: float, per_mtok: float) -> float:
     return tokens / 1_000_000.0 * per_mtok
+
+
+def _cache_cost(tokens: dict[str, Any]) -> tuple[float, bool]:
+    """Return what this run's prompt-cache traffic cost, and whether that figure is a bound.
+
+    Bedrock reports cached input separately from ``inputTokens``, so cache traffic contributes
+    nothing to the uncached input figure and has to be billed on its own. An uncached run reports
+    zeros here and this returns ``(0.0, False)``, which is why every previously published figure is
+    unaffected by this function existing.
+
+    Cache traffic appears whether or not a run asked for it: the OpenAI models cache implicitly on
+    the Converse path, so a ``--cache off`` run against one still bills cache reads and writes.
+
+    When the model declares no cache rates, the traffic is billed at the model's *uncached input*
+    rate instead of being refused. Cache reads are always cheaper than uncached input and writes are
+    a small multiple of it, so that is an upper bound rather than a guess -- and a bound that renders
+    beats a run that cannot be costed at all. The second return value says so, and the report prints
+    it.
+
+    Args:
+        tokens: The run's ``summary.tokens`` block.
+
+    Returns:
+        The cost of cache reads plus cache writes in USD, and True when rates were unavailable and
+        the figure is therefore an upper bound.
+    """
+    read = float(tokens.get("cache_read_total", 0) or 0)
+    write = float(tokens.get("cache_write_total", 0) or 0)
+    if not read and not write:
+        return 0.0, False
+
+    write_rate = PRICING.cache_write_1h_per_mtok if config.CACHE_TTL == "1h" else PRICING.cache_write_5m_per_mtok
+    read_rate = PRICING.cache_read_per_mtok
+    if read_rate is None or write_rate is None:
+        fallback = PRICING.agent_input_per_mtok
+        return _cost(read + write, fallback), True
+
+    return _cost(read, read_rate) + _cost(write, write_rate), False
 
 
 def _row(name: str, entry: dict[str, Any]) -> Row:
@@ -144,6 +191,8 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
     agent_tokens = agent_input + agent_output
     aux_tokens = embed_tokens
 
+    cache_cost, cache_bounded = _cache_cost(tokens)
+
     return Row(
         name=name,
         label=RUN_CONFIGS[name].label if name in RUN_CONFIGS else name,
@@ -163,7 +212,11 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
         turn_seconds_mean=float(timing.get("turn_seconds_mean", 0.0) or 0.0),
         turn_seconds_spread_pct=float(timing.get("turn_seconds_mean_spread_pct", 0.0) or 0.0),
         agent_cost=_cost(agent_input, PRICING.agent_input_per_mtok)
-        + _cost(agent_output, PRICING.agent_output_per_mtok),
+        + _cost(agent_output, PRICING.agent_output_per_mtok)
+        + cache_cost,
+        cache_read=float(tokens.get("cache_read_total", 0) or 0),
+        cache_write=float(tokens.get("cache_write_total", 0) or 0),
+        cache_cost_is_bound=cache_bounded,
         embedding_cost=_cost(embed_tokens, PRICING.embedding_per_mtok),
         rerank_cost=search_units / 1_000.0 * PRICING.rerank_per_ksearchunit,
         embed_calls=int(embedding.get("calls", 0) or 0),
@@ -293,29 +346,53 @@ def build_comparison(payload: dict[str, Any]) -> str:
     lines.append("## Where the cost came from")
     lines.append("")
     lines.append(
-        "| Configuration | Agent in | Agent out | Agent $ | "
+        "| Configuration | Agent in | Cache read | Cache write | Agent out | Agent $ | "
         "Embed calls | Embed tokens | Embed $ | Search units | Rerank $ | Total $ |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for row in rows:
         lines.append(
             f"| {row.label} "
-            f"| {row.agent_input:,.0f} | {row.agent_output:,.0f} | {row.agent_cost:.2f} "
+            f"| {row.agent_input:,.0f} | {row.cache_read:,.0f} | {row.cache_write:,.0f} "
+            f"| {row.agent_output:,.0f} | {row.agent_cost:.2f} "
             f"| {row.embed_calls} | {row.embed_tokens:,.0f} | {row.embedding_cost:.4f} "
             f"| {row.search_units} | {row.rerank_cost:.4f} "
-            f"| {row.cost:.2f} |"
+            f"| {row.cost:.2f}{' ≤' if row.cache_cost_is_bound else ''} |"
+        )
+    if any(row.cache_cost_is_bound for row in rows):
+        lines.append("")
+        lines.append(
+            "`≤` marks an **upper bound**, not a measurement: this model publishes no cache rates, so "
+            "its cache reads and writes are billed here at the uncached input rate. A cache read is "
+            "always cheaper than uncached input, so the true cost is below the figure shown."
+        )
+    if any(row.cache_read or row.cache_write for row in rows):
+        lines.append("")
+        lines.append(
+            "**Agent in counts only UNCACHED input.** Bedrock reports cached input in its own fields, "
+            "so on a model that caches, `Agent in` is the delta and the prefix sits in `Cache read` / "
+            "`Cache write`. Total billed input is the three summed — comparing one model's `Agent in` "
+            "against another's is comparing a delta to a whole prompt."
         )
     lines.append("")
     lines.append(
-        "Rates are declared in `src.config.PRICING`, not read from the Price List API — that API "
-        "carries no usage type for this account's agent model, embedding model or rerank model, so a "
-        "lookup would silently match something else. Edit the rates and re-render; the units do not change."
+        "Rates are declared per model id in `src.config.MODEL_PRICING`, not read from the Price List "
+        "API — that API carries no usage type for this account's agent model, embedding model or "
+        "rerank model, so a lookup would silently match something else. Edit the rates and re-render; "
+        "the units do not change."
     )
     lines.append("")
     lines.append(
-        f"Agent ${PRICING.agent_input_per_mtok:.2f}/${PRICING.agent_output_per_mtok:.2f} per Mtok in/out, "
-        f"embedding ${PRICING.embedding_per_mtok:.2f} per Mtok, "
-        f"rerank ${PRICING.rerank_per_ksearchunit:.2f} per 1k search units."
+        f"`{AGENT_MODEL_ID}` at ${PRICING.agent_input_per_mtok:.2f}/${PRICING.agent_output_per_mtok:.2f} "
+        f"per Mtok in/out, embedding ${PRICING.embedding_per_mtok:.2f} per Mtok, "
+        f"rerank ${PRICING.rerank_per_ksearchunit:.2f} per 1k search units. "
+        + (
+            f"Prompt caching ON at TTL {config.CACHE_TTL}, billed at ${PRICING.cache_read_per_mtok:.2f} read / "
+            f"${(PRICING.cache_write_1h_per_mtok if config.CACHE_TTL == '1h' else PRICING.cache_write_5m_per_mtok) or 0:.2f} "
+            "write per Mtok."
+            if config.CACHE_TTL
+            else "Prompt caching OFF."
+        )
     )
     lines.append("")
     lines.append(

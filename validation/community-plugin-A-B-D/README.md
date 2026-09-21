@@ -236,14 +236,14 @@ hand-written spine plus 12 generated — and the other 30 are unscored mass.
 
 | Configuration | Total tokens | Δ vs baseline | Accuracy | Materially correct | Turn (s) | Cost (USD) |
 |---|---:|---:|---:|:--:|---:|---:|
-| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7 | $217.50 |
-| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8 | $144.30 |
-| Relevance Filtering only | 12,766,237 | −11.2% | 96.9% | **29/30** | 11.7 | $193.33 |
-| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8 | $157.30 |
-| **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7** | **$40.07** |
+| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7 | $72.50 |
+| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8 | $48.10 |
+| Relevance Filtering only | 12,766,237 | −11.2% | 96.9% | **29/30** | 11.7 | $64.45 |
+| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8 | $52.43 |
+| **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7** | **$13.36** |
 
 *The full stack sends 82% fewer tokens for the same 28 of 30 materially correct turns as the
-unmodified agent, at a sixth of the cost and three seconds faster per turn — the turn times are
+unmodified agent, at a fifth of the cost and three seconds faster per turn — the turn times are
 measured with all five configurations running concurrently, so read them as relative to each other
 rather than as isolated latency.*
 

@@ -17,7 +17,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import accuracy, chart, compare, corpus, metrics, report, runner, scenario, tools
+from . import accuracy, chart, compare, config, corpus, metrics, report, runner, scenario, tools
 from .config import (
     ACCOUNT_ID,
     AGENT_MODEL_ID,
@@ -141,6 +141,13 @@ def _preflight() -> bool:
     print(f"rerank:  {RERANK_MODEL_ID}")
     print(f"embed:   {EMBED_MODEL_ID}")
     print(f"tag:     {metrics.RUN_TAG}")
+    # Printed because the cost column is a deliverable: a run billed at the wrong model's rates
+    # produces a number that looks plausible and is wrong, and this is the last moment to catch it.
+    print(
+        f"rates:   ${config.PRICING.agent_input_per_mtok:.2f}/${config.PRICING.agent_output_per_mtok:.2f} "
+        f"per Mtok in/out"
+    )
+    print(f"cache:   {config.CACHE_TTL or 'off'}")
     print(f"plugins: {', '.join(_PLUGIN_LOGGERS)} (community packages, unmodified strands-agents)")
 
     # Invocation logging is the only independent check on the token numbers this harness reports. It
@@ -363,6 +370,20 @@ def main() -> int:
         ),
     )
     parser.add_argument("--smoke", action="store_true", help="cheap run that still wires all three strategies")
+    parser.add_argument(
+        "--cache",
+        choices=("off", "default", "5m", "1h"),
+        help=(
+            "enable Bedrock prompt caching on the agent's tool schema, system prompt and last user "
+            "message (default: off, which is how every published figure was measured). Use "
+            "'default' for Bedrock's own TTL: an explicit '5m'/'1h' is rejected by botocore 1.40, "
+            "whose Converse model declares cachePoint with 'type' alone, and needs a newer botocore. "
+            "Caching cheapens the stable-prefix configurations more than it cheapens disclosure, whose "
+            "tool set changes by design, and graph, whose history is rewritten -- so it NARROWS the "
+            "measured saving and belongs in a separate column rather than replacing the uncached one. "
+            "Also settable as VALIDATION_CACHE."
+        ),
+    )
     parser.add_argument("--tag", metavar="TAG", help="name the output files instead of using a timestamp")
     parser.add_argument("--report-only", metavar="JSON", help="re-render a report from a previous run's JSON")
     parser.add_argument(
@@ -373,6 +394,11 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="turn on the plugins' own debug logging")
 
     args = parser.parse_args()
+    # Applied before anything builds a model or renders a report, both of which read
+    # config.CACHE_TTL at call time. An omitted flag leaves the VALIDATION_CACHE value alone, so the
+    # environment stays the way the parallel benchmark runners drive it.
+    if args.cache is not None:
+        config.CACHE_TTL = None if args.cache == "off" else args.cache
     _configure_logging(args.verbose)
     return asyncio.run(_main_async(args))
 
