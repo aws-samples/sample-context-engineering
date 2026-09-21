@@ -20,27 +20,114 @@ Start here for the wiring; go there for what it costs.
 **Read [the four gotchas](#four-things-that-will-bite-you) before wiring all three together.** Two of
 them cost a measured benchmark run its answers, and none of them fails loudly.
 
-## What you need
+## No fork required
 
-- **Python 3.10 or newer** (3.12 for the benchmark harness).
-- **AWS credentials** for an account with these Bedrock models enabled in `us-east-1`:
-  `us.anthropic.claude-opus-4-8`, `cohere.rerank-v3-5:0`, `cohere.embed-multilingual-v3`.
-  Credentials resolve through the standard AWS chain.
-- **The three packages plus the public SDK.** They are not published to PyPI yet, so install them
-  from this repository:
+The three packages install next to an **unmodified** `strands-agents` from PyPI. Verified against
+**1.56.0**: the private middleware seam they couple to
+(`strands._middleware.stages.InvokeModelStage`, `strands.injection._message_injection`) is present on
+the public release, which is what makes "community plugin" a real claim rather than a repackaging of
+the fork. They are not published to PyPI yet, so they install from this repository.
+
+Everything you need to run them is in [Run it in five commands](#run-it-in-five-commands) below.
+
+## Run it in five commands
+
+If you only want to see it work, this is the whole path. It creates an isolated environment, installs
+the three packages, and runs the agent below against a real Bedrock model.
+
+### Prerequisites
+
+| | Requirement | Why |
+|---|---|---|
+| Python | **3.10 or newer** | the packages' `requires-python`; the benchmark harness wants 3.12 |
+| `strands-agents` | **>= 1.44.0, < 2.0.0** | the middleware seam the plugins attach to; verified on 1.56.0 |
+| `boto3` | >= 1.26 | pulled in automatically; used by the reranker and the embedding matcher |
+| AWS CLI | **v2** | only to configure and verify credentials |
+
+Bedrock models that must be **enabled in your account**, in the region you use:
+
+| Model id | Used by |
+|---|---|
+| `us.anthropic.claude-opus-4-8` | the agent itself (any Converse-capable model works) |
+| `cohere.rerank-v3-5:0` | relevance filtering |
+| `cohere.embed-multilingual-v3` | the context graph's similarity matcher |
+
+Enable them once under **Amazon Bedrock → Model access** in the console.
+
+### 1. Configure AWS credentials with the AWS CLI
+
+The plugins use `boto3`, which reads the standard credential chain — so whatever the AWS CLI is
+configured with is what the agent will use. Nothing is hardcoded and no key is written by this sample.
 
 ```bash
-pip install -e community-plugins/strands-context-graph
-pip install -e community-plugins/strands-progressive-tool-disclosure
-pip install -e community-plugins/strands-relevance-filter
-pip install "strands-agents>=1.44.0,<2.0.0"
+# interactive: paste an access key pair, choose a region
+aws configure
+
+# or, if your organisation uses IAM Identity Center (SSO)
+aws configure sso
+aws sso login --profile my-profile
+export AWS_PROFILE=my-profile
 ```
 
-Each package declares that same SDK range itself. Verified against **`strands-agents` 1.56.0**: the
-private middleware seam the plugins couple to (`strands._middleware.stages.InvokeModelStage`) is
-present on the public release, which is what makes "no fork required" a real claim.
+Then verify — both commands must succeed before the agent will run:
 
-Running the sample spends on Bedrock: every turn is a real model call.
+```bash
+aws sts get-caller-identity                 # who you are: account, ARN
+aws bedrock list-foundation-models \
+  --region us-east-1 \
+  --query "modelSummaries[?contains(modelId,'rerank') || contains(modelId,'embed-multilingual')].modelId" \
+  --output table                            # the auxiliary models are reachable
+```
+
+Set the region once so you do not have to pass it every time:
+
+```bash
+export AWS_DEFAULT_REGION=us-east-1
+```
+
+The IAM identity needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the three
+model ids above, plus `bedrock:Rerank` on `bedrock-agent-runtime` for relevance filtering. Scope it to
+those resources rather than using a wildcard.
+
+### 2. Create the environment and install
+
+```bash
+git clone https://github.com/aws-samples/sample-context-engineering.git
+cd sample-context-engineering
+
+python3 -m venv .venv
+source .venv/bin/activate                   # Windows: .venv\Scripts\activate
+
+pip install -e community-plugins/strands-context-graph \
+            -e community-plugins/strands-progressive-tool-disclosure \
+            -e community-plugins/strands-relevance-filter \
+            "strands-agents>=1.44.0,<2.0.0"
+```
+
+### 3. Save the agent and run it
+
+Put any of the code blocks from the sections below into `agent.py` — start with
+[the starting point](#the-starting-point) to see the problem, then
+[all three together](#all-three-together) to see it solved — and run:
+
+```bash
+python agent.py
+```
+
+**This spends money on Bedrock:** every turn is a real model call, and the sample's tool returns a
+~40k-character payload on purpose.
+
+To see the measured numbers instead of the wiring, the benchmark is one command:
+
+```bash
+cd validation/community-plugin-A-B-D
+./run.sh --total-turns 60 --tag myrun
+```
+
+That one costs considerably more — it is 60 turns across five configurations. See
+[`validation/community-plugin-A-B-D/README.md`](../validation/community-plugin-A-B-D/README.md) first.
+
+---
 
 ## The starting point
 
