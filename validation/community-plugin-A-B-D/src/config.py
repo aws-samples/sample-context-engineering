@@ -65,12 +65,14 @@ workstation's setup is recorded here.
 
 # --- Models ------------------------------------------------------------------------
 
-AGENT_MODEL_ID = "us.anthropic.claude-opus-4-8"
-"""Claude Opus 4.8, cross-region inference profile. Drives the agent under test.
+AGENT_MODEL_ID = os.environ.get("VALIDATION_AGENT_MODEL_ID") or "us.anthropic.claude-opus-4-8"
+"""Model driving the agent under test. Claude Opus 4.8's cross-region profile by default.
 
-Switch this together with ``Pricing.agent_input_per_mtok`` and ``agent_output_per_mtok`` below, or
-the cost column reports one model's rates against another's tokens. The pairs are Opus 4.8 at
-``15.00`` / ``75.00`` and ``us.anthropic.claude-haiku-4-5-20251001-v1:0`` at ``1.00`` / ``5.00``.
+Override it with ``VALIDATION_AGENT_MODEL_ID`` rather than by editing this line: the rates the cost
+column bills at are looked up from this value in :data:`MODEL_PRICING` below. That lookup is what
+removes the footgun this docstring used to warn about -- the rate pair no longer has to be edited in
+a second place to stay honest, and a model with no entry is refused at preflight rather than being
+billed at another model's price.
 
 Absolute accuracy is not comparable across models; the token comparison is, because every
 configuration within a run uses the same model. Haiku is ~15x cheaper per token and a reasonable way
@@ -374,21 +376,134 @@ class Pricing:
     either fail or silently match a different model.
 
     Attributes:
-        agent_input_per_mtok: Agent model input tokens, per million.
+        agent_input_per_mtok: Agent model uncached input tokens, per million.
         agent_output_per_mtok: Agent model output tokens, per million.
+        cache_read_per_mtok: Input tokens served from a prompt cache, per million, or ``None`` when
+            the model does not support caching on this API surface. Billed against
+            ``cacheReadInputTokens``, which Bedrock reports separately from ``inputTokens`` -- so a
+            cached run whose cost ignored this field would understate what it spent.
+        cache_write_5m_per_mtok: Input tokens written to a 5-minute cache checkpoint, per million.
+        cache_write_1h_per_mtok: Input tokens written to a 1-hour cache checkpoint, per million.
         embedding_per_mtok: Embedding input tokens, per million.
         rerank_per_ksearchunit: Rerank search units, per thousand. One unit is up to 100 documents
             of up to 512 tokens in a single query.
     """
 
-    agent_input_per_mtok: float = 15.00
-    agent_output_per_mtok: float = 75.00
+    agent_input_per_mtok: float
+    agent_output_per_mtok: float
+    cache_read_per_mtok: float | None = None
+    cache_write_5m_per_mtok: float | None = None
+    cache_write_1h_per_mtok: float | None = None
     embedding_per_mtok: float = 0.10
     rerank_per_ksearchunit: float = 2.00
 
 
-PRICING = Pricing()
-"""The rates the cost column applies. Edit and re-render; do not re-run."""
+MODEL_PRICING = {
+    # -- Anthropic ----------------------------------------------------------------
+    "us.anthropic.claude-opus-4-8": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
+    "us.anthropic.claude-opus-5": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
+    "us.anthropic.claude-sonnet-5": Pricing(2.00, 10.00, 0.20, 2.50, 4.00),
+    "us.anthropic.claude-fable-5": Pricing(10.00, 50.00, 1.00, 12.50, 20.00),
+    "us.anthropic.claude-fable-5-1": Pricing(10.00, 50.00, 0.25, 12.50, 20.00),
+    # Cache rates for Haiku 4.5 are NOT on the Bedrock pricing page's Anthropic table; these follow
+    # the 0.10x / 1.25x / 2.00x pattern every listed Claude obeys, so treat them as inferred.
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": Pricing(1.00, 5.00, 0.10, 1.25, 2.00),
+    # -- OpenAI -------------------------------------------------------------------
+    # Short-context rates (<=272k input). Above that the model card doubles them, which this
+    # harness never reaches -- its peak call measured 204,439 tokens.
+    #
+    # These models publish ONE cache-write rate, for a 30-minute checkpoint, so both write fields
+    # carry it rather than pretending a 5m/1h split exists. It matters because these models cache
+    # IMPLICITLY on the Converse path whether or not the harness asks: measured on the first
+    # baseline call of the astra run, usage came back as inputTokens=2, cacheWriteInputTokens=48,583.
+    # So a run with --cache off still produces cache traffic here, and still has to be priced.
+    "us.openai.gpt-6-astra": Pricing(11.00, 55.00, 1.10, 13.75, 13.75),
+    "global.openai.gpt-6-astra": Pricing(10.00, 50.00, 1.00, 12.50, 12.50),
+    "us.openai.gpt-5.6-sol": Pricing(4.40, 22.00, 0.44, 5.50, 5.50),
+    "global.openai.gpt-5.6-sol": Pricing(4.00, 20.00, 0.40, 5.00, 5.00),
+    # Terra and Luna write rates are inferred at the 1.25x every other OpenAI entry obeys; their
+    # input, read and output rates are read off the cards.
+    "us.openai.gpt-5.6-terra": Pricing(2.20, 13.20, 0.22, 2.75, 2.75),
+    "global.openai.gpt-5.6-luna": Pricing(0.20, 1.20, 0.02, 0.25, 0.25),
+    # -- Others -------------------------------------------------------------------
+    # No cache rates published for these, so the fields stay None and a cached run against one is
+    # refused rather than priced with a guess.
+    "us.deepseek.r1-v1:0": Pricing(1.35, 5.40),
+    # In-region only: GLM 5 publishes no cross-region inference profile, so the bare model id is
+    # the invocable one. Verified with list-foundation-models / list-inference-profiles.
+    "zai.glm-5": Pricing(1.00, 3.20),
+}
+"""Rates per model id, in USD per million tokens, for ``us-east-1`` Standard tier.
+
+Sourced from the Bedrock pricing page's provider tables and, for the OpenAI line, from each model
+card -- read on 2026-09-21. Two shapes of price live here that the old single ``Pricing`` could not
+express: the OpenAI models are priced per inference profile rather than per region, so the ``us.``
+and ``global.`` profiles of one model are separate entries; and a model without published cache
+rates carries ``None``, which :func:`pricing_for` turns into a refusal instead of a guess.
+
+**The keys are load-bearing.** ``VALIDATION_AGENT_MODEL_ID`` is looked up here verbatim, so a model
+id absent from this map stops the run at preflight. That is deliberate for a harness whose output is
+a cost column: silently billing a new model at Opus rates produces a number that looks fine and is
+wrong.
+
+These are **list prices**, and a cost column built from them is an estimate of list cost, not of any
+particular bill: discounts, commitments and regional fees are account-specific and deliberately not
+modelled here. Every comparison in the reports is a ratio between rows priced the same way, so a
+uniform difference between list and actual cancels out of it.
+"""
+
+
+def pricing_for(model_id: str) -> Pricing:
+    """Return the rates for ``model_id``.
+
+    Args:
+        model_id: The Bedrock model id or inference profile the run will invoke.
+
+    Returns:
+        The declared rates for that model.
+
+    Raises:
+        KeyError: If the model has no declared rates. Raised rather than defaulted, because a cost
+            column billed at the wrong model's price is worse than no run at all.
+    """
+    try:
+        return MODEL_PRICING[model_id]
+    except KeyError:
+        known = "\n  ".join(sorted(MODEL_PRICING))
+        raise KeyError(
+            f"no declared pricing for model id {model_id!r}. Add it to MODEL_PRICING in "
+            f"src/config.py with rates read off the Bedrock pricing page. Known ids:\n  {known}"
+        ) from None
+
+
+PRICING = pricing_for(AGENT_MODEL_ID)
+"""The rates the cost column applies, resolved from :data:`AGENT_MODEL_ID` at import.
+
+Correcting a rate is still an edit-and-re-render: fix the entry in :data:`MODEL_PRICING` and re-run
+with ``--report-only``, never against Bedrock.
+"""
+
+
+CACHE_TTL = os.environ.get("VALIDATION_CACHE") or None
+"""Prompt-cache TTL for the agent's cache checkpoints, or ``None`` to run uncached.
+
+``None`` (the default) is what every published figure in this harness was measured with, so it stays
+the default: turning caching on changes the cost column's meaning and must be an explicit choice.
+Accepts a Bedrock TTL string -- ``"5m"`` or ``"1h"`` -- set by ``--cache`` or by
+``VALIDATION_CACHE``.
+
+One TTL covers all three checkpoints (toolConfig, system, messages) on purpose. Bedrock requires
+checkpoint TTLs to be non-increasing in that order and rejects a longer one following a shorter one,
+so a single value is the only setting that cannot produce a request-time rejection.
+
+**What this buys, and where.** 5,451,072 of the baseline's 14,346,683 input tokens are tool schema,
+identical on all 87 calls, which is the cacheable prefix. It is cacheable only where the prefix is
+stable: ``disclosure`` mutates the tool set by design, so each change invalidates the checkpoint and
+pays a write at 1.25x, and ``graph`` rewrites the history, so the message checkpoint never reads.
+Caching therefore cheapens the control more than the treatments and *narrows* the measured saving of
+the strategies. That is what caching does, not a fault in it -- but it means a cached run is a
+separate column, not a replacement for the uncached one.
+"""
 
 # --- Tool suite sizing -------------------------------------------------------------
 

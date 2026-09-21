@@ -42,8 +42,9 @@ AGENT_MODEL_ID = "us.anthropic.claude-opus-4-8"
 """Claude Opus 4.8, cross-region inference profile. Drives the agent under test.
 
 Switch this together with ``Pricing.agent_input_per_mtok`` and ``agent_output_per_mtok`` below, or the
-cost column reports one model's rates against another's tokens. The pairs are Opus 4.8 at ``15.00`` /
-``75.00`` and ``us.anthropic.claude-haiku-4-5-20251001-v1:0`` at ``1.00`` / ``5.00``.
+cost column reports one model's rates against another's tokens. The pairs are Opus 4.8 at ``5.00`` /
+``25.00`` and ``us.anthropic.claude-haiku-4-5-20251001-v1:0`` at ``1.00`` / ``5.00`` -- read off the
+Bedrock pricing page on 2026-09-21.
 
 Absolute accuracy is not comparable across models; the token comparison is, because every
 configuration within a run uses the same model. Haiku's 200k context window is also the tighter
@@ -395,8 +396,8 @@ class Pricing:
             of up to 512 tokens in a single query.
     """
 
-    agent_input_per_mtok: float = 15.00
-    agent_output_per_mtok: float = 75.00
+    agent_input_per_mtok: float = 5.00
+    agent_output_per_mtok: float = 25.00
     embedding_per_mtok: float = 0.10
     rerank_per_ksearchunit: float = 2.00
 

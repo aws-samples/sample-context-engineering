@@ -43,7 +43,7 @@ import boto3
 from botocore.config import Config as BotocoreConfig
 from strands import Agent
 from strands.agent.conversation_manager import NullConversationManager
-from strands.models import BedrockModel
+from strands.models import BedrockModel, CacheConfig
 
 # The three community packages. Imported at module scope, not lazily: a missing package is a broken
 # installation and should fail at import with the package's own name, rather than midway through a
@@ -52,7 +52,7 @@ from strands_context_graph import ContextGraph, EmbeddingSimilarityMatcher
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
 
-from . import accuracy, scenario, tools
+from . import accuracy, config, metrics, scenario, tools
 from .config import (
     AGENT_MODEL_ID,
     ARTIFACTS_DIR,
@@ -108,11 +108,28 @@ def _agent_model(session: boto3.Session) -> BedrockModel:
     # No temperature: Opus 4.8 rejects the parameter outright with a ValidationException
     # ("`temperature` is deprecated for this model"). Determinism across configurations therefore
     # comes from a fixed scenario and fixed payloads, not from a sampling knob.
+    #
+    # One TTL for all three checkpoints: Bedrock requires them non-increasing across toolConfig,
+    # system and messages, so a single value is the only setting that cannot be rejected. tools_ttl
+    # must be passed explicitly -- it defaults to None, which caches the system prompt and leaves
+    # the tool schema uncached, and the tool schema is 38% of this harness's input.
+    # "default" means cache ON at Bedrock's own TTL, emitted as {"type": "default"} with no ttl
+    # field. That is the only form botocore 1.40 accepts: its Converse model declares cachePoint
+    # with "type" alone, so an explicit "5m"/"1h" is rejected before the request leaves the host
+    # with ParamValidationError. An explicit TTL needs a newer botocore.
+    ttl = None if config.CACHE_TTL == "default" else config.CACHE_TTL
+    section = True if ttl is None else ttl
+    cache_config = (
+        CacheConfig(strategy="auto", ttl=ttl, tools_ttl=section, system_prompt_ttl=section)
+        if config.CACHE_TTL
+        else None
+    )
     model = BedrockModel(
         boto_session=session,
         boto_client_config=_client_config(),
         model_id=AGENT_MODEL_ID,
         max_tokens=4_096,
+        **({"cache_config": cache_config} if cache_config else {}),
     )
     install_log_tagging(model.client, role="agent")
     return model
@@ -317,7 +334,11 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
     plugins: list[Any] = []
 
     if config.relevance:
-        storage_root = ARTIFACTS_DIR / config.name
+        # Namespaced by run tag as well as configuration: the tag is what keeps two runs that
+        # execute at the same time -- a benchmark sweeping one model per process, say -- from
+        # writing into each other's stored sub-blocks and serving the wrong content back through
+        # retrieve_context. Configuration alone was enough only while one run existed at a time.
+        storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
         reranker = _MeteredReranker(
