@@ -36,8 +36,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/strands-agents/harness-sdk"
-"Bug Tracker" = "https://github.com/strands-agents/harness-sdk/issues"
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+"Bug Tracker" = "https://github.com/aws-samples/sample-context-engineering/issues"
 
 # The development group: the property suite (hypothesis), the async test runner in strict mode, mocked boto for the
 # BedrockReranker and S3Store contract tests (moto), and the lint/type gate.

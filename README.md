@@ -218,9 +218,11 @@ This content is a **research validation harness**, not a production application.
 - **Synthetic data only** — All financial scenario data (FinBank, TestBank, NeoBank, account numbers,
   balances) is synthetic, computed by `validation/community-plugin-A-B-D/src/ground_truth.py`. No real
   customer or personal data is used.
-- **One package ships without tests** — `strands-relevance-filter` carries no test suite in this
-  branch; the other two carry 641 passing tests between them. Practice A's only verification here is
-  the benchmark.
+- **Test coverage is uneven across the three packages.** They now carry **764 passing tests** between
+  them, but not evenly: `strands-context-graph` 560, `strands-relevance-filter` 123, and
+  `strands-progressive-tool-disclosure` 81. The relevance filter's suite was written against its
+  documented contract after the fact, so it verifies the behaviour the docstrings promise rather than
+  having driven the design.
 
 ## Responsible AI considerations
 

@@ -25,15 +25,77 @@ having both.
 ## What you need
 
 - **Python 3.12** and [`uv`](https://github.com/astral-sh/uv).
-- **AWS credentials** for an account with these Bedrock models enabled, in `us-east-1`:
-  `us.anthropic.claude-opus-4-8`, `cohere.rerank-v3-5:0`, `cohere.embed-multilingual-v3`.
-  Credentials resolve through the standard AWS chain or a named profile in
-  `VALIDATION_AWS_PROFILE`. Nothing is hardcoded; the account is discovered from STS. To pin the
-  account a run must execute in, set `VALIDATION_ACCOUNT_ID`.
+- **AWS CLI v2**, only to configure and verify credentials.
 - Internet on the first run: it downloads a Chromium build (for the web tool) and a handful of AWS
   doc pages into `.cache/`, then reuses them so every configuration sees byte-identical payloads.
 
-Re-rendering a recorded run's report needs **no AWS credentials at all**.
+Re-rendering a recorded run's report needs **no AWS credentials at all** — only a live benchmark run
+does.
+
+### The AWS account
+
+A live run calls Bedrock on your own account and **spends real money**: the figures below cost roughly
+$750 on Opus 4.8 and $46 on Haiku 4.5 for one pass of five configurations. Use an account you are
+happy to bill, and read the cost column before launching.
+
+These models must be **enabled** in the region you run in (Amazon Bedrock → Model access):
+
+| Model id | Used by | Enabled for |
+|---|---|---|
+| `us.anthropic.claude-opus-4-8` | the agent under test | every configuration |
+| `cohere.rerank-v3-5:0` | relevance filtering | `relevance`, `all` |
+| `cohere.embed-multilingual-v3` | the graph's similarity matcher | `graph`, `all` |
+
+The identity the run uses needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on
+those model ids, `bedrock:Rerank` on `bedrock-agent-runtime`, `bedrock:GetModelInvocationLoggingConfiguration`
+for the preflight check, and `sts:GetCallerIdentity`. Scope it to those resources rather than using a
+wildcard. Token verification additionally reads CloudWatch Logs (`logs:FilterLogEvents`,
+`logs:GetLogEvents`) on the invocation log group.
+
+### Credentials, with the AWS CLI
+
+Nothing is hardcoded and no credential is written to disk by this harness. It builds its boto3 session
+from the **standard credential chain**, so whatever the AWS CLI is configured with is what the run
+uses. The account is discovered from STS and printed at startup.
+
+```bash
+# interactive: paste an access key pair, choose a region
+aws configure
+
+# or, if your organisation uses IAM Identity Center (SSO)
+aws configure sso
+aws sso login --profile my-profile
+export AWS_PROFILE=my-profile
+```
+
+Verify before launching — the run's own preflight checks the same things, but failing here costs
+nothing:
+
+```bash
+export AWS_DEFAULT_REGION=us-east-1
+
+aws sts get-caller-identity                      # account and ARN the run will use
+aws bedrock list-inference-profiles \
+  --query "inferenceProfileSummaries[?contains(inferenceProfileId,'opus-4-8')].inferenceProfileId" \
+  --output table                                 # the agent model is reachable
+aws bedrock get-model-invocation-logging-configuration   # optional: makes tokens verifiable
+```
+
+Two environment variables change what the harness does with those credentials:
+
+| Variable | Effect |
+|---|---|
+| `VALIDATION_AWS_PROFILE` | use this named profile instead of the default chain |
+| `VALIDATION_ACCOUNT_ID` | refuse to run unless the credentials resolve to this account |
+
+`VALIDATION_ACCOUNT_ID` is the guard worth setting when more than one account is in play: a run that
+silently used the wrong one would produce numbers attributed to the wrong place. Both are read from the
+environment rather than written into `src/config.py`, so nothing about one workstation's setup is
+committed.
+
+The last line above is optional but recommended. Bedrock's model invocation log is the only independent
+check on the token numbers this harness reports; `src/run.py` reads its configuration during preflight
+and warns when a run will not be verifiable afterwards.
 
 ## The dependency: three packages, no SDK fork
 
@@ -289,11 +351,14 @@ retrieval tool. Until they do, installing both means de-duplicating the overlap 
 
 ## Two other findings about the packages themselves
 
-- **`strands-relevance-filter` ships no test suite.** Its `pyproject.toml` declares the dev
-  dependencies and its README documents `hatch test`, but there is no `tests/` directory. The other
-  two packages carry **641 passing tests** between them
-  (`strands-context-graph` 560 passed / 1 skipped, `strands-progressive-tool-disclosure` 81 passed),
-  so strategy A's only verification here is this harness.
+- **Test coverage is uneven, and two documented contracts do not match the code.** The three packages
+  carry **764 passing tests** between them — `strands-context-graph` 560 (plus 1 skipped),
+  `strands-relevance-filter` 123, `strands-progressive-tool-disclosure` 81. The relevance filter's
+  suite was written against its documented contract after the fact, and writing it surfaced two places
+  where the docstring and the code disagree, neither of which is a defect in the behaviour:
+  `retrieve_context` documents `ValueError` when a `line_range` "falls outside the content" but an
+  over-large `end` is silently clamped, grep-style; and a truncated preview's closing gap marker can
+  report the source's whole line count even when part of the first line was rendered.
 - **The model does not search; it guesses and gets corrected.** Across 60 turns on Opus the disclosure
   plugin recorded **1 search against 15 premature cancellations** when run alone, and 3 against 14 in
   the full stack: the catalog names a tool, the model calls it straight away with no arguments, the

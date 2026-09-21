@@ -31,8 +31,8 @@ classifiers = [
 dependencies = ["strands-agents>=1.44.0,<2.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/strands-agents/harness-sdk"
-"Bug Tracker" = "https://github.com/strands-agents/harness-sdk/issues"
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+"Bug Tracker" = "https://github.com/aws-samples/sample-context-engineering/issues"
 
 
 [tool.hatch.build.targets.wheel]

@@ -55,7 +55,10 @@ def _search_content(
         Formatted search results with line numbers, or a message reporting empty content or no matches.
 
     Raises:
-        ValueError: If line_range is not a 1-indexed, non-empty range within the content.
+        ValueError: If ``line_range`` *starts* outside the content — a ``start`` below 1, above
+            ``end``, or past the last line. An ``end`` past the last line is clamped to the content
+            rather than rejected, so a caller may ask for a wider span than exists and receive
+            everything from ``start`` onwards.
     """
     lines = text.split("\n")
     total_lines = len(lines)
