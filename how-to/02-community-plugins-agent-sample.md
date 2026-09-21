@@ -418,13 +418,85 @@ larger `description_tokens` is the cheapest accuracy you can buy: the budget is 
 figures survive verbatim instead of being re-rendered from a paraphrase — which is where a `42,1%`
 turns into `42.1%` and fails a check that the arithmetic would have passed.
 
+## Prompt caching and these plugins
+
+Read this before you turn prompt caching on, because two of the three plugins get *more* expensive with
+it — and the reason is mechanical, not a tuning problem.
+
+Prompt caching and context compression attack the same waste: a growing conversation re-sent on every
+call. Caching makes that repetition cheap to re-read; these plugins delete the repetition. Only one of
+the two can bill it, so on a large-window model they are **alternatives, not a stack**.
+
+### The rule
+
+| You are running | Do this |
+|---|---|
+| An Anthropic model (Claude), large window | **Caching on + `RelevanceFilter` only.** Leave the graph and disclosure off. |
+| An Anthropic model, and you want maximum compression | **Caching off + all three.** This is the configuration the [landing page](../README.md) measures. |
+| A small-window model (under ~250K), or one with no caching | **All three**, caching irrelevant. Completion is the constraint, not cost. |
+| An OpenAI model on Bedrock (Astra, Sol) | **Relevance filter only.** Caching there is implicit and cannot be switched off, so the graph and disclosure pay the write premium with no way to avoid it. |
+
+### Why disclosure and the graph fight the cache
+
+The cache only recognises a prompt prefix from its first byte, in order, unaltered. Bedrock processes
+cache checkpoints `tools` → `system` → `messages`, and the documentation is explicit that "changing
+content in an earlier section invalidates the cache for later sections (for example, modifying `tools`
+invalidates the `system` and `messages` caches)" — see [Prompt
+caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html). Tokens read from
+cache are billed at the cache-read rate, and tokens *written* to cache can be billed above the standard
+input rate; on Bedrock that write premium is ~1.25x input against a read at ~0.10x.
+
+Which puts each plugin in a different position:
+
+- **`ProgressiveToolDisclosure` edits `toolConfig`** — the very first section. Every reveal invalidates
+  the whole prompt, history included. Measured on Opus 5, 44 of 109 calls came back with `cacheRead = 0`
+  and those 44 carried 98.4% of the arm's cache writes. Note the irony: the plugin works (schema down
+  from 62,656 tokens to ~5,300), and it is that success that triggers the penalty — a small tool set is
+  one you change often.
+- **`ContextGraph` removes messages from the middle of the history.** Everything after the edit is new.
+  Its digest block is appended after the cache point and so is billed as ordinary input, which is the
+  right design; the removal is what cannot be made cache-friendly, because the removal *is* the plugin.
+- **`RelevanceFilter` replaces a payload as it arrives and then never touches it.** The prompt stays
+  append-only, so the prefix keeps matching. Its read:write ratio under caching is 66-83:1, the same
+  band as a bare agent.
+
+The design criterion, if you are writing your own context plugin: it is cache-compatible if and only if
+its mutations are **append-only or confined to the end of the prompt** (for Strands, the last `user`
+message / `dynamic_trailing_blocks`). Anything that edits an earlier message or the tool set is not.
+
+### Do not prune revealed tools to save money
+
+A reasonable-sounding idea that measures badly: removing tools the agent has finished with. With caching
+on, removing a tool invalidates the prefix exactly like adding one, so pruning **doubles** the number of
+invalidations. Measured on Opus 5: perfect pruning would save $0.16, and a single extra invalidation
+costs $1.13. With caching off it is a genuine but small win — ~3% — because the plugin has already cut
+the schema to 7% of the prompt mass and the remaining 93% is history. Prune for **window headroom**,
+which is a real reason, not for cost.
+
+### When caching does not pay at all
+
+Caching only earns its write premium if the *same* prefix is re-sent inside the TTL. These agentic
+shapes never get there, and in all of them the plugins are the only lever:
+
+- **A system prompt per tenant**, or a **tool set per user permission** — every request has a different
+  prefix, and the tool set is the worst possible place for a difference.
+- **One-shot fan-out** — classifying thousands of documents, one call each, no reuse.
+- **A prompt A/B test in production** — two variants, two prefixes, half the traffic each.
+- **A human who thinks for longer than the TTL** between turns. Bedrock's default is 5 minutes; a
+  1-hour TTL is available on the Claude models at a higher write rate.
+- **A prompt below the model's checkpoint minimum** — 1,024 tokens for Opus 4.8 and Sol, 512 for Opus 5
+  and Fable 5, 4,096 for Haiku 4.5. Below it the request still succeeds but nothing is cached.
+
+The measured numbers behind all of this, per model and per configuration, are in
+[`BENCHMARK.md`](../BENCHMARK.md).
+
 ## Where the effect shows up
 
 Not in one turn. The practices act on what a growing conversation carries forward, so a single question
 against a single tool shows almost nothing — the schema floor is small and there is no history yet. The
 difference appears over dozens of turns with a realistic tool count, which is what the benchmark
-replays: **82% fewer tokens for the same 28 of 30 materially correct turns**, at $40.07 against
-$217.50, and three seconds faster per turn.
+replays: **82% fewer tokens for the same 28 of 30 materially correct turns**, at $13.36 against
+$72.50, and three seconds faster per turn.
 
 The values above are close to the benchmark's, which tunes them to the case it measures. See
 [`validation/community-plugin-A-B-D/src/config.py`](../validation/community-plugin-A-B-D/src/config.py)

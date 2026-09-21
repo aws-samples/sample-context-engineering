@@ -63,17 +63,24 @@ strategies that buy their saving with a second model call would rank better than
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (offloader, prefix preview) | 11,302,922 | — | 93.0% | 15/18 | 10.3s | $170.94 | — |
-| Progressive Tool Disclosure only | 5,364,912 | −52.5% | 98.6% | 18/18 | 9.1s | $82.05 | −52.0% |
-| Relevance Filtering only | 11,244,034 | −0.5% | 97.2% | 16/18 | 10.9s | $170.26 | −0.4% |
-| Context Graph only | 8,384,258 | −25.8% | 94.4% | 16/18 | 9.5s | $126.93 | −25.7% |
-| Disclosure + relevance combined | 6,002,228 | −46.9% | 97.2% | 18/18 | 8.2s | $91.42 | −46.5% |
-| Graph + disclosure + relevance | 2,255,712 | −80.0% | 95.8% | 17/18 | 8.1s | $35.33 | −79.3% |
+| Baseline (offloader, prefix preview) | 11,302,922 | — | 93.0% | 15/18 | 10.3s | $56.98 | — |
+| Progressive Tool Disclosure only | 5,364,912 | −52.5% | 98.6% | 18/18 | 9.1s | $27.35 | −52.0% |
+| Relevance Filtering only | 11,244,034 | −0.5% | 97.2% | 16/18 | 10.9s | $56.75 | −0.4% |
+| Context Graph only | 8,384,258 | −25.8% | 94.4% | 16/18 | 9.5s | $42.31 | −25.7% |
+| Disclosure + relevance combined | 6,002,228 | −46.9% | 97.2% | 18/18 | 8.2s | $30.47 | −46.5% |
+| Graph + disclosure + relevance | 2,255,712 | −80.0% | 95.8% | 17/18 | 8.1s | $11.78 | −79.3% |
 
 Agent `us.anthropic.claude-opus-4-8`, region `us-east-1`, one **replay** per configuration — the same
 scripted conversation run start to finish, once for each row. The baseline is not a bare agent: it
 carries the **offloader**, which parks an oversized tool result in storage and leaves a short prefix of
 it in the conversation. That is the floor the three practices improve on.
+
+> **These figures are prompt-caching-off, single-model, and were not re-measured.** The cross-model
+> battery and everything it established about prompt caching — that caching inverts the ranking on a
+> large-window model, and that relevance filtering is the only one of the three compatible with it —
+> was measured on the **community** packages, whose code places its cache checkpoints in its own way.
+> See [`BENCHMARK.md`](BENCHMARK.md). The vended plugins compact inside the SDK and may sit differently;
+> none of those findings transfer here without a run.
 
 The large differences — **−52.5%**, **−80.0%** and the accuracy holding at 95.8% while cost drops 79% —
 support a decision; nothing under ~20% does. A single replay cannot be more precise than that: the agent
