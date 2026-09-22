@@ -235,29 +235,6 @@ turns, which is a different job and one the relevance filter does not do.
 """
 
 
-def _drop_graph_artifact_tool(graph: ContextGraph) -> bool:
-    """Remove the graph's artifact-retrieval tool from the set it registers.
-
-    The same de-registration ``RelevanceFilter.init_agent`` performs on its own retrieval tool when
-    ``include_retrieval_tool`` is false, applied from the outside because ``ContextGraph`` exposes no
-    equivalent switch. Matched by ``tool_name`` rather than by a literal attribute so a rename
-    upstream costs the de-registration, not the run.
-
-    Args:
-        graph: The plugin instance, before it is handed to an agent.
-
-    Returns:
-        Whether the tool was found and removed.
-    """
-    try:
-        before = len(graph._tools)
-        graph._tools = [t for t in graph._tools if t.tool_name != _GRAPH_ARTIFACT_TOOL]
-        return len(graph._tools) < before
-    except Exception:  # noqa: BLE001 - losing the de-registration must not lose the run
-        logger.warning("could not drop the graph's %s tool | both retrieval paths stay", _GRAPH_ARTIFACT_TOOL)
-        return False
-
-
 def _graph_referenced_source(graph: ContextGraph) -> Any:
     """Return a ``referenced_source`` callable naming the tools of every stepped-down Card.
 
@@ -385,12 +362,17 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             description_tokens=tuning.description_tokens,
             body_budget=tuning.body_budget,
             min_cards=THRESHOLDS.min_cards,
-            matcher=matcher,
-        )
-        if config.relevance:
+            max_retrieval_cycles=tuning.max_retrieval_cycles,
             # Two retrieval tools for one job, over two stores that do not know each other, is what
             # cost the first run its A5 answer. See _GRAPH_ARTIFACT_TOOL for the measurement.
-            config.extra["_graph_artifact_tool_dropped"] = _drop_graph_artifact_tool(graph)
+            #
+            # This used to be a de-registration applied from the outside, reaching into the plugin's
+            # private ``_tools``, because the package exposed no switch. It does now, so the sample
+            # code says what it means and a reader can copy it.
+            include_artifact_tool=not config.relevance,
+            matcher=matcher,
+        )
+        config.extra["_graph_artifact_tool_dropped"] = config.relevance
         config.extra["_graph"] = graph
         plugins.append(graph)
 
@@ -402,14 +384,16 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                 top_k=THRESHOLDS.top_k,
                 # A retrieval tool must never need discovery: the model is told to use it in the
                 # guidance text that replaces the payload, and a cycle spent finding it would be an
-                # artefact of the harness rather than of the strategy. All four are listed because
-                # which ones exist depends on the configuration, and a name absent from the call is
-                # simply ignored by the plugin.
+                # artefact of the harness rather than of the strategy. Worse than a wasted cycle,
+                # actually -- a catalog entry carries an EMPTY inputSchema, so a hidden retrieval tool
+                # is called with no arguments and cancelled by the premature-call guard before it runs.
+                #
+                # Derived from the plugins rather than hard-coded, so excluding the graph's artifact
+                # tool or renaming one cannot leave a stale name here. `list_accounts` is the one
+                # literal: it is a domain tool of the scenario, not a plugin's.
                 always_available=[
-                    "retrieve_context",
-                    "expand_card",
-                    "expand_artifact",
-                    "find_context",
+                    *(graph.retrieval_tool_names if graph is not None else ()),
+                    *(("retrieve_context",) if config.relevance else ()),
                     "list_accounts",
                 ],
                 referenced_source=_graph_referenced_source(graph) if graph is not None else None,

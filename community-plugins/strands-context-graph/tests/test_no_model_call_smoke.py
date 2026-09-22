@@ -316,7 +316,7 @@ def drive_lifecycle(graph: ContextGraph, agent: Agent, incoming: list[dict[str, 
     state = graph._states[agent]
     context = tool_context(agent)
     titles = [title for title, card in state.cards.items() if card.kind == "subject"]
-    asyncio.run(graph.expand_card(title=titles[0] if titles else "no such turn", tool_context=context))
+    asyncio.run(graph.expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
     asyncio.run(graph.find_context(need=first_question(agent.messages), tool_context=context))
     references = [card.reference for card in state.cards.values() if card.kind == "artifact" and card.reference]
     asyncio.run(

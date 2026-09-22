@@ -238,7 +238,7 @@ def test_registration_survives_an_unreadable_handler_map():
     """The public ``add_middleware`` did the registering; only the move to index zero reads the private map."""
     agent = _WiringAgent(registry=_RenamedMapRegistry())
 
-    assert Projection(weakref.WeakKeyDictionary(), description_tokens=100).register(agent) is False
+    assert Projection(weakref.WeakKeyDictionary(), description_tokens=100, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")).register(agent) is False
     assert agent._middleware_registry._middleware_handlers[InvokeModelStage]
 
 

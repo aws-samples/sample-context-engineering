@@ -52,11 +52,19 @@ from .cards import (
     derive_and_register,
     derive_and_register_artifacts,
     is_turn_boundary,
+    link_newly_measurable,
     rebuild_into,
 )
 from .matcher import SimilarityMatcher
 from .projection import Projection
-from .scoring import compute_notes, distribute, expire_reuse, full_pass_choice, warm_up_choice
+from .scoring import (
+    compute_notes,
+    distribute,
+    expire_reuse,
+    full_pass_choice,
+    titles_in_turn_order,
+    warm_up_choice,
+)
 from .state import TurnChoice, _GraphState, _GraphStates
 from .store import InMemoryReferenceStore, record_references
 
@@ -102,6 +110,20 @@ _DEFAULT_LINK_THRESHOLD = 0.50
 
 _DEFAULT_REUSE_TTL_CYCLES = 5
 """Model cycles a Fed-Back Note survives."""
+
+_DEFAULT_MAX_RETRIEVAL_CYCLES = 8
+"""Retrieval calls one turn may spend before the tools start refusing.
+
+The counter already existed as instrumentation (Requirement 17.8); this is the ceiling it answers to. Without one, a
+turn whose evidence is genuinely unreachable has no reason to end: every retrieval tool returns text rather than an
+error, so a model that keeps asking keeps being answered. Measured across models, that is not hypothetical -- one turn
+spent 346 retrieval calls and 21 minutes before the event loop hit Python's recursion limit, and the same turn on a
+model that gives up early still burned 31 calls and answered nothing.
+
+Eight is deliberately above any healthy turn observed (a turn that needs recovery uses one to three calls) and far below
+the point where the prompt growth from the calls themselves becomes the problem. Raise it for a scenario that genuinely
+walks many turns; set it to ``None`` to restore the old unbounded behaviour.
+"""
 
 _ORDERING_WARNING = (
     "context_graph=<ordering> | a memory manager is registered on this agent and this plugin cannot guarantee that it "
@@ -357,6 +379,26 @@ def _validate_reuse_ttl_cycles(value: object) -> None:
         raise ValueError(f"reuse_ttl_cycles=<{value!r}> | must be an integer greater than or equal to 0")
 
 
+def _validate_max_retrieval_cycles(value: object) -> None:
+    """Reject anything that is neither ``None`` nor an integer greater than or equal to ``1``.
+
+    ``None`` is the explicit opt-out -- unbounded retrieval, the behaviour before the ceiling existed -- so it has to be
+    distinguishable from a caller who passed nothing. A ceiling of ``0`` is rejected rather than treated as "never
+    retrieve": a Card the model cannot open at all is better expressed by not registering the tools.
+
+    Args:
+        value: Value received by the constructor.
+
+    Raises:
+        ValueError: When ``value`` is a bool, not ``None`` or an ``int``, or below ``1``.
+    """
+    if value is None:
+        return
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"max_retrieval_cycles=<{value!r}> | must be None or an integer greater than or equal to 1")
+
+
 def _validate_matcher(matcher: object) -> None:
     """Reject anything that is neither ``None`` nor an object exposing a callable ``score``.
 
@@ -414,6 +456,16 @@ class ContextGraph(Plugin):
         link_threshold: Similarity at or above which two Cards link. Defaults to ``0.50``.
         reuse_ttl_cycles: Model cycles a Fed-Back Note survives. Defaults to ``5``. ``0`` discards it at the end of the
             turn that created it.
+        max_retrieval_cycles: Retrieval calls one turn may spend before ``expand_card``, ``expand_artifact`` and
+            ``find_context`` refuse and tell the model to answer from what it has. Defaults to ``8``. ``None`` restores
+            unbounded retrieval. The ceiling exists because no retrieval miss is an error -- every one of these tools
+            answers with text -- so a turn whose evidence is unreachable otherwise has nothing to stop it.
+        include_artifact_tool: Register ``expand_artifact``. Defaults to ``True``. Pass ``False`` when a plugin that
+            offloads tool results is installed beside this one -- typically ``RelevanceFilter`` -- because each then
+            ships a retrieval tool over a store the other cannot read, and the model has two plausible tools for one
+            job. Measured on this repository's benchmark, excluding it took the three-plugin stack from 84.5% to 94.4%
+            weighted accuracy. ``expand_card`` and ``find_context`` are unaffected and have no switch: they reach back
+            into the conversation's own turns, which is a job no offloader does.
         matcher: Similarity matcher, or ``None`` for the default asymmetric multilingual embedding. Checked by member,
             so an implementation inherits from nothing. Resolved on first need, so construction opens no client.
         name: Plugin name, for logging and duplicate detection. Defaults to ``"strands:context-graph"``.
@@ -447,6 +499,8 @@ class ContextGraph(Plugin):
         min_cards: int = _DEFAULT_MIN_CARDS,
         link_threshold: float = _DEFAULT_LINK_THRESHOLD,
         reuse_ttl_cycles: int = _DEFAULT_REUSE_TTL_CYCLES,
+        max_retrieval_cycles: int | None = _DEFAULT_MAX_RETRIEVAL_CYCLES,
+        include_artifact_tool: bool = True,
         matcher: SimilarityMatcher | None = None,
         name: str | None = None,
     ) -> None:
@@ -473,6 +527,9 @@ class ContextGraph(Plugin):
         _validate_count(min_cards, "min_cards")
         _validate_body_budget(body_budget)
         _validate_reuse_ttl_cycles(reuse_ttl_cycles)
+        _validate_max_retrieval_cycles(max_retrieval_cycles)
+        if not isinstance(include_artifact_tool, bool):
+            raise ValueError(f"include_artifact_tool=<{include_artifact_tool!r}> | must be True or False")
         _validate_matcher(matcher)
 
         self.name = name or _DEFAULT_NAME
@@ -487,6 +544,8 @@ class ContextGraph(Plugin):
         self._min_cards = min_cards
         self._link_threshold = float(link_threshold)
         self._reuse_ttl_cycles = reuse_ttl_cycles
+        self._max_retrieval_cycles = max_retrieval_cycles
+        self._include_artifact_tool = include_artifact_tool
         self._matcher = matcher
 
         # The default matcher, once something has needed it. Kept apart from ``_matcher`` so ``matcher=None`` stays
@@ -503,7 +562,14 @@ class ContextGraph(Plugin):
 
         # The delivery handler, built once: it holds no per-agent state, reading the graph out of the map above, so one
         # instance serves every agent ``init_agent`` registers it on (see ``Projection.register``).
-        self._projection = Projection(self._states, description_tokens=self._description_tokens)
+        self._projection = Projection(
+            self._states,
+            description_tokens=self._description_tokens,
+            # Read late, on every render: ``_tools`` is a plain list and a caller may de-register a retrieval tool
+            # after construction -- which the relevance filter's two-store collision requires -- so a snapshot taken
+            # here would advertise a tool the agent no longer has.
+            retrieval_tools=lambda: {tool.tool_name for tool in self._tools},
+        )
 
         # Always empty: the plugin registers what it needs in ``init_agent`` via ``agent.add_hook``, so the per-agent
         # handler count is verifiable by inspection rather than through discovery. Set before ``super().__init__()``,
@@ -540,12 +606,61 @@ class ContextGraph(Plugin):
             agent: The agent to wire up.
         """
         self._warn_on_destructive_manager(agent)
+        self._drop_artifact_tool_if_excluded()
         self._state_for(agent)
         agent.add_hook(self._on_before_invocation, BeforeInvocationEvent)
         agent.add_hook(self._on_message_added, MessageAddedEvent)
         agent.add_hook(self._on_after_tool_call, AfterToolCallEvent)
         delivery_is_first = self._projection.register(agent)
         self._warn_on_memory_fold_ordering(agent, delivery_is_first=delivery_is_first)
+
+    def _drop_artifact_tool_if_excluded(self) -> None:
+        """De-register ``expand_artifact`` when the caller excluded it, matched by name.
+
+        The same shape :meth:`RelevanceFilter.init_agent` uses for its own retrieval tool, and here for the same reason:
+        installed beside that filter there are two plausible tools for one job, each resolving a store the other cannot
+        read, so the model reaches for whichever looks right and gets a miss it cannot act on. Measured on the benchmark
+        this repository carries, dropping this one took the full stack from 84.5% to 94.4% weighted accuracy.
+
+        Matched by ``tool_name`` rather than by a literal attribute so a rename upstream costs the de-registration
+        rather than the run. Idempotent: a second agent finds the name already gone.
+
+        The guidance text is unaffected by design -- it reads the registered set on every render, so a de-registered tool
+        stops being advertised to the model without a second switch. Advertising a tool the registry does not hold is
+        what produced ``tool not found in registry`` five times in one measured run.
+        """
+        if self._include_artifact_tool:
+            return
+
+        excluded = self.expand_artifact.tool_name
+        self._tools = [tool for tool in self._tools if tool.tool_name != excluded]
+
+    @property
+    def retrieval_tool_names(self) -> tuple[str, ...]:
+        """Names of the retrieval tools this instance registers, in registration order.
+
+        Published because a caller cannot otherwise know them without hard-coding strings, and one caller in particular
+        must: :class:`ProgressiveToolDisclosure` projects the call's tool list down to a catalog, and a tool reduced to a
+        catalog entry carries an EMPTY ``inputSchema``. Every tool here needs arguments -- a Title, a reference, a search
+        need -- so a hidden one is called with nothing, cancelled by the disclosure plugin's premature-call guard, and
+        only then exposed. The model pays a round trip to learn what this plugin's own folded-context guidance already
+        told it to do.
+
+        So the retrieval tools belong in that plugin's ``always_available``, and deriving the list from here keeps it
+        correct when ``include_artifact_tool`` is false or a tool is renamed::
+
+            graph = ContextGraph(include_artifact_tool=False)
+            disclosure = ProgressiveToolDisclosure(always_available=[*graph.retrieval_tool_names, "retrieve_context"])
+
+        Read at call time rather than fixed at construction, so it reflects a de-registration that has already happened.
+        Reading it BEFORE the plugin is wired to an agent reports the full set, since the exclusion is applied in
+        :meth:`init_agent`; call it after wiring, or read ``include_artifact_tool``'s value, when the distinction
+        matters.
+
+        Returns:
+            The tool names, which is three by default and two when the artifact tool was excluded.
+        """
+        return tuple(tool.tool_name for tool in self._tools)
 
     @staticmethod
     def _warn_on_destructive_manager(agent: Agent) -> None:
@@ -798,13 +913,14 @@ class ContextGraph(Plugin):
         state.retrieval_cycles = 0
 
     def _compute_choice(self, state: _GraphState, event: BeforeInvocationEvent) -> TurnChoice:
-        """Score the graph against the turn's question and hand out the body budget.
+        """Score the graph against the turn's question, fill the vector index, and hand out the body budget.
 
         Any failure at any step degrades to the full pass — the behavior without the plugin — with exactly one warning
         carrying ``exc_info`` and no failure state kept, so the next turn computes a choice again (Requirement 16.1).
 
         Args:
-            state: The graph state. Read only.
+            state: The graph state. Read, except for ``vectors``, which this fills from the embedding the scoring round
+                already paid for.
             event: The invocation event, for the question and the agent.
 
         Returns:
@@ -818,13 +934,19 @@ class ContextGraph(Plugin):
                 return skipped
 
             question = _question_of(event.messages if event.messages is not None else event.agent.messages)
+            matcher = self._matcher_for()
             # The one embedding round of the turn: the question as the query, the Descriptions as the documents
             # (Requirement 10.4).
-            notes = compute_notes(state, question, self._matcher_for())
+            notes = compute_notes(state, question, matcher)
             if not notes:
                 # The matcher failed or answered malformed, which reads as "score nothing, send everything" and not as
                 # "nothing is relevant".
                 return full_pass_choice()
+
+            # Only on this path, and only after the scoring round: the vectors are already in the matcher's own cache
+            # under the document purpose, so filling the index sends nothing. Above the ``min_cards`` short circuit it
+            # would have sent a request for a decision that was never taken, which Requirement 11.3 forbids.
+            self._cache_description_vectors(state, matcher)
 
             return distribute(
                 notes,
@@ -836,6 +958,56 @@ class ContextGraph(Plugin):
         except Exception:
             logger.warning("turn choice failed | the whole conversation goes at full content", exc_info=True)
             return full_pass_choice()
+
+    def _cache_description_vectors(self, state: _GraphState, matcher: SimilarityMatcher) -> None:
+        """Fill ``state.vectors`` from the Descriptions the scoring round just embedded.
+
+        Without this the index stays empty, and an empty index is not a slow path but a missing feature: the similarity
+        Link is measured from this index alone, by a hook Requirement 3.2 keeps free of network calls, so an unfilled
+        index makes every pair unmeasurable and the ``similar`` Link never forms at all. The three structural Link kinds
+        still form, which is why a graph with no ``similar`` edge looks like a working graph in the counters.
+
+        Two properties keep it free. It runs only where :meth:`_compute_choice` has already scored, so the document
+        vectors sit in the matcher's cache; and ``vectors`` is optional on the protocol, so a matcher that does not
+        publish one leaves the index as it was rather than failing the turn.
+
+        Stale Titles are dropped rather than left to accumulate: a Description that changed makes its entry unusable
+        anyway — :func:`_cached_similarity` compares the cached text before trusting the vector — and a Title no longer
+        in the graph will not be asked about again.
+
+        Args:
+            state: The graph state. ``vectors`` is replaced; nothing else is touched.
+            matcher: The matcher that just scored, and therefore already holds these vectors.
+        """
+        published = getattr(matcher, "vectors", None)
+        if published is None:
+            return
+
+        titles = titles_in_turn_order(state)
+        descriptions = tuple(state.cards[title].description for title in titles)
+        try:
+            vectors = published(descriptions)
+        except Exception:
+            # Same posture as the scoring round: an unusable index costs Links, never the turn.
+            logger.debug("graph description vectors unavailable for %d card(s)", len(titles), exc_info=True)
+            return
+
+        if len(vectors) != len(titles):
+            # Includes the empty answer the matcher returns when the embedding was unavailable. A partial index would
+            # pair vectors with the wrong Titles, which is worse than no index.
+            return
+
+        filled = {
+            title: (description, tuple(vector))
+            for title, description, vector in zip(titles, descriptions, vectors, strict=True)
+        }
+        # A Title whose entry is unchanged has already been measured against everything; one that is new, or whose
+        # Description was rewritten, is what the second pass is for.
+        newly_measurable = [title for title, entry in filled.items() if state.vectors.get(title) != entry]
+        state.vectors = filled
+
+        if newly_measurable:
+            link_newly_measurable(state, newly_measurable, link_threshold=self._link_threshold)
 
     def _matcher_for(self) -> SimilarityMatcher:
         """Return the similarity matcher, building the default one on first need.
@@ -863,15 +1035,19 @@ class ContextGraph(Plugin):
     # (Requirement 12.1): they are the only ``@tool`` members of the class.
 
     @tool(context=True)
-    async def expand_card(self, title: str, tool_context: ToolContext) -> str:
-        """Bring back the full content of an earlier turn, by its title.
+    async def expand_card(self, titles: list[str], tool_context: ToolContext) -> str:
+        """Bring back the full content of one or more earlier turns, by their titles.
 
         Earlier turns may reach you as a title and a short description instead of their messages. When
-        a description is not enough to answer, call this with the title exactly as it was shown and
-        that turn arrives in full for the rest of this turn.
+        a description is not enough to answer, call this with the titles exactly as they were shown and
+        those turns arrive in full for the rest of this turn.
+
+        Ask for every turn you need in ONE call: a list of titles costs one retrieval where the same
+        titles one at a time cost one each, and each extra call grows the conversation you are about to
+        reason over.
 
         Args:
-            title: The title of the turn you want back, copied as it was shown to you.
+            titles: Titles of the turns you want back, copied as they were shown to you.
             tool_context: Injected by the framework. Not user-facing.
 
         Returns:
@@ -880,9 +1056,10 @@ class ContextGraph(Plugin):
         agent = tool_context.agent
         return tools.expand_card(
             self._state_for(agent),
-            title,
+            titles,
             cycle=_cycle_of(agent),
             reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
         )
 
     @tool(context=True)
@@ -893,7 +1070,15 @@ class ContextGraph(Plugin):
         line_range: dict[str, int] | None = None,
         pattern: str | None = None,
     ) -> str:
-        """Read a stored artifact by its reference, whole or in part.
+        """Read a stored artifact that an earlier turn of THIS conversation referred to by address.
+
+        Use this for a reference that appeared in the conversation as a placeholder standing in for content
+        too large to keep -- an image, a document, an export. The reference is the address that placeholder
+        carried.
+
+        If another tool told you it had replaced a tool result with a preview and handed you a reference,
+        that reference belongs to that tool, not to this one: use the tool that minted it. This one resolves
+        only addresses this plugin recorded, and answers by naming the miss when handed any other.
 
         Prefer a line range or a pattern: without either, the whole artifact comes back and costs its
         full token count again.
@@ -917,6 +1102,7 @@ class ContextGraph(Plugin):
             pattern,
             cycle=_cycle_of(agent),
             reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
         )
 
     @tool(context=True)
@@ -944,4 +1130,5 @@ class ContextGraph(Plugin):
             collapse_floor=self._collapse_floor,
             cycle=_cycle_of(agent),
             reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
         )

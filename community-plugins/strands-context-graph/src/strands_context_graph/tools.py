@@ -28,6 +28,7 @@ targeted read and the prose of every miss, so this module decides *what* was ask
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -51,6 +52,37 @@ __all__ = ["expand_artifact", "expand_card", "find_context"]
 
 logger = logging.getLogger(__name__)
 
+_EXHAUSTED = (
+    "{tool} | this turn has already spent its {spent} retrieval calls | no further recovery is available on this turn: "
+    "answer from what the summary and the messages already give you, and state plainly which part you could not verify"
+)
+"""Refusal once a turn hits ``max_retrieval_cycles``.
+
+Worded as an instruction rather than an error because the failure mode it exists to stop is a model that keeps asking:
+every retrieval miss on these tools answers with text, so "not found" reads as "try differently". Naming the ceiling and
+the way out -- answer, and say what is unverified -- is what ends the turn.
+"""
+
+
+def _exhausted(tool: str, state: _GraphState, max_retrieval_cycles: int | None) -> str | None:
+    """Return the refusal when this turn has no retrieval budget left, or ``None`` while it has.
+
+    Checked *before* the call's own counter increment, so a ceiling of ``n`` admits exactly ``n`` calls.
+
+    Args:
+        tool: Name of the calling tool, for the message.
+        state: Graph state of the agent. Read only here.
+        max_retrieval_cycles: The ceiling, or ``None`` for unbounded retrieval.
+
+    Returns:
+        The refusal text, or ``None`` when the call may proceed.
+    """
+    if max_retrieval_cycles is None or state.retrieval_cycles < max_retrieval_cycles:
+        return None
+
+    return _EXHAUSTED.format(tool=tool, spent=state.retrieval_cycles)
+
+
 _MAX_CANDIDATES = 5
 """Candidates :func:`find_context` returns at most (Requirement 12.9). Capped rather than "as many as clear the floor":
 a search that answers with the whole graph has re-injected the very thing the graph collapsed."""
@@ -61,12 +93,13 @@ a search that answers with the whole graph has re-injected the very thing the gr
 
 def expand_card(
     state: _GraphState,
-    title: str,
+    titles: Sequence[str],
     *,
     cycle: int,
     reuse_ttl_cycles: int,
+    max_retrieval_cycles: int | None = None,
 ) -> str:
-    """Raise the Subject Card titled ``title`` to Full Content for the remainder of the turn.
+    """Raise every Subject Card in ``titles`` to Full Content for the remainder of the turn.
 
     Both axes, dialogue *and* evidence (Requirement 12.2). The elevation rewrites the frozen choice rather than adding a
     field to the state, so it ends with the turn: the next ``BeforeInvocationEvent`` recomputes the choice from the
@@ -74,38 +107,83 @@ def expand_card(
     is, since every Card is already at Full Content and a ``by_title`` entry would flip ``full_pass`` to false and cost
     the delivery its identity short circuit.
 
+    **Several titles cost one call.** A model that needs three collapsed turns to answer used to pay three round trips
+    for them, and each round trip grew the prompt it was about to reason over; measured, one turn spent thirteen
+    consecutive single-title calls. The batch is also one retrieval cycle against ``max_retrieval_cycles``, so asking
+    for what you need at once is cheaper than discovering it one title at a time.
+
     Args:
         state: Graph state of the agent. ``choice``, ``reuse`` and ``retrieval_cycles`` are mutated; ``cards`` read
             only.
-        title: Title of the Card the model asked for, as it was shown to it.
+        titles: Titles of the Cards the model asked for, as they were shown to it. A bare string is accepted as a
+            single title: the schema says array, and a model that sends the scalar anyway should be answered rather
+            than corrected.
         cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
+        max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
 
     Returns:
-        Confirmation that the turn will arrive whole, or an error naming the Title asked for, in which case no
-        Resolution changed and no fed-back Note was recorded (Requirement 12.3).
+        Confirmation naming the turns that will arrive whole, an error naming the Titles that matched nothing, or the
+        refusal when the turn's retrieval budget is spent. A batch is reported per title, so a partial match says which
+        half worked.
     """
+    refusal = _exhausted("expand_card", state, max_retrieval_cycles)
+    if refusal is not None:
+        return refusal
+
     state.retrieval_cycles += 1
 
-    card = state.cards.get(title)
-    if card is None or card.kind != "subject":
-        return (
-            f"expand_card | no earlier turn of this conversation is titled '{title}' | "
-            "copy a title exactly as it was shown to you, or use find_context to describe what you need"
-        )
+    wanted = [titles] if isinstance(titles, str) else list(titles)
+    if not wanted:
+        return "expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
 
-    if not state.choice.full_pass:
+    found: list[str] = []
+    missing: list[str] = []
+    for title in wanted:
+        card = state.cards.get(title)
+        if card is None or card.kind != "subject":
+            missing.append(title)
+        else:
+            found.append(title)
+
+    if found and not state.choice.full_pass:
         state.choice = TurnChoice(
-            by_title=MappingProxyType({**state.choice.by_title, title: CardChoice(dialogue="full", evidence="full")}),
+            by_title=MappingProxyType(
+                {**state.choice.by_title, **{title: CardChoice(dialogue="full", evidence="full") for title in found}}
+            ),
             full_pass=False,
             selected=state.choice.selected,
         )
 
-    record_reuse(state, title, cycle, reuse_ttl_cycles=reuse_ttl_cycles)
+    for title in found:
+        record_reuse(state, title, cycle, reuse_ttl_cycles=reuse_ttl_cycles)
 
-    return (
-        f"expand_card | '{title}' arrives in full for the rest of this turn, its messages and its tool results together"
+    if not found:
+        return (
+            f"expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
+            "copy a title exactly as it was shown to you, or use find_context to describe what you need"
+        )
+
+    confirmation = (
+        f"expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results "
+        "together"
     )
+    if missing:
+        confirmation += f" | no turn is titled {_quoted(missing)}, so nothing was raised for it"
+
+    return confirmation
+
+
+def _quoted(titles: Sequence[str]) -> str:
+    """Render titles for a message, quoted and comma separated.
+
+    Args:
+        titles: Titles to render. One title renders without a separator.
+
+    Returns:
+        The titles, each in single quotes.
+    """
+    return ", ".join(f"'{title}'" for title in titles)
 
 
 # ---- expand_artifact --------------------------------------------------------------------------
@@ -121,6 +199,7 @@ async def expand_artifact(
     *,
     cycle: int,
     reuse_ttl_cycles: int,
+    max_retrieval_cycles: int | None = None,
 ) -> str:
     """Read the artifact behind ``reference``, whole or in part, through the store resolution order.
 
@@ -148,6 +227,10 @@ async def expand_artifact(
         reference, non-textual content, or a line range outside the content — with nothing recorded and no Resolution
         changed (Requirements 12.6, 12.7).
     """
+    refusal = _exhausted("expand_artifact", state, max_retrieval_cycles)
+    if refusal is not None:
+        return refusal
+
     state.retrieval_cycles += 1
 
     resolved = await resolve_artifact(store, agent, reference)
@@ -252,6 +335,7 @@ def find_context(
     collapse_floor: float,
     cycle: int,
     reuse_ttl_cycles: int,
+    max_retrieval_cycles: int | None = None,
 ) -> str:
     """Score every candidate Card's Description against ``need`` and answer with the best five.
 
@@ -270,11 +354,16 @@ def find_context(
         collapse_floor: Similarity below which a candidate is not returned at all.
         cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
+        max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
 
     Returns:
         At most five candidates with their Title, Tags and Description (Requirement 12.9), or an empty result naming the
         ``need`` received, in which case no fed-back Note was recorded and no Resolution changed (Requirement 12.12).
     """
+    refusal = _exhausted("find_context", state, max_retrieval_cycles)
+    if refusal is not None:
+        return refusal
+
     state.retrieval_cycles += 1
 
     if not need.strip():

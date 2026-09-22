@@ -29,6 +29,7 @@ A line contributes once per Card. The description already carries the tools, the
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from .describe import (  # the same counting and the same budgeting the Description uses
@@ -42,7 +43,7 @@ from .state import Card, CardChoice, _GraphState
 if TYPE_CHECKING:
     from strands.injection.types import InjectionContext
 
-__all__ = ["render_final_block"]
+__all__ = ["guidance", "render_final_block"]
 
 _FULL: CardChoice = CardChoice(dialogue="full", evidence="full")
 """How a Card absent from the choice is read. The choice is frozen at ``BeforeInvocationEvent``, so a Card derived after
@@ -55,21 +56,33 @@ must be able to tell where its message ends and the graph's summary begins."""
 _FOOTER = "</collapsed_turns>"
 """Closing marker, so the trailing guidance is unambiguously outside the summarized turns."""
 
-_GUIDANCE = (
-    "The turns above left this call in collapsed form; their numeric lines are copied literally. "
-    "Call expand_card with a title to get that turn's messages back, expand_artifact with a reference "
-    "to read an artifact, or find_context with what you need to search the turns by description."
-)
-"""What the model can do about a collapsed turn. The three retrieval tools are named because the block is the only place
-the model learns the gap is closable: a summary with no way back reads as all there is."""
+_PREAMBLE = "The turns above left this call in collapsed form; their numeric lines are copied literally."
+"""Opens the guidance. States what happened, before naming what can be done about it."""
 
-_SEARCHABLE = (
-    "{count} earlier turn(s) of this conversation are not shown above. Search them by description "
-    "with find_context, or name a turn with expand_card if you know its title."
+_RETRIEVAL_PHRASES = {
+    "expand_card": "call expand_card with a title to get that turn's messages back",
+    "expand_artifact": "call expand_artifact with a reference to read an artifact",
+    "find_context": "call find_context with what you need to search the turns by description",
+}
+"""What to say about each retrieval tool, keyed by the tool's registered name.
+
+Keyed rather than concatenated because **a tool can be de-registered after this plugin is built**, and a guidance block
+that names a tool the agent does not have sends the model after something it cannot call. Measured: with the artifact
+tool removed to avoid a two-store collision, the guidance still advertised it, and the model spent a whole turn
+alternating between the remaining paths -- 31 tool calls, no answer.
+"""
+
+_NOTHING_TO_CALL = (
+    "No retrieval tool is registered, so the summary above is all that is available -- answer from it and say what it "
+    "does not cover."
 )
-"""What replaces the Titles of the turns the selection did not address. With the addressing bounded, this line carries
-what a per-Card Title line otherwise would (Requirement 4.2): the model learns that more exists and how to reach it. A
-gap the model cannot see reads as all there was."""
+"""Guidance when every retrieval tool has been de-registered. Silence would read as "the evidence is somewhere", which
+is the state that produces an unbounded hunt; naming the dead end is what lets the model answer and stop."""
+
+_SEARCHABLE = "{count} earlier turn(s) of this conversation are not shown above."
+"""Announces the gap the selection left. What to *do* about it comes from :func:`guidance`, which names only the tools
+that exist: a gap the model cannot see reads as all there was, and a gap it cannot close reads as a reason to keep
+trying."""
 
 _ENTRY_PREFIX = "- "
 """Marks the start of a Card's entry: its title line."""
@@ -84,6 +97,7 @@ def render_final_block(
     requested: frozenset[str],
     *,
     description_tokens: int,
+    retrieval_tools: Collection[str],
 ) -> str | None:
     """Assemble the final block from the choice and the already removed list.
 
@@ -106,6 +120,9 @@ def render_final_block(
         requested: The set of durable identities the removal was asked for on this same call.
         description_tokens: Token ceiling of one Card's entry, the ceiling the Description answers to. Without it the
             block is unbounded; see :func:`_evidence_fragments`.
+        retrieval_tools: Names of the retrieval tools the agent can actually call, read at render time rather than at
+            construction: a tool can be de-registered after the plugin is built, and guidance naming a tool that is not
+            there sends the model after something it cannot call.
 
     Returns:
         The text to fold, or ``None`` when no part contributed, in which case the primitive returns the context
@@ -134,25 +151,49 @@ def render_final_block(
     if not lines and not unaddressed:
         return None
 
-    trailer = _GUIDANCE if selected is None else _searchable(unaddressed)
+    trailer = _trailer(unaddressed if selected is not None else 0, retrieval_tools)
     body = (_HEADER, *lines, _FOOTER) if lines else ()
 
     return "\n".join((*body, "", trailer)).lstrip("\n")
 
 
-def _searchable(unaddressed: int) -> str:
-    """The trailer for a selected call: the guidance, plus the count of turns left out of it.
+def guidance(retrieval_tools: Collection[str]) -> str:
+    """Build the trailing guidance, naming only the retrieval tools that are registered.
+
+    Args:
+        retrieval_tools: Names of the retrieval tools the agent can actually call. Order is ignored; the sentence
+            follows :data:`_RETRIEVAL_PHRASES` so the wording is stable regardless of registration order.
+
+    Returns:
+        The preamble plus one clause per registered tool, or :data:`_NOTHING_TO_CALL` when none is registered.
+    """
+    present = [phrase for name, phrase in _RETRIEVAL_PHRASES.items() if name in retrieval_tools]
+    if not present:
+        return f"{_PREAMBLE} {_NOTHING_TO_CALL}"
+
+    if len(present) == 1:
+        clauses = present[0]
+    else:
+        clauses = ", ".join(present[:-1]) + ", or " + present[-1]
+
+    return f"{_PREAMBLE} To close the gap, {clauses}."
+
+
+def _trailer(unaddressed: int, retrieval_tools: Collection[str]) -> str:
+    """The text that follows the block: the gap count when there is one, then the guidance.
 
     Args:
         unaddressed: How many Cards the selection did not address. ``0`` states no gap.
+        retrieval_tools: Names of the retrieval tools the agent can actually call.
 
     Returns:
-        The guidance alone when nothing was left out, and the guidance plus the count otherwise.
+        The guidance alone when nothing was left out, and the count plus the guidance otherwise.
     """
+    text = guidance(retrieval_tools)
     if not unaddressed:
-        return _GUIDANCE
+        return text
 
-    return _SEARCHABLE.format(count=unaddressed) + " " + _GUIDANCE
+    return _SEARCHABLE.format(count=unaddressed) + " " + text
 
 
 def _entry(

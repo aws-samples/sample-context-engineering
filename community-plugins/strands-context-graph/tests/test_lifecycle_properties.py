@@ -237,7 +237,7 @@ def call_retrieval_tools(graph: ContextGraph, agent: _Agent) -> None:
     state = graph._states[agent]
 
     titles = [title for title, card in state.cards.items() if card.kind == "subject"]
-    asyncio.run(graph.expand_card(title=titles[0] if titles else "no such turn", tool_context=context))
+    asyncio.run(graph.expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
 
     asyncio.run(graph.find_context(need=first_question(agent.messages), tool_context=context))
 

@@ -126,8 +126,26 @@ class Thresholds:
     max_result_tokens: int = 4_000
     """Above this, a tool result is relevance-filtered. Payloads are 10-30x this."""
 
-    preview_tokens: int = 800
-    """Preview budget. Small enough that chunk selection actually has to choose."""
+    preview_tokens: int = 2_000
+    """Preview budget: how much of an oversized payload survives, as whole verbatim chunks.
+
+    Raised from 800 on measurement. The preview is verbatim -- ``RelevancePreview`` selects whole
+    chunks that are exact substrings and inserts only gap markers -- so nothing here is lost to
+    paraphrase. What 800 lost was *selection*: at ``chunk_tokens`` of 500 it admitted one or two
+    chunks of a payload ten to thirty times its size, and a literal the answer needs (an enum value
+    like ``DEGRADED``, an error class like ``MFA_CHALLENGE_TIMEOUT``, a figure like ``907,35``) simply
+    was not in the chunks that made the cut.
+
+    That cost compounds with the graph, which is why the number is raised here rather than worked
+    around downstream. The graph derives a Card's ``numeric_lines`` from ``agent.messages`` at the turn
+    boundary, and by then the message carries the preview, not the payload -- so the preview's budget
+    is the ceiling on everything the graph can preserve, and ``expand_card`` cannot return a figure the
+    preview dropped. Two cuts in series, and 800 made the first one decide the second.
+
+    2,000 admits four chunks instead of one. The headroom is there: the all-three arm's peak call
+    measured 57,259 tokens against roughly 199,000 usable on a 203K window, so 71% of the window was
+    going unused while the plugin starved the evidence.
+    """
 
     chunk_tokens: int = 500
     """Scoring granularity. Small chunks mean more rerank sources and finer recall."""
@@ -177,6 +195,12 @@ class GraphTuning:
         link_threshold: Similarity at or above which two Cards link to each other.
         description_tokens: Token ceiling of a Card's Description.
         body_budget: Token ceiling across the Cards at full content, or ``None`` for no ceiling.
+        max_retrieval_cycles: Retrieval calls one turn may spend across the graph's three tools, or
+            ``None`` for the package's unbounded behaviour. Held here rather than left at the package
+            default because the value that is right depends on what else is installed: the measured
+            runaway was an ``all`` turn spending 31 tool calls, and a turn that has already had the
+            filter compress its evidence has less to gain from a fourth recovery attempt than a turn
+            running the graph alone.
     """
 
     expand_threshold: float
@@ -184,6 +208,7 @@ class GraphTuning:
     link_threshold: float
     description_tokens: int
     body_budget: int | None
+    max_retrieval_cycles: int | None = 8
 
 
 GRAPH_ALONE = GraphTuning(
@@ -220,27 +245,47 @@ GRAPH_WITH_RELEVANCE = GraphTuning(
     expand_threshold=0.55,
     collapse_floor=0.45,
     link_threshold=0.50,
-    description_tokens=100,
+    description_tokens=250,
     body_budget=None,
+    max_retrieval_cycles=4,
 )
-"""Tuning for a graph installed alongside the relevance filter. The package's own defaults.
+"""Tuning for a graph installed alongside the relevance filter.
 
-Deliberately NOT the set above, because applying it here was measured and it lost: input tokens moved
-1.2% while materially correct turns fell from 21/30 to 16/30, breaking five turns and fixing none.
+**The two knobs were calibrated in the wrong order, and this docstring used to record the consequence as
+a discovery.** It said the package's ``description_tokens`` of 100 belonged here because raising it "has
+little left to preserve" once the filter had replaced the payload with a preview. That observation was
+correct and the conclusion drawn from it was not: the preview's budget was 800 tokens against payloads
+ten to thirty times that, so what starved the Card was the FIRST cut, and lowering the second one
+accepted the loss instead of locating it. Reading the two in series --
 
-The two strategies compete for the same job. With the filter installed, an oversized payload has
-already been replaced by an 800-token preview before the Card is derived, so the Card's numeric lines
-come from that preview rather than from the raw result: raising ``description_tokens`` has little left
-to preserve. And raising ``expand_threshold`` steps Cards off a full-content rung the filter already
-shrank, which costs recall without buying tokens. *When relevance has already compressed the evidence,
-the graph should fold less, not more.*
+    payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
+
+-- the preview is the ceiling on everything downstream. So ``preview_tokens`` was raised to 2,000 first
+(see :class:`Thresholds`), and only then is 250 here worth anything: the figures a Card would preserve
+now exist in the message it derives from.
+
+The earlier measurement that produced 100 is not wrong, it is conditional. Applying the graph-alone set
+with the preview at 800 lost five materially correct turns while moving tokens 1.2%, which is exactly
+what a bigger Description budget with nothing left to put in it should do.
+
+``expand_threshold`` stays at 0.55 rather than the graph-alone 0.62 for a reason the preview does not
+change: raising it steps Cards off a full-content rung, and with the filter installed that rung is
+already the cheap one. *When relevance has compressed the evidence, the graph should fold less, not
+more.*
 
 ``body_budget`` stays ``None`` here because that is how this arm was measured, and its peak call sat at
 49,863 tokens -- below any ceiling worth setting. Stating the measured configuration matters more than
 carrying a ceiling that never binds.
 
-One replay each, so read the five-turn regression as the direction it points rather than as a
-quantity. ``--repeats 3`` is what would settle it.
+``max_retrieval_cycles`` is 4 here against the package's 8, and the distribution is why. Measured on
+GLM 4.7 Flash over 60 turns, this arm's retrieval spend per turn was 1 call on 13 turns, 2 on 5, 3 on
+2, then 5, 8 and 12 -- so 87% of the turns that retrieved at all finished inside three calls, and the
+whole tail above five is two turns. Eight therefore binds on nothing a healthy turn does while leaving
+the pathological turn eight real Card rebuilds to spend; four keeps every turn in that 87% untouched
+and halves what the outlier costs.
+
+One replay each, so read every quantity here as the direction it points rather than as a settled
+number. ``--repeats 3`` is what would settle it.
 """
 
 # --- Paths -------------------------------------------------------------------------
@@ -399,6 +444,25 @@ class Pricing:
 
 
 MODEL_PRICING = {
+    # -- Amazon ---------------------------------------------------------------------
+    # Nova 2 Lite is INFERENCE_PROFILE only in us-east-1 -- the bare model id carries no ON_DEMAND
+    # entry, so the invocable ids are the us. and global. profiles, both verified ACTIVE.
+    #
+    # THE CACHE WRITE IS FREE. From the Price List API for us-east-1:
+    # USE1-Nova2.0Lite-cache-write-input-token-count = $0.0000/Mtok, and cache read $0.0825 against a
+    # $0.33 input rate (0.25x). Every other family measured here charges ~1.25x input to WRITE, which
+    # is what makes a prefix-mutating strategy expensive under caching. On Nova that penalty is zero,
+    # so this is the one model where caching and context compression can compose instead of compete.
+    # Worth a cache-on/cache-off pair for exactly that reason.
+    #
+    # Caching is also capped: the card states Nova models cache a maximum of 20K tokens, with a
+    # 5-minute TTL and checkpoints in system and messages only. The 1h field is therefore None -- a
+    # 1h run against Nova is refused rather than priced at an invented rate.
+    #
+    # Tool use verified by invocation, not by reading the card: one Converse call carrying a
+    # toolConfig returned stopReason=tool_use on both profiles (tmp/probe_tool_use.py).
+    "us.amazon.nova-2-lite-v1:0": Pricing(0.33, 2.75, 0.0825, 0.0, None),
+    "global.amazon.nova-2-lite-v1:0": Pricing(0.30, 2.50, 0.0750, 0.0, None),
     # -- Anthropic ----------------------------------------------------------------
     "us.anthropic.claude-opus-4-8": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
     "us.anthropic.claude-opus-5": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
@@ -429,9 +493,49 @@ MODEL_PRICING = {
     # No cache rates published for these, so the fields stay None and a cached run against one is
     # refused rather than priced with a guess.
     "us.deepseek.r1-v1:0": Pricing(1.35, 5.40),
-    # In-region only: GLM 5 publishes no cross-region inference profile, so the bare model id is
-    # the invocable one. Verified with list-foundation-models / list-inference-profiles.
+    # In-region only: the GLM models publish no cross-region inference profile, so the bare model id
+    # is the invocable one. Verified with list-foundation-models / list-inference-profiles for GLM 5,
+    # and the 4.7 cards state Geo and Global as not supported.
+    #
+    # None of the three publishes any prompt caching, so the cache fields stay None and a cached run
+    # against one is refused rather than priced with a guess. That is the point of running them: in
+    # this regime prompt caching is not an alternative to context engineering, it is unavailable.
+    #
+    # GLM 4.7 and 4.7 Flash cap max output at 4K tokens against GLM 5's 128K. This harness's answers
+    # are far below that, but a script with long-form answers would truncate.
     "zai.glm-5": Pricing(1.00, 3.20),
+    "zai.glm-4.7": Pricing(0.60, 2.20),
+    "zai.glm-4.7-flash": Pricing(0.07, 0.40),
+    # Small-window, no-caching models: the regime where these strategies are not an optimisation but
+    # the thing that lets a 60-turn conversation finish. None publishes prompt caching, so the cache
+    # field stays None on all of them and there is nothing for caching to compete against.
+    #
+    # Windows, from each model card: Nemotron Nano 9B v2 128K, Nemotron Nano 3 30B 256K, Ministral
+    # 3B/8B/14B 128K, Gemma 3 12B 128K. The bare-agent baseline peaks near 200K on this script, so a
+    # 128K model is where the overflow contrast is sharpest.
+    #
+    # Rates are the US East (N. Virginia) / US East (Ohio) / US West (Oregon) Standard-tier rows of
+    # the Bedrock pricing page, read 2026-09-22. Two models were left OUT deliberately: gpt-oss-20b
+    # /120b and Qwen3 32B publish Standard on-demand rows for Asia Pacific (Sydney) only, so pricing
+    # them in us-east-1 would be a guess.
+    "nvidia.nemotron-nano-9b-v2": Pricing(0.06, 0.23),
+    "nvidia.nemotron-nano-3-30b": Pricing(0.06, 0.24),
+    "nvidia.nemotron-super-3-120b": Pricing(0.15, 0.65),
+    "mistral.ministral-3-3b-instruct": Pricing(0.10, 0.10),
+    "mistral.ministral-3-8b-instruct": Pricing(0.15, 0.15),
+    "mistral.ministral-3-14b-instruct": Pricing(0.20, 0.20),
+    "mistral.magistral-small-2509": Pricing(0.50, 1.50),
+    "mistral.mistral-large-3-675b-instruct": Pricing(0.50, 1.50),
+    # Qwen3 Next 80B A3B, 256K window, no prompt caching published. Rates are the us-east-1 Standard
+    # tier from the Price List API (USE1-Qwen3Next-80B-A3B-*-tokens-standard). Tool use verified by
+    # invocation: stopReason=tool_use on a Converse call carrying a toolConfig.
+    "qwen.qwen3-next-80b-a3b": Pricing(0.14, 1.20),
+    # NOT ADDED, and deliberately: the Gemma family cannot run this harness. Gemma 3 12B/27B accept a
+    # Converse request carrying a toolConfig and then IGNORE it -- measured, the model answers in prose
+    # asking to be given the tool, and inputTokens comes back at 27, meaning the tool schema was
+    # dropped rather than read. Gemma 4 is bedrock-mantle only: Converse answers "The provided model
+    # identifier is invalid", and it is absent from list-foundation-models in us-east-1. A benchmark
+    # built entirely on tool payloads has nothing to measure on a model that cannot call a tool.
 }
 """Rates per model id, in USD per million tokens, for ``us-east-1`` Standard tier.
 
