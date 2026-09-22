@@ -128,7 +128,7 @@ def _agent_model(session: boto3.Session) -> BedrockModel:
         boto_session=session,
         boto_client_config=_client_config(),
         model_id=AGENT_MODEL_ID,
-        max_tokens=4_096,
+        max_tokens=config.MAX_OUTPUT_TOKENS,
         **({"cache_config": cache_config} if cache_config else {}),
     )
     install_log_tagging(model.client, role="agent")
@@ -571,6 +571,33 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
     return counters
 
 
+def _partial_answer(agent: Agent) -> str:
+    """Return the assistant text the agent left in history, for a turn cut short at ``max_tokens``.
+
+    Strands adds the partial message to the conversation before raising, so the text exists; the
+    harness simply was not reading it. Only a trailing ``assistant`` message counts: a turn that
+    failed on a tool error ends on a tool result, and inventing an answer out of an earlier turn's
+    message would score one turn with another turn's work.
+
+    Args:
+        agent: The agent whose history to read. Not modified.
+
+    Returns:
+        The concatenated text blocks of the trailing assistant message, or ``""`` when the history
+        does not end in one -- which is every failure that is not an output truncation.
+    """
+    try:
+        messages = agent.messages
+        if not messages or messages[-1].get("role") != "assistant":
+            return ""
+
+        blocks = messages[-1].get("content") or []
+        return "\n".join(block["text"] for block in blocks if isinstance(block, dict) and "text" in block)
+    except Exception:  # noqa: BLE001 - a measurement must not raise inside an exception handler
+        logger.debug("could not recover a partial answer from history", exc_info=True)
+        return ""
+
+
 async def run_configuration(
     config: RunConfig,
     *,
@@ -612,6 +639,26 @@ async def run_configuration(
             record.error = f"{type(error).__name__}: {error}"
             collector.errors.append(f"{turn.label}: {record.error}")
             logger.warning("turn %s failed: %s", turn.label, record.error)
+            # An output cut short at ``max_tokens`` is not the same failure, and scoring it as an
+            # empty answer made it look like one. Strands states that the partial message was added
+            # to the history -- so the model DID say something, and the harness was throwing it away
+            # and then scoring the silence as materially wrong. Measured on GLM 4.7 Flash, one to two
+            # scored turns per run, on exactly the arms that fold context: folding makes the model
+            # restate figures verbatim, which is what runs an answer past the cap.
+            #
+            # Recovering the text is not leniency. It scores what the model actually produced, which
+            # is the only thing the comparison is entitled to judge -- a truncated answer that never
+            # reaches its figure still fails its check, and now it fails for the right reason.
+            recovered = _partial_answer(agent)
+            if recovered:
+                record.response_text = recovered
+                record.response_chars = len(recovered)
+                record.answer_truncated = True
+                logger.info(
+                    "turn %s truncated at max_tokens | scoring the %d chars the model did produce",
+                    turn.label,
+                    len(recovered),
+                )
         finally:
             record.turn_seconds = time.perf_counter() - turn_started
             record.live_message_count = len(agent.messages)

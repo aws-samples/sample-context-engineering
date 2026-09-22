@@ -88,6 +88,25 @@ error list alongside the token column: an arm that stopped completing turns has 
 and a percentage taken against it understates the saving.
 """
 
+MAX_OUTPUT_TOKENS = int(os.environ.get("VALIDATION_MAX_OUTPUT_TOKENS") or 4_096)
+"""Output-token cap handed to every model under test. Override with ``VALIDATION_MAX_OUTPUT_TOKENS``.
+
+This was a hardcoded 4,096 applied to every model, and it was quietly costing accuracy on the arms
+that fold context. When a turn runs past the cap Strands raises, the harness recorded the error, and
+the answer was scored as an empty string -- so a model that answered and was interrupted scored the
+same as a model that said nothing. Measured on GLM 4.7 Flash: nine truncations in one 60-turn
+all-three run, one to two of them on SCORED turns.
+
+The bias is not random. Folded context tells the model to restate figures verbatim, and restating is
+what makes an answer long, so the cap fell hardest on exactly the configurations under test. The
+partial answer is now recovered from history and scored for what it says, and ``answer_truncated``
+marks the turn so a reader can still take the stricter view.
+
+Raising it is also the cheapest lever this harness has on a small model. GLM 4.7 Flash bills output at
+$0.40/Mtok: doubling the cap across a 60-turn run costs cents, where a lost scored turn costs a
+thirtieth of the accuracy column.
+"""
+
 RERANK_MODEL_ID = "cohere.rerank-v3-5:0"
 """Rerank model the relevance filter scores chunks with. Latest rerank model in the account.
 
