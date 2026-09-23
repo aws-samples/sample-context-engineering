@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -53,6 +54,7 @@ from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
 
 from . import accuracy, config, metrics, scenario, tools
+from .density_rerank import DensityReranker
 from .config import (
     AGENT_MODEL_ID,
     ARTIFACTS_DIR,
@@ -172,6 +174,26 @@ class _MeteredReranker(BedrockReranker):
             # package's own batching rule and must not raise inside a measurement.
             self.search_units += -(-len(chunks) // max(1, self.max_sources_per_query))
         return await super().score(query, chunks)
+
+
+class _MeteredDensityReranker(_MeteredReranker, DensityReranker):
+    """Metering and the citable-density prior, composed rather than merged.
+
+    Both classes delegate through ``super().score``, so the method resolution order does the work:
+    ``_MeteredReranker`` counts the batch, ``DensityReranker`` lifts the dense chunks, and
+    ``BedrockReranker`` makes the one remote call. Neither class had to learn about the other.
+
+    Selected by ``VALIDATION_DENSITY_RERANK=1``, so one experiment arm differs from the control by this
+    class and nothing else.
+    """
+
+
+DENSITY_RERANK = os.environ.get("VALIDATION_DENSITY_RERANK") == "1"
+"""Whether the citable-density prior is in play, read once at import.
+
+An experiment switch and not a setting: it names which hypothesis a run is testing, and every run
+records it, so a result can never be read without knowing which scorer produced it.
+"""
 
 
 class _MeteredMatcher(EmbeddingSimilarityMatcher):
@@ -318,7 +340,8 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
-        reranker = _MeteredReranker(
+        reranker_class = _MeteredDensityReranker if DENSITY_RERANK else _MeteredReranker
+        reranker = reranker_class(
             model_id=RERANK_MODEL_ID,
             boto_session=session,
             boto_client_config=_client_config(),
