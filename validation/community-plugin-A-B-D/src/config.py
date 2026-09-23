@@ -193,6 +193,150 @@ Configured account-wide with every data modality disabled, so entries carry the 
 token counts and the caller's ``requestMetadata`` but no prompts or completions.
 """
 
+# --- Window regime -----------------------------------------------------------------
+#
+# Three of the budgets below are not one number but two, and which pair applies is decided by the
+# agent model's context window. This mirrors GRAPH_ALONE / GRAPH_WITH_RELEVANCE further down: a single
+# set of values is wrong, and the condition that selects between them is a measurement rather than a
+# preference.
+
+TIGHT_WINDOW_CEILING = 300_000
+"""At or below this many tokens, a model is in the tight-window regime.
+
+Not a discovered constant -- a declared boundary, drawn where the measurements change sign. Below it
+the window is the binding constraint and evidence starves; above it the window is not reached at all
+and the only thing a larger budget buys is a larger bill.
+
+**It is 300K rather than the 250K the class is usually named after, and the reason is a measurement.**
+Qwen3 Next has a 256,000-token window -- above 250K -- and measured firmly inside this regime: on the
+60-turn script its bare agent lost **92 calls** to context-window overflow and finished 14 turns of 60,
+and the graph-alone arm peaked at **131% of the window**. A 250K ceiling would have handed it the
+large-window budgets, which are the ones calibrated for a window the conversation never fills.
+
+So the window alone is not really the determinant; the determinant is the window against the payload
+mass the workload puts in front of it, and the window is a proxy for it. The ceiling carries headroom
+because the proxy is imperfect and the failure is asymmetric: the tight budgets cost tokens on a large
+window (measured: +50.2% on Opus 4.8, buying nothing), while the large budgets cost *answers* on a tight
+one. Paying the cheaper error is the point of putting the boundary above the highest window measured to
+starve rather than at the round number.
+"""
+
+CONTEXT_WINDOWS = {
+    # Large window: the conversation never approaches the limit on this script.
+    "us.anthropic.claude-opus-4-8": 1_000_000,
+    "us.anthropic.claude-opus-5": 1_000_000,
+    "us.anthropic.claude-sonnet-5": 1_000_000,
+    "us.anthropic.claude-fable-5": 1_000_000,
+    "us.anthropic.claude-fable-5-1": 1_000_000,
+    "us.openai.gpt-6-astra": 1_050_000,
+    "global.openai.gpt-6-astra": 1_050_000,
+    "us.openai.gpt-5.6-sol": 1_000_000,
+    "global.openai.gpt-5.6-sol": 1_000_000,
+    "us.amazon.nova-2-lite-v1:0": 1_000_000,
+    "global.amazon.nova-2-lite-v1:0": 1_000_000,
+    # Tight window: the constraint this harness was extended to measure.
+    "zai.glm-5": 200_000,
+    "zai.glm-4.7": 202_752,
+    "zai.glm-4.7-flash": 202_752,
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+    "qwen.qwen3-next-80b-a3b": 256_000,
+    "nvidia.nemotron-nano-9b-v2": 128_000,
+    "nvidia.nemotron-super-3-120b": 128_000,
+}
+"""Context window per model id, from each model's Bedrock model card.
+
+Only used to pick a budget regime, never to predict an overflow: the harness measures overflows by
+letting them happen. GLM 4.7's 202,752 is the figure Bedrock's own refusal message states, which is
+why it is not the round 200K the card implies.
+
+A model absent from this map gets the large-window regime, on the ground that an unknown model is more
+likely to be a new frontier model than a small one -- and the regime is overridable, so a wrong guess
+costs one environment variable rather than a wrong run.
+"""
+
+
+@dataclass(frozen=True)
+class BudgetRegime:
+    """The three budgets that differ between window regimes, as one measured set.
+
+    They are held together rather than as three independent knobs because that is how they were
+    measured: the Opus 4.8 comparison reverted all three at once, so the aggregate is attributable and
+    the individual contributions are not. Splitting them here would claim an attribution the
+    measurement does not support.
+
+    Attributes:
+        preview_tokens: Relevance-filter preview budget -- how much of an oversized payload survives.
+        graph_description_tokens: ``description_tokens`` for a graph installed beside the filter.
+        graph_max_retrieval_cycles: Retrieval calls one turn may spend, or ``None`` for unbounded.
+    """
+
+    preview_tokens: int
+    graph_description_tokens: int
+    graph_max_retrieval_cycles: int | None
+
+
+LARGE_WINDOW = BudgetRegime(
+    preview_tokens=800,
+    graph_description_tokens=100,
+    graph_max_retrieval_cycles=8,
+)
+"""Budgets for a model whose window the conversation never fills. Measured on Opus 4.8, 1M tokens.
+
+These are the values every published large-window figure was measured with, and reverting to them is
+what established that the tight-window pair is not a general improvement. Replaying the five arms on
+Opus 4.8 with the tight-window budgets instead moved all three combined from 2,569,888 tokens to
+3,858,779 -- **+50.2%** -- for the same 28 of 30 materially correct turns.
+
+The mechanism is visible in the peak call: 49,943 -> 81,065 tokens, while the graph's resolution ladder
+barely moved (full 20/9/4 -> 19/8/7). The graph was not folding differently; every rung was carrying
+more. On a window this size there was no starvation to cure, so the larger budgets bought nothing and
+were billed anyway.
+
+Read the baseline row of that comparison before believing any of it: the baseline runs no plugin, so
+none of these values can reach it, and it still drifted +12.5% in tokens and two materially-correct
+turns between the two runs. That is the agent choosing a different tool path, and it is the floor below
+which nothing in this file is attributable.
+"""
+
+TIGHT_WINDOW = BudgetRegime(
+    preview_tokens=2_000,
+    graph_description_tokens=250,
+    graph_max_retrieval_cycles=4,
+)
+"""Budgets for a model at or below :data:`TIGHT_WINDOW_CEILING`. Measured on GLM 4.7 and GLM 4.7 Flash.
+
+Here the ceiling on the answer is the preview, not the window. ``preview_tokens`` of 800 admitted one
+or two chunks of a payload ten to thirty times its size, so a literal the answer needed -- an enum like
+``DEGRADED``, an error class like ``MFA_CHALLENGE_TIMEOUT``, a figure like ``907,35`` -- simply was not
+in the chunks that made the cut, while the all-three arm's peak call sat at 57,259 tokens against
+roughly 199,000 usable. 71% of the window was going unused while the plugin starved the evidence.
+
+``graph_description_tokens`` follows it rather than leading: the graph derives a Card's numeric lines
+from the message, and by then the message carries the preview. The two budgets are in series --
+
+    payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
+
+-- so raising the second while the first starves buys nothing, which is the measured reason the
+earlier calibration of 100 here was correct *for* a preview of 800 and wrong once it was raised.
+"""
+
+WINDOW_REGIME = (_env("VALIDATION_WINDOW_REGIME") or "").strip().lower() or (
+    "tight"
+    if (CONTEXT_WINDOWS.get(AGENT_MODEL_ID) or TIGHT_WINDOW_CEILING + 1) <= TIGHT_WINDOW_CEILING
+    else "large"
+)
+"""Which regime this run is in: ``tight`` or ``large``, derived from the model unless overridden.
+
+Derived rather than configured so the common case is right without anyone remembering to set it, and
+overridable with ``VALIDATION_WINDOW_REGIME`` so the boundary itself can be measured -- running a
+large-window model in the tight regime is exactly the experiment that produced the figures in
+:data:`LARGE_WINDOW`.
+"""
+
+BUDGETS = TIGHT_WINDOW if WINDOW_REGIME == "tight" else LARGE_WINDOW
+"""The regime's budgets. Individual values are still overridable one by one from the environment."""
+
 # --- Thresholds --------------------------------------------------------------------
 #
 # Deliberately low relative to the tool payloads: the mocked AWS-doc tools return 40k-120k
@@ -211,22 +355,14 @@ class Thresholds:
     preview_tokens: int = 2_000
     """Preview budget: how much of an oversized payload survives, as whole verbatim chunks.
 
-    Raised from 800 on measurement. The preview is verbatim -- ``RelevancePreview`` selects whole
-    chunks that are exact substrings and inserts only gap markers -- so nothing here is lost to
-    paraphrase. What 800 lost was *selection*: at ``chunk_tokens`` of 500 it admitted one or two
-    chunks of a payload ten to thirty times its size, and a literal the answer needs (an enum value
-    like ``DEGRADED``, an error class like ``MFA_CHALLENGE_TIMEOUT``, a figure like ``907,35``) simply
-    was not in the chunks that made the cut.
+    **Regime-dependent, and the default here is not the one that applies.** The value in force comes
+    from :data:`BUDGETS` -- 800 on a large window, 2,000 on a tight one -- and the two are documented
+    at :data:`LARGE_WINDOW` and :data:`TIGHT_WINDOW`. The literal below is only what the dataclass
+    falls back to when constructed with no argument, which the harness never does.
 
-    That cost compounds with the graph, which is why the number is raised here rather than worked
-    around downstream. The graph derives a Card's ``numeric_lines`` from ``agent.messages`` at the turn
-    boundary, and by then the message carries the preview, not the payload -- so the preview's budget
-    is the ceiling on everything the graph can preserve, and ``expand_card`` cannot return a figure the
-    preview dropped. Two cuts in series, and 800 made the first one decide the second.
-
-    2,000 admits four chunks instead of one. The headroom is there: the all-three arm's peak call
-    measured 57,259 tokens against roughly 199,000 usable on a 203K window, so 71% of the window was
-    going unused while the plugin starved the evidence.
+    The preview is verbatim: ``RelevancePreview`` selects whole chunks that are exact substrings and
+    inserts only gap markers, so nothing here is lost to paraphrase. What a small budget loses is
+    *selection*, and what a large one costs is every downstream rung carrying more.
     """
 
     chunk_tokens: int = 500
@@ -262,7 +398,7 @@ class Thresholds:
 
 THRESHOLDS = Thresholds(
     max_result_tokens=_env_int("VALIDATION_MAX_RESULT_TOKENS", 4_000),
-    preview_tokens=_env_int("VALIDATION_PREVIEW_TOKENS", 2_000),
+    preview_tokens=_env_int("VALIDATION_PREVIEW_TOKENS", BUDGETS.preview_tokens),
     chunk_tokens=_env_int("VALIDATION_CHUNK_TOKENS", 500),
     relevance_threshold=_env_float("VALIDATION_RELEVANCE_THRESHOLD", 0.02),
     catalog_tokens=_env_int("VALIDATION_CATALOG_TOKENS", 20),
@@ -344,9 +480,11 @@ GRAPH_WITH_RELEVANCE = GraphTuning(
     expand_threshold=_env_float("VALIDATION_GRAPH_EXPAND", 0.55),
     collapse_floor=_env_float("VALIDATION_GRAPH_COLLAPSE", 0.45),
     link_threshold=_env_float("VALIDATION_GRAPH_LINK", 0.50),
-    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", 250),
+    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", BUDGETS.graph_description_tokens),
     body_budget=_env_opt_int("VALIDATION_GRAPH_BODY_BUDGET", None),
-    max_retrieval_cycles=_env_opt_int("VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", 4),
+    max_retrieval_cycles=_env_opt_int(
+        "VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", BUDGETS.graph_max_retrieval_cycles
+    ),
     reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
     tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
 )

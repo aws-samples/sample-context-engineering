@@ -338,6 +338,11 @@ These are the values the study above was run with, and the reason to write them 
 alternative tried against them lost**. On a window this size the knobs are not free choices — the
 sweep below is what rules them out.
 
+Three of them are the `TIGHT_WINDOW` set and apply *only* in this class; on a 1M window they cost 50%
+for nothing, which is finding 11 below. The harness picks the set from the model, so running a
+tight-window model needs no configuration at all — the values are spelled out here because a reader
+wiring the plugins into their own agent has no harness to pick for them.
+
 ```python
 from strands import Agent
 from strands.agent.conversation_manager import NullConversationManager
@@ -352,7 +357,7 @@ relevance = RelevanceFilter(
         "reranker": BedrockReranker(model_id="cohere.rerank-v3-5:0"),
         "relevance_threshold": 0.02,  # calibrated to THIS reranker -- see the note below
         "chunk_tokens": 500,
-        "preview_tokens": 2_000,
+        "preview_tokens": 2_000,      # REGIME-DEPENDENT: 2,000 here, 800 on a large window
     },
 )
 
@@ -360,10 +365,10 @@ graph = ContextGraph(
     expand_threshold=0.55,       # keep the package default: with the filter installed, fold LESS
     collapse_floor=0.45,
     link_threshold=0.50,
-    description_tokens=250,
+    description_tokens=250,      # REGIME-DEPENDENT: 250 here, 100 on a large window
     body_budget=None,            # never bound in this class: peak sat at 22-37% of the window
     min_cards=3,
-    max_retrieval_cycles=4,
+    max_retrieval_cycles=4,      # REGIME-DEPENDENT: 4 here, 8 on a large window
     reuse_ttl_cycles=5,
     include_artifact_tool=False,  # REQUIRED when the relevance filter is installed
     matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3"),
@@ -470,12 +475,30 @@ charging a round trip for each invented-argument call it now refuses.
 
 And it bought nothing: 28 of 30 both times. On a window this size there was no starvation to fix.
 
-**So these two budgets are regime-dependent, exactly as the graph's own thresholds already are.** The
-file carries `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE` because one set of graph knobs is wrong; the same
-is true of the preview pair across window classes — 800/100 where the window is not the constraint,
-2,000/250 where it is. What is written in
-[`src/config.py`](validation/community-plugin-A-B-D/src/config.py) today is the tight-window pair, so a
-large-window run using it should expect the row above rather than the published one.
+**So these two budgets are regime-dependent, exactly as the graph's own thresholds already are — and
+the harness now treats them that way.** The file carries `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE`
+because one set of graph knobs is wrong; `LARGE_WINDOW` and `TIGHT_WINDOW` in
+[`src/config.py`](validation/community-plugin-A-B-D/src/config.py) are the same construction for the
+three budgets that differ across window classes:
+
+| Budget | `LARGE_WINDOW` | `TIGHT_WINDOW` |
+|---|---:|---:|
+| `preview_tokens` | 800 | 2,000 |
+| graph `description_tokens` (with relevance) | 100 | 250 |
+| graph `max_retrieval_cycles` | 8 | 4 |
+
+They are held as one set rather than three knobs because that is how they were measured: the comparison
+above reverted all three at once, so the aggregate is attributable and the individual contributions are
+not. The regime is derived from the agent model's declared context window, recorded in every run's
+`meta.window_regime`, and overridable with `VALIDATION_WINDOW_REGIME=tight|large` — which is how the
+Opus row above was produced.
+
+**The selection ceiling is 300K, not the 250K the class is named after, and that is a measurement
+rather than a rounding.** Qwen3 Next's window is 256,000 — above 250K — and it sat firmly in the tight
+regime: 92 overflows on the bare agent, and the graph-alone arm peaking at 131% of the window. The real
+determinant is not the window but the window against the payload mass in front of it, for which the
+window is only a proxy; the ceiling carries headroom because the errors are asymmetric. Tight budgets on
+a large window cost tokens (+50.2%, buying nothing). Large budgets on a tight window cost answers.
 
 ## Prices and what they are based on
 

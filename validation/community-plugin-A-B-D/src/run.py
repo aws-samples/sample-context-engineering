@@ -289,6 +289,10 @@ async def _main_async(args: argparse.Namespace) -> int:
         # Which knobs this run moved off the committed defaults. A tuning sweep produces many runs
         # that differ only here, so a result that does not carry this cannot be read at all.
         "sweep_overrides": config.sweep_overrides(),
+        # Which budget regime the run was in. Three budgets differ between regimes, so a figure read
+        # without this cannot be compared with any other figure.
+        "window_regime": config.WINDOW_REGIME,
+        "context_window": config.CONTEXT_WINDOWS.get(AGENT_MODEL_ID),
         # Part of the configuration on a tight-window model rather than a detail: the provider
         # subtracts the requested output cap from the context window, so this figure decides how
         # much history fits before a call overflows.
