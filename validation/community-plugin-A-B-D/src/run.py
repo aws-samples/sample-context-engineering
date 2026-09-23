@@ -286,6 +286,13 @@ async def _main_async(args: argparse.Namespace) -> int:
         # account-wide log group means guessing at timestamps again.
         "log_tag": metrics.RUN_TAG,
         "log_group": INVOCATION_LOG_GROUP,
+        # Which knobs this run moved off the committed defaults. A tuning sweep produces many runs
+        # that differ only here, so a result that does not carry this cannot be read at all.
+        "sweep_overrides": config.sweep_overrides(),
+        # Part of the configuration on a tight-window model rather than a detail: the provider
+        # subtracts the requested output cap from the context window, so this figure decides how
+        # much history fits before a call overflows.
+        "max_output_tokens": config.MAX_OUTPUT_TOKENS,
     }
     payload = {}
     for name, collectors in results_by_name.items():

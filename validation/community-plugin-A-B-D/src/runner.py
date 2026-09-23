@@ -386,6 +386,8 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             body_budget=tuning.body_budget,
             min_cards=THRESHOLDS.min_cards,
             max_retrieval_cycles=tuning.max_retrieval_cycles,
+            reuse_ttl_cycles=tuning.reuse_ttl_cycles,
+            tags_per_card=tuning.tags_per_card,
             # Two retrieval tools for one job, over two stores that do not know each other, is what
             # cost the first run its A5 answer. See _GRAPH_ARTIFACT_TOOL for the measurement.
             #

@@ -43,6 +43,54 @@ from pathlib import Path
 
 # --- AWS account -------------------------------------------------------------------
 
+# --- Sweep overrides ---------------------------------------------------------------
+#
+# Every tunable below can be overridden from the environment. The defaults are unchanged, so a run
+# that sets nothing behaves exactly as the committed configuration does -- the overrides exist so a
+# tuning sweep is a list of environment variables rather than a list of commits, which is what makes
+# "measure, change one knob, measure again" affordable enough to actually do.
+#
+# Each override is recorded in the run's metadata (see ``sweep_overrides``), so no result can be read
+# without knowing which knobs produced it.
+
+_OVERRIDES_SEEN: dict[str, str] = {}
+"""Every override actually read from the environment, in the order the module read it."""
+
+
+def _env(name: str) -> str | None:
+    """Return the raw value of ``name``, remembering that it was set."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    _OVERRIDES_SEEN[name] = raw
+    return raw
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name)
+    return default if raw is None else int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = _env(name)
+    return default if raw is None else float(raw)
+
+
+def _env_opt_int(name: str, default: int | None) -> int | None:
+    """Like :func:`_env_int` but accepts ``none`` to mean the package's unbounded behaviour."""
+    raw = _env(name)
+    if raw is None:
+        return default
+    if raw.strip().lower() in {"none", "null", "off", "unbounded"}:
+        return None
+    return int(raw)
+
+
+def sweep_overrides() -> dict[str, str]:
+    """Return the overrides this process read, for the run record."""
+    return dict(_OVERRIDES_SEEN)
+
+
 ACCOUNT_ID = os.environ.get("VALIDATION_ACCOUNT_ID", "")
 """Account a run must be executing in, or empty to accept whichever one the credentials resolve to.
 
@@ -88,7 +136,7 @@ error list alongside the token column: an arm that stopped completing turns has 
 and a percentage taken against it understates the saving.
 """
 
-MAX_OUTPUT_TOKENS = int(os.environ.get("VALIDATION_MAX_OUTPUT_TOKENS") or 4_096)
+MAX_OUTPUT_TOKENS = _env_int("VALIDATION_MAX_OUTPUT_TOKENS", 4_096)
 """Output-token cap handed to every model under test. Override with ``VALIDATION_MAX_OUTPUT_TOKENS``.
 
 This was a hardcoded 4,096 applied to every model, and it was quietly costing accuracy on the arms
@@ -105,6 +153,21 @@ marks the turn so a reader can still take the stricter view.
 Raising it is also the cheapest lever this harness has on a small model. GLM 4.7 Flash bills output at
 $0.40/Mtok: doubling the cap across a 60-turn run costs cents, where a lost scored turn costs a
 thirtieth of the accuracy column.
+
+**On a tight-window model that reasoning inverts, and the correction is the point of this note.** The
+provider subtracts the requested output cap from the context window before it admits the prompt, so
+the cap is not only a ceiling on the answer -- it is a reservation taken out of the window. Measured
+on GLM 4.7 Flash (202,752 tokens) with the cap at 8,192, Bedrock refused calls with::
+
+    This model's maximum context length is 202752 tokens. However, you requested 8192 output
+    tokens and your prompt contains at least 194561 input tokens, for a total of at least 202753
+
+That same 194,561-token prompt fits with the cap at 4,096. So raising the cap to buy back truncated
+answers spends 4,096 tokens of history to do it, and on the arms that do not fold context it converts
+calls that would have completed into ``ContextWindowOverflowException``. The lever is genuinely cheap
+in dollars and genuinely expensive in window, which is why it belongs in the tight-window
+configuration rather than in the default: raise it only as far as the answers actually need, and read
+any run that moved it against a run that did not.
 """
 
 RERANK_MODEL_ID = "cohere.rerank-v3-5:0"
@@ -197,7 +260,16 @@ class Thresholds:
     """Below this many Cards the whole choice is skipped: the only decision is 'send it all'."""
 
 
-THRESHOLDS = Thresholds()
+THRESHOLDS = Thresholds(
+    max_result_tokens=_env_int("VALIDATION_MAX_RESULT_TOKENS", 4_000),
+    preview_tokens=_env_int("VALIDATION_PREVIEW_TOKENS", 2_000),
+    chunk_tokens=_env_int("VALIDATION_CHUNK_TOKENS", 500),
+    relevance_threshold=_env_float("VALIDATION_RELEVANCE_THRESHOLD", 0.02),
+    catalog_tokens=_env_int("VALIDATION_CATALOG_TOKENS", 20),
+    ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 5),
+    top_k=_env_int("VALIDATION_TOP_K", 4),
+    min_cards=_env_int("VALIDATION_MIN_CARDS", 3),
+)
 
 
 @dataclass(frozen=True)
@@ -228,6 +300,14 @@ class GraphTuning:
     description_tokens: int
     body_budget: int | None
     max_retrieval_cycles: int | None = 8
+    reuse_ttl_cycles: int = 5
+    """Cycles a Card retrieved by a tool stays elevated for. The package default, restated here so a
+    sweep can reach it: on a tight-window model a longer reuse keeps recovered evidence resident
+    across the follow-up questions that usually come right after a retrieval, and a shorter one
+    stops a single retrieval from pinning content for the rest of the line."""
+    tags_per_card: int = 5
+    """Tags derived per Card, which is what ``find_context`` matches on. Reachable from a sweep
+    because the graph's discovery path is only as good as the tags it searches."""
 
 
 GRAPH_ALONE = GraphTuning(
@@ -261,12 +341,14 @@ and ladder moves are mechanical; the one-turn accuracy gain is inside the noise 
 """
 
 GRAPH_WITH_RELEVANCE = GraphTuning(
-    expand_threshold=0.55,
-    collapse_floor=0.45,
-    link_threshold=0.50,
-    description_tokens=250,
-    body_budget=None,
-    max_retrieval_cycles=4,
+    expand_threshold=_env_float("VALIDATION_GRAPH_EXPAND", 0.55),
+    collapse_floor=_env_float("VALIDATION_GRAPH_COLLAPSE", 0.45),
+    link_threshold=_env_float("VALIDATION_GRAPH_LINK", 0.50),
+    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", 250),
+    body_budget=_env_opt_int("VALIDATION_GRAPH_BODY_BUDGET", None),
+    max_retrieval_cycles=_env_opt_int("VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", 4),
+    reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
+    tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
 )
 """Tuning for a graph installed alongside the relevance filter.
 
