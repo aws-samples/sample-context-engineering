@@ -538,6 +538,32 @@ CONFIGURATIONS = DEFAULT_CONFIGURATIONS + (
 The three leave-one-out arms are accepted but not run by default: they answer a tuning question
 rather than the comparison the report is built around, and adding them to the default would change
 what every published table means.
+
+**What they measured, and it is the most useful thing in this file for anyone tuning the stack.** On
+``zai.glm-4.7`` (a 202,752-token window, so the tight-window class), 20 turns of which 18 are scored,
+two to three replays each:
+
+======================================  =============  =========  ==============
+Configuration                           Total tokens   Δ tokens   Materially correct
+======================================  =============  =========  ==============
+Baseline, no plugin                         3,733,922         --   12.5/18
+All three                                   1,687,068     -54.8%   15.67/18
+Graph + disclosure                          1,524,740     -59.2%   15.5/18
+Relevance + graph (no disclosure)           3,960,855     +6.1%    14.5/18
+Relevance + disclosure (no graph)           4,222,162     +13.1%   14.5/18
+======================================  =============  =========  ==============
+
+**The saving is a conjunction, not a sum.** Either PAIR spends more than using no plugin at all, and
+only the full stack saves. Drop disclosure and the fixed tool-schema floor rides every call again,
+multiplied by the extra retrieval round trips the other two introduce. Drop the graph and the history
+never folds, so previews accumulate and the round trips are paid on a conversation that only grows.
+Neither pair is a degraded version of the stack; both are worse than doing nothing.
+
+Read the baseline's token column with the error column beside it, which is the whole reason they sit
+together: that baseline overflowed the window six times per replay, and a turn that overflows stops
+spending. Part of why the pairs look expensive against it is that they finish turns it abandoned. The
+comparison that is not contaminated by this is all-three against either pair, and there the full stack
+wins on both axes at once.
 """
 
 # --- Web fetch ---------------------------------------------------------------------
