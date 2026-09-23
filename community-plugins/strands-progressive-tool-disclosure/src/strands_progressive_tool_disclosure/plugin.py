@@ -1027,6 +1027,15 @@ class ProgressiveToolDisclosure(Plugin):
         ``always_available`` never had its schema hidden. A tool with no required parameter is
         callable empty. And a call carrying arguments came from a model that knew what to pass.
 
+        The search tool is exempt for the same reason as ``always_available``, and the exemption used
+        to be missing. :func:`_project` emits ``find_tools`` in its first block, unconditionally, so
+        its full specification travels on every call -- but it is never written to ``exposed``, which
+        only records what a search revealed. The guard therefore read a call to it as a call made off
+        a catalog entry and cancelled it, answering that the parameters "were not loaded" when the
+        model had just read them. That cost a round trip, and worse than the round trip: it denied the
+        one call that opens the discovery path, at the moment the model chose to take it. Measured on
+        GLM 4.7 Flash, that arm searched once in sixty turns and guessed the rest.
+
         A name the registry does not have is left alone entirely — no cancellation and no exposure.
         There is no specification to expose for it, and the event loop already reports the unknown
         tool. ``event.tool_use`` and the ``ToolRegistry`` come out of here unchanged on every path:
@@ -1047,7 +1056,7 @@ class ProgressiveToolDisclosure(Plugin):
         was_exposed = name in state.exposed
         _renew(state, name, agent.event_loop_metrics.cycle_count)
 
-        if was_exposed or name in self._always_available:
+        if was_exposed or name in self._always_available or name == FIND_TOOLS_NAME:
             return
 
         # A call to a tool whose schema was never projected is a call made off a catalog entry: the

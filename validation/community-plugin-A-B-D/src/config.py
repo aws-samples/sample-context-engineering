@@ -480,6 +480,43 @@ RUN_CONFIGS = {
             "tool whose inputSchema left the call."
         ),
     ),
+    "no-disclosure": RunConfig(
+        name="no-disclosure",
+        disclosure=False,
+        relevance=True,
+        graph=True,
+        label="Relevance + graph (disclosure removed)",
+        notes=(
+            "Leave-one-out. Tuning three plugins together is only possible once each one's MARGINAL "
+            "contribution inside the stack is known, and a single-strategy arm does not give that: "
+            "what a plugin buys on its own and what it adds to the other two are different "
+            "quantities. This arm prices the schema floor against the round trips disclosure costs "
+            "when the model guesses a hidden tool's name instead of searching for it."
+        ),
+    ),
+    "no-relevance": RunConfig(
+        name="no-relevance",
+        disclosure=True,
+        relevance=False,
+        graph=True,
+        label="Graph + disclosure (relevance removed)",
+        notes=(
+            "Leave-one-out. Also the one arm where the graph keeps its own artifact tool, since "
+            "``include_artifact_tool`` is dropped only when the relevance filter is installed -- so "
+            "it measures the graph's recovery path as the package ships it."
+        ),
+    ),
+    "no-graph": RunConfig(
+        name="no-graph",
+        disclosure=True,
+        relevance=True,
+        graph=False,
+        label="Relevance + disclosure (graph removed)",
+        notes=(
+            "Leave-one-out. The two payload-side strategies without any history folding, which is "
+            "what isolates whether the graph is adding recall or only removing tokens."
+        ),
+    ),
 }
 
 DEFAULT_CONFIGURATIONS = (
@@ -491,8 +528,17 @@ DEFAULT_CONFIGURATIONS = (
 )
 """What a run compares when no configuration is named: each strategy alone, plus all three."""
 
-CONFIGURATIONS = DEFAULT_CONFIGURATIONS
-"""Every configuration the runner accepts by name."""
+CONFIGURATIONS = DEFAULT_CONFIGURATIONS + (
+    "no-disclosure",
+    "no-relevance",
+    "no-graph",
+)
+"""Every configuration the runner accepts by name.
+
+The three leave-one-out arms are accepted but not run by default: they answer a tuning question
+rather than the comparison the report is built around, and adding them to the default would change
+what every published table means.
+"""
 
 # --- Web fetch ---------------------------------------------------------------------
 

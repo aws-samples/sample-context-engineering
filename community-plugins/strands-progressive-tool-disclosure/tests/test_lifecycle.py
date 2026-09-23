@@ -415,6 +415,13 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
 
     So ``tool_input`` is still parameterized here, and the assertion is now that it makes NO difference.
 
+    The conjunction also carries an exemption for the search tool, which it used to be missing.
+    ``_project`` emits ``find_tools`` unconditionally, so its specification is in front of the model on
+    every call, yet it is never recorded in ``exposed`` -- that map holds what a search revealed. The
+    guard read a call to it as a call made off a catalog entry and cancelled the one call that opens
+    the discovery path, telling the model its parameters "were not loaded" moments after it had read
+    them. Hypothesis found this by generating ``name='find_tools'``.
+
     Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7.
     """
     plugin = ProgressiveToolDisclosure(index=_CountingIndex(), always_available=always_available)
@@ -438,6 +445,7 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
         is_registered
         and not was_exposed
         and name not in always_available
+        and name != FIND_TOOLS_NAME
         and _requires_parameters(registry[name].tool_spec if is_registered else {})
     )
     assert bool(event.cancel_tool) is exp_cancelled
