@@ -2,7 +2,9 @@
 
 The figures on the [landing page](README.md) are one model with prompt caching off. This page is the
 whole measurement behind them: **nine runs, five configurations each, 45 cells**, across six models
-from four providers, with the caching-on counterpart of every Claude run.
+from four providers, with the caching-on counterpart of every Claude run — followed by a **second study
+of twelve further cells** on the tight-window class, three models from three different vendors, which
+asks what happens where the window is the binding constraint rather than the bill.
 
 It exists because two of the conclusions flip depending on the model you run, and a reader who only
 sees the headline cannot tell which regime they are in.
@@ -213,6 +215,12 @@ the conversation finishes.
 This is also the regime where caching does not compete: GLM 5's card publishes no caching of either
 type, so there is nothing to weigh the plugins against.
 
+GLM 5 was the only model here under 1M tokens, which made this finding rest on a single model until the
+[tight-window study](#a-second-study-the-tight-window-class-on-three-vendors) below added three more from
+three different vendors. It reproduces on all three, and sharpens it: the bare agent is not the only arm
+that overflows in this class, and which *single* practice keeps a model inside its window depends on the
+model.
+
 ### 5. Caching makes the agent cheaper, not better
 
 The model sees an identical prompt whether or not it was served from cache, so accuracy must be
@@ -229,6 +237,208 @@ re-sends anything, which is the point; but it also means the cache has nothing c
 and collects only expensive writes. The two techniques address the same waste from opposite ends, and
 only one of them can bill it. That is why they are alternatives rather than a stack — with relevance
 filtering the exception, because it compresses once and then stops changing the prompt.
+
+## A second study: the tight-window class, on three vendors
+
+The table above is six models, five of them with a window of 1M tokens, and its argument is cost. This
+second study asks the other question: **what happens in the class where the window is the binding
+constraint**, and does the answer depend on whose model it is. Three vendors, one class, same 60-turn
+script, same 30 scored turns, prompt caching **off** in every row — two of the three models publish no
+caching at all, so there is nothing to turn on.
+
+| Vendor | Model | Window |
+|---|---|---:|
+| Zhipu | `zai.glm-4.7` | 202,752 |
+| Anthropic | `us.anthropic.claude-haiku-4-5` | 200,000 |
+| Alibaba | `qwen.qwen3-next-80b-a3b` | 256,000 |
+
+One column is new, and it is the one that decides how to read the rest. **Peak input** is the largest
+single call the arm sent, as a percentage of that model's window — the one quantity in this study that
+truncation cannot contaminate, because it is measured on the calls that *did* go out. **Completed** is
+how many of the 60 turns produced an answer at all. The twelve columns of the table above describe what
+a run spent and scored; neither of them says whether the conversation survived, and in this class that
+is the question.
+
+A cell marked `*` is truncated in the sense of trap 1 — it spent less and scored less because it stopped
+working. **In this study the truncated cells are not confined to the baseline**, which is what makes the
+accuracy column dangerous here: on GLM 4.7 three of the five arms overflowed.
+
+| Model | Configuration | Peak input | Total tokens | Δ tokens | Accuracy | Correct | Completed | Cost | $/correct |
+|---|---|---:|---:|---:|---:|:--:|:--:|---:|---:|
+| **GLM 4.7** | Baseline * | 85% | 5,814,709 | — | 65.3% | 14/30 | 22/60 | $3.52 | *$0.25* |
+| | Relevance * | 83% | 11,140,007 | +91.6% | 66.1% | 17/30 | 27/60 | $6.75 | *$0.40* |
+| | Disclosure * | 85% | 14,153,824 | +143.4% | 73.2% | 20/30 | 40/60 | $8.56 | *$0.43* |
+| | Graph | 70% | 13,191,178 | +126.9% | **95.3%** | **27/30** | 60/60 | $7.96 | $0.29 |
+| | 🏆 All three | **37%** | 5,916,862 | +1.8% | 83.5% | 22/30 | 59/60 † | $3.60 | $0.16 |
+| **Haiku 4.5** | Baseline * | 80% | 6,058,882 | — | 65.3% | 13/30 | 24/60 | $6.09 | *$0.47* |
+| | Relevance | 75% | 13,214,041 | +118.1% | **93.7%** | **26/30** | 60/60 | $13.32 | $0.51 |
+| | Disclosure | 65% | 12,156,014 | +100.6% | 88.2% | 22/30 | 60/60 | $12.26 | $0.56 |
+| | Graph | 50% | 7,894,451 | +30.3% | 79.5% | 18/30 | 60/60 | $7.97 | $0.44 |
+| | 🏆 All three | **22%** | 3,260,491 | **−46.2%** | 89.8% | 25/30 | 60/60 | $3.34 | $0.13 |
+| **Qwen3 Next** | Baseline * | 117% | 8,231,351 | — | 59.1% | 11/30 | 14/60 | $1.16 | *$0.11* |
+| | Relevance | 70% | 21,803,250 | +164.9% | **91.3%** | **26/30** | 60/60 | $3.10 | $0.12 |
+| | Disclosure | 83% | 33,004,333 | +301.0% | 86.6% | 23/30 | 60/60 | $4.64 | $0.20 |
+| | Graph * | **131%** | 25,119,509 | +205.2% | 55.9% | 10/30 | 16/60 | $3.53 | *$0.35* |
+| | 🏆 All three | **25%** | 5,512,454 | **−33.0%** | 81.9% | 23/30 | 59/60 | $0.82 | $0.04 |
+
+Peak input is the estimated prompt of the largest call, which is why it can exceed 100%: that is a call
+the provider refused. † GLM 4.7's all-three lost its one turn to a `ReadTimeoutError`, a network failure,
+not to the window — that arm overflowed zero times.
+
+One replay per cell, so trap 3 applies in full: differences of two or three turns between two arms that
+both completed are inside the noise floor. Measured separately on this class, the same arm replayed three
+times moved by up to **two materially-correct turns out of eighteen**. `s/turn` is omitted from this
+table rather than reported: the three models ran concurrently *and* several arms died early, so the
+figure would compare the pace of a finished conversation against the pace of an abandoned one.
+
+### 7. Only the full stack keeps every vendor inside its window
+
+Peak input for all three combined is **37%, 22% and 25%** of the window against a bare agent's 85%, 80%
+and 117%. That is the finding, and `Completed` is its consequence: 59, 60 and 59 turns against 22, 24 and
+14. Every arm using **one** plugin fails to control the peak on at least one vendor — relevance and
+disclosure both sit at 83-85% on GLM 4.7 and overflow there (54 and 30 calls lost), and the graph alone
+reaches **131%** on Qwen3 Next and loses 88. No single practice is sufficient in this class on all three
+vendors; the conjunction is, on all three.
+
+### 8. Folding dialogue does not shrink a tool payload
+
+The graph alone is the cleanest arm on GLM 4.7 — 27 of 30, zero errors, the highest accuracy anywhere in
+this study — and on Qwen3 Next the same plugin peaks **above the window** and finishes 16 turns of 60.
+That is not a contradiction and not noise: in this scenario the mass is the 40k-120k-character
+documentation payloads, not the conversation, so folding history compresses the part that was not the
+problem. What attacks the payload is the relevance filter, and what removes the fixed schema floor is
+disclosure. The three are complementary by construction, which is why the conjunction holds where its
+members do not.
+
+**What this study cannot tell you is which single plugin is "best".** An arm that completed 27 of 60
+turns and an arm that completed 60 cannot be compared on accuracy at all — the first one's score is a
+score of the turns it survived. Relevance filtering looks second from last on GLM 4.7 (17 of 30) and is
+the most accurate arm on both other vendors (26 of 30); the GLM figure is its 54 overflows, not its
+recall. Read the single-strategy rows for their peak and their completion, and take accuracy from them
+only where `Completed` reads 60/60.
+
+### 9. The saving changes sign with the vendor, and that is not a regression
+
+All three combined cuts tokens 46.2% on Haiku and 33.0% on Qwen, but spends **1.8% more** than the bare
+agent on GLM 4.7. Read that against `Completed`: the GLM 4.7 baseline answered 22 turns and the full
+stack answered 59. Nearly tripling the work delivered for 1.8% more tokens is the result, and the sign
+alone gets it backwards. This is trap 1 at full strength — strong enough that the cheapest `$/correct`
+cell in the study belongs to a truncated baseline, which is why every truncated ratio here is italicised
+rather than competing.
+
+Measured on the same class with two to three replays, the leave-one-out arms say it from the other side:
+on GLM 4.7 at 20 turns all three combined is −54.8% tokens, but relevance+graph is **+6.1%** and
+relevance+disclosure **+13.1%** — either *pair* spends more than using no plugin at all. The saving is a
+conjunction, not a sum. See `CONFIGURATIONS` in
+[`src/config.py`](validation/community-plugin-A-B-D/src/config.py).
+
+### 10. The parameters to use on a window up to 250K
+
+These are the values the study above was run with, and the reason to write them down is that **every
+alternative tried against them lost**. On a window this size the knobs are not free choices — the
+sweep below is what rules them out.
+
+```python
+from strands import Agent
+from strands.agent.conversation_manager import NullConversationManager
+from strands_context_graph import ContextGraph, EmbeddingSimilarityMatcher
+from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
+from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
+
+relevance = RelevanceFilter(
+    store=FileStore("./artifacts"),   # file-backed: a reference read hours later must still resolve
+    max_result_tokens=4_000,          # above this a payload is filtered; the payloads here are 10-30x it
+    config={
+        "reranker": BedrockReranker(model_id="cohere.rerank-v3-5:0"),
+        "relevance_threshold": 0.02,  # calibrated to THIS reranker -- see the note below
+        "chunk_tokens": 500,
+        "preview_tokens": 2_000,
+    },
+)
+
+graph = ContextGraph(
+    expand_threshold=0.55,       # keep the package default: with the filter installed, fold LESS
+    collapse_floor=0.45,
+    link_threshold=0.50,
+    description_tokens=250,
+    body_budget=None,            # never bound in this class: peak sat at 22-37% of the window
+    min_cards=3,
+    max_retrieval_cycles=4,
+    reuse_ttl_cycles=5,
+    include_artifact_tool=False,  # REQUIRED when the relevance filter is installed
+    matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3"),
+)
+
+disclosure = ProgressiveToolDisclosure(
+    catalog_tokens=20,
+    ttl_cycles=5,
+    top_k=4,
+    always_available=[*graph.retrieval_tool_names, "retrieve_context"],
+)
+
+agent = Agent(
+    model=...,                                    # max_tokens=4096, NOT higher -- see below
+    conversation_manager=NullConversationManager(),  # a precondition of the graph, not a preference
+    plugins=[relevance, graph, disclosure],       # construct the graph before disclosure
+)
+```
+
+Five of these are load-bearing in a way a reader would not guess, and each one was measured:
+
+**Cap the model's output at 4,096, and resist raising it.** The provider subtracts the requested output
+cap from the window *before* it admits the prompt, so the cap is a reservation taken out of history. At
+8,192 on GLM 4.7 Flash, Bedrock refused calls whose prompt was 194,561 tokens — a prompt that fits at
+4,096. Raising it to recover truncated answers converts completing calls into overflows, which is the
+opposite of what this class needs.
+
+**`include_artifact_tool=False` is required, not optional.** With the relevance filter installed there
+are otherwise two retrieval tools over two stores that do not know each other, the model reaches for the
+wrong one, and the reference does not resolve.
+
+**`relevance_threshold=0.02` is a position in a distribution, not a number.** On `cohere.rerank-v3-5` a
+strong match scores ~0.29 and an unrelated chunk ~0.03; the package default of `0.5` rejects every chunk
+that exists. Change the reranker and this value is meaningless until you re-measure its distribution.
+
+**`expand_threshold` stays at the default rather than rising.** When the relevance filter has already
+replaced a payload with a preview, the graph should fold *less*, not more — the full-content rung is
+already the cheap one. Raising it to 0.65 lost 1.5 materially-correct turns *and* increased tokens.
+
+**`preview_tokens=2_000` is the ceiling on everything downstream.** The graph derives a Card's numeric
+lines from the message, and by then the message carries the preview — so `expand_card` cannot return a
+figure the preview dropped. Lowering the preview to save tokens silently lowers the Description budget's
+value too; these two budgets are in series and the first one decides the second.
+
+#### What was tried against these values and rejected
+
+GLM 4.7, 20 turns of which 18 scored, two to three replays per row, all-three arm, each row changing
+only what its name says. The reference row is the block above.
+
+| Variant | Total tokens | Δ vs baseline | Correct | Verdict |
+|---|---:|---:|:--:|---|
+| Baseline, no plugin * | 3,733,922 | — | 12.5/18 | overflowed 6x per replay |
+| **Reference (the values above)** | 1,906,838 | **−48.9%** | **16/18** | nothing beat it |
+| `expand_threshold` 0.65 | 2,044,890 | −45.2% | 14.5/18 | lost turns **and** cost tokens |
+| `ttl_cycles` 12 | 1,604,010 | −57.0% | 14.5/18 | −8pp tokens for −1.5 turns |
+| `ttl_cycles` 8 | 1,397,004 | −62.6% | 13/18 | −14pp tokens for −3 turns |
+| `catalog_tokens` 48 + `top_k` 6 | 1,563,844 | −58.1% | 13.5/18 | −9pp tokens for −2.5 turns |
+| …plus `ttl_cycles` 8 | 1,764,815 | −52.7% | 15/18 | best challenger, still −1 turn |
+| `preview_tokens` 1200 | 1,339,228 | −64.1% | 13.5/18 | the cheapest row, and −2.5 turns |
+| `chunk_tokens` 250 | 1,592,800 | −57.3% | 14/18 | finer chunks did not buy selection |
+| `relevance_threshold` 0.05 | 1,640,628 | −56.1% | 15/18 | −1 turn, inside the noise |
+
+The shape of that table is the finding: **the trade is monotone and the defaults sit at its knee.** Every
+row that spends less scores less, none dominates the reference, and the spread between replays of the
+*same* row reached two materially-correct turns — so a variant that gains one turn has not gained
+anything. A ninth attempt, raising the output cap to 8,192 and turning on a citable-density rerank prior,
+doubled cost for +0.67 turns and is the clearest example of the failure mode this table exists to
+prevent.
+
+**What is genuinely open.** These rows are 20 turns, where the window is not yet binding on this model.
+The 60-turn study above is where it binds, and there the same defaults hold — but the *single*-plugin
+ordering changes between the two lengths, so a value tuned at 20 turns should be confirmed at the length
+you actually run. Every knob is reachable from the environment (`VALIDATION_PREVIEW_TOKENS`,
+`VALIDATION_GRAPH_EXPAND`, `VALIDATION_TTL_CYCLES`, …) and each run records which ones it read, so
+repeating this sweep at another length is a list of variables rather than a list of commits.
 
 ## Prices and what they are based on
 
@@ -278,6 +488,14 @@ and that case did not occur here. Global CRIS was not tested at all.
 forked-SDK vended plugins place their cache checkpoints in their own code and were **not** re-measured;
 nothing on this page transfers to them without a run.
 
+**The two studies are not the same code.** The nine-run battery predates four fixes the tight-window
+study was run with, the load-bearing one being that the disclosure plugin used to cancel the model's
+first `find_tools` call of every session — `find_tools` is projected unconditionally but never recorded
+as exposed, so the guard read a call to it as a call made off a catalog entry and refused the one call
+that opens the discovery path. Measured on GLM 4.7 Flash, repairing it took searches from 1 to 7 per run
+and materially-correct turns from 6.7 to 9.3 of 18. Do not read a disclosure or all-three cell from the
+first table against one from the second; compare within a study.
+
 ## Reproducing this
 
 ```bash
@@ -294,6 +512,32 @@ Correcting a rate never requires another run against Bedrock — edit `MODEL_PRI
 
 ```bash
 python -m src.run --report-only results/run-myrun.json
+```
+
+The tight-window study is the same script against one model at a time, caching left off:
+
+```bash
+cd validation/community-plugin-A-B-D
+VALIDATION_AGENT_MODEL_ID=zai.glm-4.7 ./run.sh --total-turns 60 --tag tw-glm47
+VALIDATION_AGENT_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0 ./run.sh --total-turns 60 --tag tw-haiku45
+VALIDATION_AGENT_MODEL_ID=qwen.qwen3-next-80b-a3b ./run.sh --total-turns 60 --tag tw-qwen3
+```
+
+Re-running the parameter sweep needs no code edit: every knob in the block above reads an override off
+the environment, defaults unchanged, and each run records under `meta.sweep_overrides` which ones it
+read — so a result can never be read without its configuration.
+
+```bash
+VALIDATION_PREVIEW_TOKENS=1200 ./run.sh --configs all --total-turns 20 --repeats 3 --tag sweep-preview
+VALIDATION_GRAPH_EXPAND=0.65 ./run.sh --configs all --total-turns 20 --repeats 3 --tag sweep-fold
+```
+
+The leave-one-out arms behind finding 9 are `no-disclosure`, `no-relevance` and `no-graph`. They are
+accepted by `--configs` but deliberately not in the default set, so adding them cannot change what a
+published table means:
+
+```bash
+./run.sh --configs no-disclosure no-relevance no-graph --total-turns 20 --repeats 3 --tag loo
 ```
 
 See [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) for
