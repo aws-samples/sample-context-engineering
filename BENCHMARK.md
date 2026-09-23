@@ -440,6 +440,43 @@ you actually run. Every knob is reachable from the environment (`VALIDATION_PREV
 `VALIDATION_GRAPH_EXPAND`, `VALIDATION_TTL_CYCLES`, …) and each run records which ones it read, so
 repeating this sweep at another length is a list of variables rather than a list of commits.
 
+### 11. Those parameters are for this class only — on a 1M window they cost 50% for nothing
+
+The values in finding 10 were calibrated where evidence was starving. Replayed on **Opus 4.8**, a 1M
+window, caching off, the same five arms with those values against the published run above:
+
+| Configuration | Published | With these parameters | Δ tokens | Correct, then → now |
+|---|---:|---:|---:|:--:|
+| Baseline (no plugin) | 14,377,382 | 16,178,910 | +12.5% | 28/30 → 26/30 |
+| Disclosure | 9,466,084 | 11,690,932 | +23.5% | 27/30 → 28/30 |
+| Relevance | 12,766,237 | 15,133,294 | +18.5% | 29/30 → 28/30 |
+| Graph | 10,385,714 | 10,043,554 | −3.3% | 27/30 → 24/30 |
+| **All three** | **2,569,888** | **3,858,779** | **+50.2%** | 28/30 → 28/30 |
+
+**Read the baseline row first, because it is the yardstick.** The baseline runs no plugin, so no change
+in finding 10 can reach it — and it still moved +12.5% in tokens and lost two materially-correct turns.
+That is trap 2 and trap 3 measured directly: the agent picked a different tool path, and one extra call
+early in a 60-turn conversation rides along in every later one. **Nothing smaller than that is
+attributable.** The graph's −3.3% is not a change; the disclosure and relevance rows are barely outside
+it; the all-three row, at four times the yardstick, is.
+
+The mechanism is `preview_tokens` and `description_tokens`, and the graph-only arm isolates it. Both runs
+of that arm carry the same 5.4x jump in graph links that the live vector index produced (81 → 482), and
+its tokens went *down* — so the link count is not the amplifier. What only the all-three arm has is the
+filter's preview feeding the Card's Description, and its peak call went **49,943 → 81,065 (+62%)** while
+the resolution ladder barely moved (full 20/9/4 → 19/8/7). The graph is not folding differently; every
+rung is simply carrying more. Cancellations also went 14 → 24, which is the tightened guessed-call guard
+charging a round trip for each invented-argument call it now refuses.
+
+And it bought nothing: 28 of 30 both times. On a window this size there was no starvation to fix.
+
+**So these two budgets are regime-dependent, exactly as the graph's own thresholds already are.** The
+file carries `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE` because one set of graph knobs is wrong; the same
+is true of the preview pair across window classes — 800/100 where the window is not the constraint,
+2,000/250 where it is. What is written in
+[`src/config.py`](validation/community-plugin-A-B-D/src/config.py) today is the tight-window pair, so a
+large-window run using it should expect the row above rather than the published one.
+
 ## Prices and what they are based on
 
 Every dollar figure here is `measured units x a published list rate`. Nothing in this document is
