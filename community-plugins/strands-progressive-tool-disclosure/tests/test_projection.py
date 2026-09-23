@@ -68,6 +68,7 @@ from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolM
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
     FIND_TOOLS_NAME,
+    _CATALOG_SIGIL,
     _DisclosureState,
     _truncate_description,
 )
@@ -408,7 +409,8 @@ def _expected_projection(
                 expected.append(
                     {
                         "name": spec["name"],
-                        "description": _truncate_description(spec["description"], catalog_tokens),
+                        "description": _CATALOG_SIGIL
+                        + _truncate_description(spec["description"], catalog_tokens),
                         "inputSchema": copy.deepcopy(EMPTY_CLOSED_SCHEMA),
                     }
                 )

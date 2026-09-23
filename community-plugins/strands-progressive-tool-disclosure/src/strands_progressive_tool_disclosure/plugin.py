@@ -102,8 +102,24 @@ def _estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / _CHARS_PER_TOKEN)
 
 
+_CATALOG_SIGIL = "[+] "
+"""Prefix marking a description as a catalog entry whose parameters are not loaded.
+
+A catalog entry is otherwise indistinguishable from a tool that genuinely takes no arguments: the name
+is real, the description reads whole, and ``inputSchema`` is a valid empty object. The only statement
+that the list is incomplete lives in ``find_tools``'s own description -- a sibling tool's prose, not the
+entry the model is looking at when it decides. Measured on GLM 4.7 Flash over 60 turns, that gap costs
+the whole search path: ``searches: 0`` with seventeen premature cancellations, and one tool exposed at
+the end. The model does not disbelieve the catalog; it has no reason to suspect it.
+
+Four characters, so the signal is attached where the decision happens while the explanation stays in one
+place. Ninety catalog entries pay about ninety tokens per call between them, against a search round trip
+each time the model guesses instead.
+"""
+
+
 def _catalog_entry(spec: ToolSpec, catalog_tokens: int) -> ToolSpec:
-    """Build the catalog entry of ``spec``: verbatim name, short description, empty input schema.
+    """Build the catalog entry of ``spec``: verbatim name, short marked description, empty input schema.
 
     The name is copied character by character because it is the key the model calls the tool by:
     truncating or normalizing it would produce a spec that cannot be called. The description is the
@@ -112,17 +128,23 @@ def _catalog_entry(spec: ToolSpec, catalog_tokens: int) -> ToolSpec:
     never reach the provider, and the output shape only matters once the tool is about to be called,
     at which point the full specification is what gets projected.
 
+    The description carries :data:`_CATALOG_SIGIL`, which is what tells the model this entry is a
+    listing rather than a complete specification. The sigil is added AFTER truncation and is not charged
+    against ``catalog_tokens``: a budget that could swallow the marker would leave the entry looking
+    complete at exactly the settings where the catalog is tightest, which is the opposite of what the
+    budget is for.
+
     Args:
         spec: Full specification as registered in the ``ToolRegistry``. Left unmodified.
         catalog_tokens: Catalog budget in tokens. Must be at least ``1``.
 
     Returns:
-        A new ``ToolSpec`` carrying only ``name``, ``description`` and an empty, closed
+        A new ``ToolSpec`` carrying only ``name``, a marked ``description`` and an empty, closed
         ``inputSchema``.
     """
     return {
         "name": spec["name"],
-        "description": _truncate_description(spec["description"], catalog_tokens),
+        "description": _CATALOG_SIGIL + _truncate_description(spec["description"], catalog_tokens),
         # A fresh schema per entry: a shared dict would let one consumer's mutation reach every entry.
         "inputSchema": {"json": {"type": "object", "properties": {}, "additionalProperties": False}},
     }
@@ -916,10 +938,13 @@ class ProgressiveToolDisclosure(Plugin):
     async def find_tools(self, need: str, tool_context: ToolContext) -> str:
         """Find the tools that can do what you need.
 
-        Most tools are listed to you by name and a one-line description only, without their
-        parameters. Call this tool with a description of what you are trying to do, in your own
-        words, and the tools that match it will arrive with their full parameters on your next turn.
-        Then call the one you want.
+        Any tool whose description begins with `[+]` is a listing, not a full specification: you are
+        seeing its name and one line about it, and its parameters have not been loaded. Calling one of
+        those directly does not work, because you would be guessing its arguments.
+
+        Call this tool instead, with a description of what you are trying to do in your own words. The
+        tools that match arrive with their full parameters on your next turn, and then you call the one
+        you want. A tool listed without `[+]` is complete and you can call it straight away.
 
         Args:
             need: What you are trying to do, described in your own words. A capability, not a tool
@@ -1025,9 +1050,20 @@ class ProgressiveToolDisclosure(Plugin):
         if was_exposed or name in self._always_available:
             return
 
-        # An empty call to a tool that requires arguments is the signature of a call made off a
-        # catalog entry: the model knew the name but never saw the parameters.
-        if _requires_parameters(agent.tool_registry.registry[name].tool_spec) and not event.tool_use.get("input"):
+        # A call to a tool whose schema was never projected is a call made off a catalog entry: the
+        # model knew the name but never saw the parameters. Whether it left the arguments out or made
+        # them up is not the distinction that matters -- it could not have known them either way.
+        #
+        # The guard used to require an EMPTY input, so an invented-argument call slipped through and ran
+        # against a schema the model had not seen. That is the worse of the two outcomes: an empty call
+        # fails loudly and gets one retry with the real schema, while invented arguments can satisfy a
+        # permissive tool and return a confidently wrong answer nothing in the run marks as suspect.
+        # Measured on GLM 4.7 Flash, the model guesses constantly -- seventeen empty guesses were
+        # cancelled in one run, and the argumented ones were never counted at all.
+        #
+        # The cost is one round trip on a guess that happened to be right. The cancellation says the
+        # parameters are available now, and the renewal above has already made that true.
+        if _requires_parameters(agent.tool_registry.registry[name].tool_spec):
             event.cancel_tool = _PREMATURE_CALL_MESSAGE.format(name=name)
             _instrument(lambda: _record_premature_cancellation(state, name))
 

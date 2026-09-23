@@ -395,7 +395,7 @@ def test_expiration_never_touches_the_registry_or_tool_names(
     tool_input=st.sampled_from([{}, None, {"owner": "A1"}, {"account": "A1", "amount": "10"}]),
     cycle=cycle_strategy,
 )
-def test_a_premature_call_is_cancelled_exactly_under_the_four_condition_conjunction(
+def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunction(
     name: str,
     was_exposed: bool,
     always_available: list[str],
@@ -404,7 +404,16 @@ def test_a_premature_call_is_cancelled_exactly_under_the_four_condition_conjunct
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 18.
 
-    A premature call is cancelled exactly under the four-condition conjunction.
+    A premature call is cancelled exactly under the three-condition conjunction.
+
+    The conjunction used to carry a fourth conjunct, ``not event.tool_use.get("input")``, which let a
+    call with INVENTED arguments run against a schema the model had never seen. Whether the model left
+    the arguments out or made them up is not a distinction it could have made: it had a name and one
+    line of description either way. The invented case is the more dangerous of the two, because
+    permissive arguments can return a confidently wrong answer that nothing marks as suspect, where an
+    empty call fails loudly and is retried with the real schema.
+
+    So ``tool_input`` is still parameterized here, and the assertion is now that it makes NO difference.
 
     Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7.
     """
@@ -424,12 +433,12 @@ def test_a_premature_call_is_cancelled_exactly_under_the_four_condition_conjunct
     plugin._on_before_tool_call(event)
 
     # The conjunction, spelled out: each conjunct false on its own is a reason to let the call run.
+    # The arguments the call carried are absent from it on purpose.
     exp_cancelled = (
         is_registered
         and not was_exposed
         and name not in always_available
         and _requires_parameters(registry[name].tool_spec if is_registered else {})
-        and not event.tool_use.get("input")
     )
     assert bool(event.cancel_tool) is exp_cancelled
     if exp_cancelled:

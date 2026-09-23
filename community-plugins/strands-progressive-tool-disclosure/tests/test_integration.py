@@ -46,7 +46,7 @@ from strands.types.tools import ToolContext, ToolSpec
 
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
-from strands_progressive_tool_disclosure.plugin import FIND_TOOLS_NAME
+from strands_progressive_tool_disclosure.plugin import _CATALOG_SIGIL, FIND_TOOLS_NAME
 
 EMPTY_CLOSED_SCHEMA = {"json": {"type": "object", "properties": {}, "additionalProperties": False}}
 """The schema a catalog entry carries. Its presence is how an unexposed tool is recognized."""
@@ -261,7 +261,12 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
     entry = first["list_investment_transactions"]
     assert entry["name"] == registered["name"]
     assert entry["inputSchema"] == EMPTY_CLOSED_SCHEMA
-    assert registered["description"].startswith(entry["description"].removesuffix("..."))
+    # The sigil is what tells the model this is a listing: an entry carrying a real name, a readable
+    # description and a valid empty schema is otherwise indistinguishable from a tool that genuinely
+    # takes no arguments, and the only statement otherwise lived in find_tools' own description.
+    assert entry["description"].startswith(_CATALOG_SIGIL)
+    body = entry["description"][len(_CATALOG_SIGIL) :]
+    assert registered["description"].startswith(body.removesuffix("..."))
     assert entry != registered
     # The index was built once, over the specifications this very call offered — nothing else.
     assert index.built == [[spec["name"] for spec in _model_call(agent).tool_specs]]
