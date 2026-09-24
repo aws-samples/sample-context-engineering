@@ -17,6 +17,7 @@ tool specifications" is asserted against a recording rather than assumed.
 """
 
 import asyncio
+import copy
 import dataclasses
 from collections.abc import AsyncGenerator, Coroutine, Sequence
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ from strands_progressive_tool_disclosure.plugin import (
     _SUMMARY_SYSTEM_PROMPT,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
+    _drop_plugin_exchanges,
     _model_summarizer,
     _truncate_description,
 )
@@ -738,16 +740,20 @@ def _after_tool_call(agent: Agent, name: str, cancel_message: str | None = None)
     )
 
 
-def test_a_loaded_tool_is_released_from_tool_specs_once_it_has_returned():
-    """After use, ``tool_specs`` goes back to the mandatory set; the history does not keep it."""
+def test_a_loaded_tool_stays_while_used_and_is_released_after_ttl_idle_cycles():
+    """Each call renews the tool; ``ttl_cycles`` cycles without a call send it back to the catalog."""
     plugin = _plugin()
     agent = _agent(plugin)
+    ttl = plugin._ttl_cycles
 
     _load(plugin, agent, ["send_wire"])
-    loaded = _run(plugin._projection_handler(_model_call(agent)))
-    assert "send_wire" in {spec["name"] for spec in loaded.tool_specs}
+    for cycle in range(1, ttl + 3):
+        agent.event_loop_metrics.cycle_count = cycle
+        projection = _run(plugin._projection_handler(_model_call(agent)))
+        assert "send_wire" in {spec["name"] for spec in projection.tool_specs}
+        plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
 
-    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
+    agent.event_loop_metrics.cycle_count += ttl + 1
     released = _run(plugin._projection_handler(_model_call(agent)))
 
     assert {spec["name"] for spec in released.tool_specs} == {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
@@ -758,17 +764,73 @@ def test_a_loaded_tool_is_released_from_tool_specs_once_it_has_returned():
     assert again.cancel_tool
 
 
-def test_a_cancelled_call_releases_nothing_and_parallel_calls_share_one_load():
-    """Release waits for the next projection, so a second parallel call still finds the tool loaded."""
+def test_a_cancelled_call_renews_nothing():
+    """A cancelled call ran nothing, so it does not extend the tool's window."""
     plugin = _plugin()
     agent = _agent(plugin)
     _load(plugin, agent, ["send_wire"])
-    _run(plugin._projection_handler(_model_call(agent)))
+    loaded_at = plugin._states[agent].exposed["send_wire"]
 
+    agent.event_loop_metrics.cycle_count = loaded_at + 2
     plugin._on_after_tool_call(_after_tool_call(agent, "send_wire", cancel_message="cancelled"))
-    assert not plugin._states[agent].consumed
+    assert plugin._states[agent].exposed["send_wire"] == loaded_at
 
     plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
-    second = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
-    plugin._on_before_tool_call(second)
-    assert not second.cancel_tool
+    assert plugin._states[agent].exposed["send_wire"] == loaded_at + 2
+
+
+def _exchange(tool_use_id: str, name: str) -> list[dict[str, Any]]:
+    """One assistant call to ``name`` and the user message carrying its result."""
+    return [
+        {"role": "assistant", "content": [{"toolUse": {"toolUseId": tool_use_id, "name": name, "input": {}}}]},
+        {"role": "user", "content": [{"toolResult": {"toolUseId": tool_use_id, "content": [{"text": "ok"}]}}]},
+    ]
+
+
+def test_plugin_exchanges_already_acted_on_leave_the_call_but_not_the_history():
+    """A closed load pair is dead weight: it leaves the call's copy, the agent's history keeps it."""
+    question = {"role": "user", "content": [{"text": "wire 10 to account 1"}]}
+    messages = [
+        question,
+        *_exchange("t1", GET_TOOL_DETAILS_NAME),
+        *_exchange("t2", "send_wire"),
+        {"role": "assistant", "content": [{"text": "Done."}]},
+        {"role": "user", "content": [{"text": "and the balance?"}]},
+    ]
+    original = copy.deepcopy(messages)
+
+    trimmed = _drop_plugin_exchanges(messages)
+
+    assert trimmed == [question, *_exchange("t2", "send_wire"), *messages[-2:]]
+    assert messages == original
+
+
+def test_the_exchange_in_flight_and_mixed_calls_are_kept_safe():
+    """The last two messages stay whole; in a mixed call only the plugin blocks go."""
+    in_flight = [{"role": "user", "content": [{"text": "q"}]}, *_exchange("t1", GET_TOOL_DETAILS_NAME)]
+    assert _drop_plugin_exchanges(in_flight) is in_flight
+
+    mixed = [
+        {"role": "user", "content": [{"text": "q"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"toolUse": {"toolUseId": "t1", "name": FIND_TOOLS_NAME, "input": {}}},
+                {"toolUse": {"toolUseId": "t2", "name": "check_balance", "input": {}}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": "t1", "content": [{"text": "matches"}]}},
+                {"toolResult": {"toolUseId": "t2", "content": [{"text": "10"}]}},
+            ],
+        },
+        {"role": "assistant", "content": [{"text": "10"}]},
+        {"role": "user", "content": [{"text": "thanks"}]},
+    ]
+    trimmed = _drop_plugin_exchanges(mixed)
+
+    assert [m["role"] for m in trimmed] == ["user", "assistant", "user", "assistant", "user"]
+    assert trimmed[1]["content"] == [mixed[1]["content"][1]]
+    assert trimmed[2]["content"] == [mixed[2]["content"][1]]

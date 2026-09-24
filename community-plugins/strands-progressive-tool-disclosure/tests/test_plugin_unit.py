@@ -250,7 +250,7 @@ def test_the_constructor_adopts_the_documented_defaults():
     assert plugin._catalog_chars == _DEFAULT_CATALOG_CHARS == 80
     # No summarizer means the agent's own model writes the lines, decided per call rather than here.
     assert plugin._summarizer is None
-    assert plugin._ttl_cycles == _DEFAULT_TTL_CYCLES == 5
+    assert plugin._ttl_cycles == _DEFAULT_TTL_CYCLES == 3
     assert plugin._top_k == _DEFAULT_TOP_K == 3
     assert plugin._always_available == ()
     # Requirement 2.6: no index given means the standard-library lexical one, which needs no network.

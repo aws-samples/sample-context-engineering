@@ -586,13 +586,13 @@ def test_a_premature_call_is_cancelled_exactly_under_the_conjunction(
     ttl_cycles=st.integers(min_value=1, max_value=10),
     extra_cycles=st.integers(min_value=1, max_value=10),
 )
-def test_each_use_releases_the_schema_and_the_next_use_loads_again(
+def test_repeated_use_keeps_a_schema_resident_without_re_loading(
     ttl_cycles: int,
     extra_cycles: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 16.
 
-    A loaded tool leaves ``tool_specs`` once it has returned, so residency is never bought by history.
+    Repeated use keeps a schema resident without re-loading; ``ttl_cycles`` idle cycles release it.
 
     Validates: Requirements 7.3, 7.4.
     """
@@ -605,20 +605,19 @@ def test_each_use_releases_the_schema_and_the_next_use_loads_again(
     first = _run(plugin._projection_handler(_model_call(agent)))
     assert _is_cataloged(first, "list_accounts")
 
-    # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING -- so the
-    # projection that follows it still carries the catalog line and not the specification.
+    # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING.
     found = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
     assert "list_accounts" in found
     assert (index.searches, plugin._states[agent].searches) == (1, 1)
     assert plugin._states[agent].exposed == {}
     assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
 
-    # Every use is load -> call -> release: the projection right after the return is back to the
-    # catalog line, whatever the TTL says.
-    uses = ttl_cycles + extra_cycles
-    for cycle in range(1, uses + 1):
+    _load(plugin, agent, ["list_accounts"])
+
+    # Used in every cycle of a stretch longer than the TTL: each call renews, the projection carries the
+    # full specification, and no cycle of the stretch pays for a second load.
+    for cycle in range(1, ttl_cycles + extra_cycles + 1):
         agent.event_loop_metrics.cycle_count = cycle
-        _load(plugin, agent, ["list_accounts"])
         projected = _run(plugin._projection_handler(_model_call(agent)))
         assert _projected(projected)["list_accounts"] == registered
         assert "list_accounts" not in _catalog_names(projected)
@@ -627,11 +626,14 @@ def test_each_use_releases_the_schema_and_the_next_use_loads_again(
         plugin._on_before_tool_call(call)
         assert not call.cancel_tool
         plugin._on_after_tool_call(_after_tool_call(agent, "list_accounts"))
+        assert plugin._states[agent].exposed["list_accounts"] == cycle
 
-        assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
-
-    assert plugin._states[agent].loads == uses
+    assert plugin._states[agent].loads == 1
     assert plugin._states[agent].premature_cancellations == 0
+
+    # And the moment use stops, the tool ages out: residency is bought by use, not by the history.
+    agent.event_loop_metrics.cycle_count += ttl_cycles + 1
+    assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
 
 
 @PROPERTY_SETTINGS

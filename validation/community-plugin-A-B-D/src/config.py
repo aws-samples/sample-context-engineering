@@ -398,7 +398,7 @@ class Thresholds:
     catalog_chars: int = 80
     """Character limit of one catalog line's summary in the disclosure catalog (system prompt)."""
 
-    ttl_cycles: int = 5
+    ttl_cycles: int = 3
     """Cycles a disclosed tool schema stays resident after its last use."""
 
     top_k: int = 4
@@ -418,7 +418,7 @@ THRESHOLDS = Thresholds(
     chunk_tokens=_env_int("VALIDATION_CHUNK_TOKENS", 500),
     relevance_threshold=_env_float("VALIDATION_RELEVANCE_THRESHOLD", 0.02),
     catalog_chars=_env_int("VALIDATION_CATALOG_CHARS", 80),
-    ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 5),
+    ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 3),
     top_k=_env_int("VALIDATION_TOP_K", 4),
     min_cards=_env_int("VALIDATION_MIN_CARDS", 3),
 )

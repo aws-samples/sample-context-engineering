@@ -415,15 +415,16 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
     assert summarizer.asked == [WANTED]
 
     # 5. The call: the arguments validate against the specification that just arrived and the tool
-    # runs. Its return marks it for release; nothing is released until the next projection.
+    # runs. Its return renews the load at the current cycle.
     agent.event_loop_metrics.cycle_count = 2
     event = _call_tool(runner, agent, WANTED, {"account": "IA-1", "since": "2026-01-01"})
     assert event.tool_result["status"] == "success"
     assert event.tool_result["content"] == [{"text": "IA-1:2026-01-01"}]
-    assert plugin._states[agent].consumed == {WANTED}
+    assert plugin._states[agent].exposed == {WANTED: 2}
 
-    # 6. The release: the next projection is back to the two plugin tools, and the tool is a catalog
-    # line again. The history's toolUse for it does not keep it resident.
+    # 6. The release: a full TTL without a call sends it back to the catalog, and the projection is
+    # back to the two plugin tools. The history's toolUse for it does not keep it resident.
+    agent.event_loop_metrics.cycle_count = 2 + TTL_CYCLES + 1
     released = _run(runner, plugin._projection_handler(_model_call(agent)))
     assert set(_projected(released)) == {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
     assert WANTED in _catalog(released)
