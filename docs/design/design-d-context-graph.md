@@ -633,7 +633,7 @@ sequenceDiagram
     G->>G: step 2 — whoever rose pulls its neighbors
     G->>G: sorts, spends body_budget, distributes across three resolutions
     G-->>AG: full / description / title, per card
-    Note over AG: InvokeModelStage.Input — D removes from the history<br/>and folds the descriptions at the end; publishes the tool names<br/>that B's referenced consumes
+    Note over AG: InvokeModelStage.Input — D removes from the history<br/>and folds the descriptions at the end · publishes the tool names<br/>that B's referenced consumes
     AG->>M: call
     Note over AG: the in-memory conversation stays intact
     end
