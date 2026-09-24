@@ -8,19 +8,25 @@ Feature: progressive-tool-disclosure-plugin, Property 17: Expiration never touch
 Validates: Requirements 7.7, 9.6.
 
 Feature: progressive-tool-disclosure-plugin, Property 18: A premature call is cancelled exactly under
-the four-condition conjunction.
+the conjunction.
 Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7.
 
 Feature: progressive-tool-disclosure-plugin, Property 16: Repeated use keeps a schema resident without
-re-searching.
+re-loading.
 Validates: Requirements 7.3, 7.4.
 
 The lifecycle is where the plugin decides what the model is allowed to see, so these properties are
-asserted against the real primitives (``_expire``, ``_renew``, ``_on_before_tool_call``) and, where the
-claim is about what reaches the provider, against a real ``Agent`` carrying a real ``ToolRegistry``.
-The agent runs against a stub model that raises if it is ever called, and the search index is a
-deterministic double that counts its calls, so no example reaches the network and "without
-re-searching" is a countable assertion rather than an inference.
+asserted against the real primitives (``_expire``, ``_renew`` through ``get_tool_details`` and
+``_on_before_tool_call``) and, where the claim is about what reaches the provider, against a real
+``Agent`` carrying a real ``ToolRegistry``.
+
+A tool that is NOT exposed is absent from ``tool_specs`` altogether and appears as one ``- name:
+summary`` line of the system-prompt catalog. So "exposed" and "cataloged" are read off two different
+fields of the projected context here, not off two shapes of the same specification.
+
+The agent runs against a stub model that raises if it is ever called, the summarizer is a deterministic
+stub, and the search index is a deterministic double that counts its calls, so no example reaches the
+network and "without re-loading" is a countable assertion rather than an inference.
 """
 
 import asyncio
@@ -37,12 +43,14 @@ from strands.agent.agent import Agent as AgentType
 from strands.hooks.events import BeforeToolCallEvent
 from strands.models.model import Model
 from strands.tools.decorator import tool
-from strands.types.tools import ToolContext
+from strands.types.tools import ToolContext, ToolSpec
 
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
+    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
+    GET_TOOL_DETAILS_NAME,
     _DisclosureState,
     _expire,
     _requires_parameters,
@@ -54,8 +62,8 @@ PROPERTY_SETTINGS = settings(
     suppress_health_check=[HealthCheck.too_slow],
 )
 
-EMPTY_CLOSED_SCHEMA = {"json": {"type": "object", "properties": {}, "additionalProperties": False}}
-"""The schema a catalog entry carries. Its presence is how an unexposed tool is recognized."""
+_CATALOG_LINE_PREFIX = "- "
+"""Opens every catalog line in the system-prompt block. Nothing in the block's preamble starts with it."""
 
 REQUIRING_TOOLS = ("list_accounts", "send_wire")
 """Registered tools that declare a required parameter: the premature-call candidates."""
@@ -64,6 +72,9 @@ PARAMETERLESS_TOOLS = ("ping", "status")
 """Registered tools callable with no arguments, so an empty call to them is legitimate."""
 
 REGISTERED_TOOLS = (*REQUIRING_TOOLS, *PARAMETERLESS_TOOLS)
+
+PLUGIN_TOOLS = (FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME)
+"""Both vended tools. Projected in full on every call and never written to ``exposed``."""
 
 name_strategy = st.sampled_from([f"tool_{position}" for position in range(6)])
 
@@ -93,6 +104,23 @@ class _StubModel(Model):
         """Refuse: these properties are about projection and exposure, never about a model call."""
         raise AssertionError("the language model was called")
         yield
+
+
+def _stub_summarizer(spec: ToolSpec, max_chars: int) -> str:
+    """Write a catalog line without a model call, so every example stays offline and byte-stable.
+
+    Every tool registered here has a description short enough to be used verbatim, so this is a
+    guard rather than a participant: were a description to grow past the limit, the projection would
+    reach for this instead of the stub model, which raises.
+
+    Args:
+        spec: Full specification as registered.
+        max_chars: Character limit of the line.
+
+    Returns:
+        A deterministic line derived from the tool's name.
+    """
+    return f"summary of {spec['name']}"[:max_chars]
 
 
 @tool
@@ -133,7 +161,7 @@ class _CountingIndex:
 
     It ignores the need entirely: the properties here are about the exposure lifecycle, and a scorer
     that reacts to wording would make "searched once" depend on the generated text. The call count is
-    the point — Requirement 7.4 is a claim about how many searches a stretch of repeated use costs.
+    the point — a search costs a cycle whether or not the model goes on to load anything.
     """
 
     def __init__(self, ranked: tuple[str, ...] = REQUIRING_TOOLS) -> None:
@@ -160,11 +188,24 @@ class _CountingIndex:
         ]
 
 
-def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
-    """Build an offline agent carrying the four registered tools plus the plugin's search tool.
+def _plugin(**overrides: Any) -> ProgressiveToolDisclosure:
+    """Build a plugin wired to the offline doubles, with the deterministic summarizer.
 
     Args:
-        plugin: The plugin to register, which is what adds ``find_tools`` and the pre-call hook.
+        **overrides: Constructor arguments to set or replace.
+
+    Returns:
+        The configured plugin.
+    """
+    return ProgressiveToolDisclosure(**{"index": _CountingIndex(), "summarizer": _stub_summarizer, **overrides})
+
+
+def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
+    """Build an offline agent carrying the four registered tools plus the plugin's two vended tools.
+
+    Args:
+        plugin: The plugin to register, which is what adds ``find_tools``, ``get_tool_details`` and the
+            pre-call hook.
 
     Returns:
         An agent whose registry is real, so ``tool_names`` and the registered specifications are the
@@ -181,7 +222,7 @@ def _model_call(agent: Agent) -> InvokeModelContext:
     """Build the invocation context of one model call, offering every registered specification.
 
     Offering the whole registry is what keeps the call off the passthrough path: a name the registry
-    does not have, or a missing ``find_tools``, is a structural guard rather than a projection.
+    does not have, or a missing plugin tool, is a structural guard rather than a projection.
 
     Args:
         agent: Agent of the call.
@@ -209,7 +250,7 @@ def _before_tool_call(agent: Agent, name: str, tool_input: dict[str, Any] | None
     Args:
         agent: Agent of the call.
         name: Tool name the model asked for.
-        tool_input: Arguments the model passed, empty for a call made off a catalog entry.
+        tool_input: Arguments the model passed, empty for a call made off a catalog line.
 
     Returns:
         The event the hook receives.
@@ -222,6 +263,11 @@ def _before_tool_call(agent: Agent, name: str, tool_input: dict[str, Any] | None
     )
 
 
+def _tool_context(agent: Agent) -> ToolContext:
+    """Build the minimal tool context the two vended tools read: the agent, and nothing else."""
+    return cast("ToolContext", SimpleNamespace(agent=agent))
+
+
 def _run(step: Coroutine[Any, Any, _Resolved]) -> _Resolved:
     """Drive one awaited plugin step to completion from a synchronous test.
 
@@ -230,7 +276,7 @@ def _run(step: Coroutine[Any, Any, _Resolved]) -> _Resolved:
     assertion in it would pass by not running at all.
 
     Args:
-        step: The coroutine to run: a projection or a search.
+        step: The coroutine to run: a projection, a search or a load.
 
     Returns:
         What the step returned.
@@ -238,14 +284,60 @@ def _run(step: Coroutine[Any, Any, _Resolved]) -> _Resolved:
     return asyncio.run(step)
 
 
+def _load(plugin: ProgressiveToolDisclosure, agent: Agent, names: list[str]) -> str:
+    """Load ``names`` through the real tool, which is the one path that exposes a schema.
+
+    Args:
+        plugin: Plugin under test.
+        agent: Agent of the call.
+        names: Names to load, as the model would pass them.
+
+    Returns:
+        What the tool answered the model.
+    """
+    return _run(plugin.get_tool_details(names, _tool_context(agent)))
+
+
 def _projected(context: InvokeModelContext) -> dict[str, dict[str, Any]]:
-    """Index a projection by tool name, for asking which form each tool arrived in."""
+    """Index a projection by tool name, for asking which tools are carrying a full specification."""
     return {spec["name"]: spec for spec in context.tool_specs}
 
 
-def _is_catalog_entry(spec: dict[str, Any]) -> bool:
-    """Report whether ``spec`` is the reduced form rather than the registered full specification."""
-    return spec["inputSchema"] == EMPTY_CLOSED_SCHEMA
+def _catalog_names(context: InvokeModelContext) -> set[str]:
+    """Collect the names listed in the projected context's system-prompt catalog block.
+
+    Args:
+        context: The projected context.
+
+    Returns:
+        The catalogued names, empty when no block was appended.
+    """
+    prompt = context.system_prompt
+    if not isinstance(prompt, str):
+        return set()
+
+    return {
+        line.removeprefix(_CATALOG_LINE_PREFIX).split(":", 1)[0].strip()
+        for line in prompt.splitlines()
+        if line.startswith(_CATALOG_LINE_PREFIX)
+    }
+
+
+def _is_cataloged(context: InvokeModelContext, name: str) -> bool:
+    """Report whether ``name`` reached the model as a catalog line rather than a full specification.
+
+    Both halves are asserted, because the projection and the catalog partition the registry: a name
+    in neither would be invisible to the model, and a name in both would contradict the block's own
+    claim that what it lists is not callable yet.
+
+    Args:
+        context: The projected context.
+        name: Tool name to locate.
+
+    Returns:
+        ``True`` when the name is absent from ``tool_specs`` and present in the catalog block.
+    """
+    return name not in _projected(context) and name in _catalog_names(context)
 
 
 def _registry_snapshot(agent: Agent) -> dict[str, dict[str, Any]]:
@@ -258,13 +350,13 @@ def _registry_snapshot(agent: Agent) -> dict[str, dict[str, Any]]:
     exposures=st.dictionaries(name_strategy, cycle_strategy, max_size=6),
     cycle=cycle_strategy,
     ttl_cycles=ttl_strategy,
-    searches=st.integers(min_value=0, max_value=9),
+    counted=st.integers(min_value=0, max_value=9),
 )
 def test_expiration_keeps_exactly_the_exposures_inside_the_boundary(
     exposures: dict[str, int],
     cycle: int,
     ttl_cycles: int,
-    searches: int,
+    counted: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 15.
 
@@ -274,9 +366,11 @@ def test_expiration_keeps_exactly_the_exposures_inside_the_boundary(
     """
     state = _DisclosureState(
         exposed=dict(exposures),
-        fingerprint=frozenset({"find_tools"}),
-        searches=searches,
-        premature_cancellations=searches,
+        fingerprint=frozenset(_PLUGIN_TOOL_NAMES),
+        searches=counted,
+        loads=counted,
+        premature_cancellations=counted,
+        summary_usage={"calls": counted},
     )
 
     _expire(state, cycle, ttl_cycles)
@@ -286,8 +380,9 @@ def test_expiration_keeps_exactly_the_exposures_inside_the_boundary(
     assert state.exposed == exp_exposed
 
     # Expiration decides nothing else: the fingerprint and the counters are another concern entirely.
-    assert state.fingerprint == frozenset({"find_tools"})
-    assert (state.searches, state.premature_cancellations) == (searches, searches)
+    assert state.fingerprint == frozenset(_PLUGIN_TOOL_NAMES)
+    assert (state.searches, state.loads, state.premature_cancellations) == (counted, counted, counted)
+    assert state.summary_usage == {"calls": counted}
 
     # Idempotent at the same cycle, so a second projection in one cycle cannot drop more.
     _expire(state, cycle, ttl_cycles)
@@ -314,7 +409,7 @@ def test_the_exposure_survives_at_the_boundary_and_is_dropped_one_cycle_later(tt
 
 @PROPERTY_SETTINGS
 @given(age=st.integers(min_value=0, max_value=8), ttl_cycles=ttl_strategy, cycle=st.integers(min_value=8, max_value=30))
-def test_a_live_exposure_projects_its_full_specification_and_an_expired_one_a_catalog_entry(
+def test_a_live_exposure_projects_its_full_specification_and_an_expired_one_is_cataloged(
     age: int,
     ttl_cycles: int,
     cycle: int,
@@ -325,22 +420,28 @@ def test_a_live_exposure_projects_its_full_specification_and_an_expired_one_a_ca
 
     Validates: Requirements 7.1, 7.2, 7.5.
     """
-    plugin = ProgressiveToolDisclosure(index=_CountingIndex(), ttl_cycles=ttl_cycles)
+    plugin = _plugin(ttl_cycles=ttl_cycles)
     agent = _agent(plugin)
     agent.event_loop_metrics.cycle_count = cycle
     plugin._states[agent] = _DisclosureState(exposed={"list_accounts": cycle - age})
 
-    projected = _projected(_run(plugin._projection_handler(_model_call(agent))))
+    projected = _run(plugin._projection_handler(_model_call(agent)))
 
     exp_live = age <= ttl_cycles
     registered = agent.tool_registry.registry["list_accounts"].tool_spec
 
     # Requirement 7.2: while the exposure is live, the call carries the parameters the model needs.
-    assert (projected["list_accounts"] == registered) is exp_live
-    assert _is_catalog_entry(projected["list_accounts"]) is not exp_live
+    assert (_projected(projected).get("list_accounts") == registered) is exp_live
+    # And once it lapses the tool does not vanish: it drops to one catalog line in the system prompt.
+    assert _is_cataloged(projected, "list_accounts") is not exp_live
 
     # Requirement 7.1: the exposure is dropped from the state, not merely omitted from this call.
     assert ("list_accounts" in plugin._states[agent].exposed) is exp_live
+
+    # Both vended tools are projected in full on every call, so neither is ever a catalog line.
+    for name in PLUGIN_TOOLS:
+        assert _projected(projected)[name] == agent.tool_registry.registry[name].tool_spec
+        assert name not in _catalog_names(projected)
 
 
 @PROPERTY_SETTINGS
@@ -360,7 +461,7 @@ def test_expiration_never_touches_the_registry_or_tool_names(
 
     Validates: Requirements 7.7, 9.6.
     """
-    plugin = ProgressiveToolDisclosure(index=_CountingIndex(), ttl_cycles=ttl_cycles)
+    plugin = _plugin(ttl_cycles=ttl_cycles)
     agent = _agent(plugin)
     agent.event_loop_metrics.cycle_count = cycle
     plugin._states[agent] = _DisclosureState(exposed=dict(exposures))
@@ -381,21 +482,22 @@ def test_expiration_never_touches_the_registry_or_tool_names(
     assert set(agent.tool_names) == set(exp_registry)
 
     # Requirement 7.7: the registry keeps the same entries, and their specifications are unmodified —
-    # the catalog entry is a copy sent to the provider, never a rewrite of what was registered.
+    # the projection is what is sent to the provider, never a rewrite of what was registered.
     assert agent.tool_registry.registry == exp_entries
     assert _registry_snapshot(agent) == exp_registry
-    assert FIND_TOOLS_NAME in agent.tool_registry.registry
+    for name in PLUGIN_TOOLS:
+        assert name in agent.tool_registry.registry
 
 
 @PROPERTY_SETTINGS
 @given(
-    name=st.sampled_from([*REGISTERED_TOOLS, FIND_TOOLS_NAME, "not_a_tool"]),
+    name=st.sampled_from([*REGISTERED_TOOLS, *PLUGIN_TOOLS, "not_a_tool"]),
     was_exposed=st.booleans(),
     always_available=st.lists(st.sampled_from(REGISTERED_TOOLS), max_size=2, unique=True),
     tool_input=st.sampled_from([{}, None, {"owner": "A1"}, {"account": "A1", "amount": "10"}]),
     cycle=cycle_strategy,
 )
-def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunction(
+def test_a_premature_call_is_cancelled_exactly_under_the_conjunction(
     name: str,
     was_exposed: bool,
     always_available: list[str],
@@ -404,27 +506,26 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 18.
 
-    A premature call is cancelled exactly under the three-condition conjunction.
+    A premature call is cancelled exactly under the conjunction.
 
-    The conjunction used to carry a fourth conjunct, ``not event.tool_use.get("input")``, which let a
-    call with INVENTED arguments run against a schema the model had never seen. Whether the model left
-    the arguments out or made them up is not a distinction it could have made: it had a name and one
-    line of description either way. The invented case is the more dangerous of the two, because
-    permissive arguments can return a confidently wrong answer that nothing marks as suspect, where an
-    empty call fails loudly and is retried with the real schema.
+    The conjunction used to carry a conjunct ``not event.tool_use.get("input")``, which let a call with
+    INVENTED arguments run against a schema the model had never seen. Whether the model left the
+    arguments out or made them up is not a distinction it could have made: it had a name and one line
+    of summary either way. The invented case is the more dangerous of the two, because permissive
+    arguments can return a confidently wrong answer that nothing marks as suspect, where an empty call
+    fails loudly and is retried with the real schema.
 
-    So ``tool_input`` is still parameterized here, and the assertion is now that it makes NO difference.
+    So ``tool_input`` is still parameterized here, and the assertion is that it makes NO difference.
 
-    The conjunction also carries an exemption for the search tool, which it used to be missing.
-    ``_project`` emits ``find_tools`` unconditionally, so its specification is in front of the model on
-    every call, yet it is never recorded in ``exposed`` -- that map holds what a search revealed. The
-    guard read a call to it as a call made off a catalog entry and cancelled the one call that opens
-    the discovery path, telling the model its parameters "were not loaded" moments after it had read
-    them. Hypothesis found this by generating ``name='find_tools'``.
+    The conjunction also exempts BOTH vended tools. ``_compose_projection`` emits them unconditionally,
+    so their specifications are in front of the model on every call, yet neither is ever recorded in
+    ``exposed`` -- that map holds what was loaded. The guard would otherwise read a call to one of them
+    as a call made off a catalog line and cancel the very calls that open the discovery path, telling
+    the model its parameters "were not loaded" moments after it had read them.
 
     Validates: Requirements 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7.
     """
-    plugin = ProgressiveToolDisclosure(index=_CountingIndex(), always_available=always_available)
+    plugin = _plugin(always_available=always_available)
     agent = _agent(plugin)
     agent.event_loop_metrics.cycle_count = cycle
 
@@ -445,7 +546,7 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
         is_registered
         and not was_exposed
         and name not in always_available
-        and name != FIND_TOOLS_NAME
+        and name not in _PLUGIN_TOOL_NAMES
         and _requires_parameters(registry[name].tool_spec if is_registered else {})
     )
     assert bool(event.cancel_tool) is exp_cancelled
@@ -456,7 +557,11 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
         assert plugin._states[agent].exposed[name] == cycle
         assert plugin._states[agent].premature_cancellations == 1
 
-    if is_registered:
+    if is_registered and name in _PLUGIN_TOOL_NAMES:
+        # The plugin tools are projected in full on every call, so the call records no exposure for them.
+        if not was_exposed:
+            assert name not in plugin._states[agent].exposed
+    elif is_registered:
         # Requirement 7.3: a call is the strongest evidence the schema is still worth sending.
         assert plugin._states[agent].exposed[name] == cycle
     else:
@@ -473,43 +578,108 @@ def test_a_premature_call_is_cancelled_exactly_under_the_three_condition_conjunc
     ttl_cycles=st.integers(min_value=1, max_value=10),
     extra_cycles=st.integers(min_value=1, max_value=10),
 )
-def test_repeated_use_keeps_a_schema_resident_without_re_searching(
+def test_repeated_use_keeps_a_schema_resident_without_re_loading(
     ttl_cycles: int,
     extra_cycles: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 16.
 
-    Repeated use keeps a schema resident without re-searching.
+    Repeated use keeps a schema resident without re-loading.
 
     Validates: Requirements 7.3, 7.4.
     """
     index = _CountingIndex(ranked=("list_accounts",))
-    plugin = ProgressiveToolDisclosure(index=index, ttl_cycles=ttl_cycles)
+    plugin = _plugin(index=index, ttl_cycles=ttl_cycles)
     agent = _agent(plugin)
     registered = agent.tool_registry.registry["list_accounts"].tool_spec
 
-    # Cold start: the tool is a catalog entry, and one search is what exposes it.
-    first = _projected(_run(plugin._projection_handler(_model_call(agent))))
-    assert _is_catalog_entry(first["list_accounts"])
+    # Cold start: the tool is one catalog line, and nothing about it is callable yet.
+    first = _run(plugin._projection_handler(_model_call(agent)))
+    assert _is_cataloged(first, "list_accounts")
 
-    _run(plugin.find_tools("list the accounts of an owner", cast("ToolContext", SimpleNamespace(agent=agent))))
-    assert index.searches == 1
+    # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING -- so the
+    # projection that follows it still carries the catalog line and not the specification.
+    found = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
+    assert "list_accounts" in found
+    assert (index.searches, plugin._states[agent].searches) == (1, 1)
+    assert plugin._states[agent].exposed == {}
+    assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
+
+    # Loading is the one write that exposes.
+    _load(plugin, agent, ["list_accounts"])
+    assert plugin._states[agent].loads == 1
 
     # Used in every cycle of a stretch longer than the TTL: the call renews, the projection carries
-    # the full specification, and no cycle of the stretch pays for a second search.
+    # the full specification, and no cycle of the stretch pays for a second search or a second load.
     for cycle in range(1, ttl_cycles + extra_cycles + 1):
         agent.event_loop_metrics.cycle_count = cycle
         plugin._on_before_tool_call(_before_tool_call(agent, "list_accounts", {"owner": "A1"}))
 
-        projected = _projected(_run(plugin._projection_handler(_model_call(agent))))
-        assert projected["list_accounts"] == registered
+        projected = _run(plugin._projection_handler(_model_call(agent)))
+        assert _projected(projected)["list_accounts"] == registered
+        assert "list_accounts" not in _catalog_names(projected)
         assert plugin._states[agent].exposed["list_accounts"] == cycle
 
-    # Requirement 7.4: zero searches after the first exposure, across a stretch longer than the TTL.
-    assert index.searches == 1
-    assert plugin._states[agent].searches == 1
+    # Requirement 7.4: one search and one load bought the whole stretch, TTL length notwithstanding.
+    assert (index.searches, plugin._states[agent].searches) == (1, 1)
+    assert plugin._states[agent].loads == 1
 
     # And the moment use stops, the exposure ages out: residency is bought by use, not granted.
     agent.event_loop_metrics.cycle_count += ttl_cycles + 1
-    lapsed = _projected(_run(plugin._projection_handler(_model_call(agent))))
-    assert _is_catalog_entry(lapsed["list_accounts"])
+    assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
+
+
+@PROPERTY_SETTINGS
+@given(ttl_cycles=ttl_strategy)
+def test_loading_a_tool_again_renews_its_exposure(ttl_cycles: int) -> None:
+    """Feature: progressive-tool-disclosure-plugin, Property 16.
+
+    Repeated use keeps a schema resident without re-loading.
+
+    A load is a use: ``get_tool_details`` writes the current cycle as the tool's last use whether the
+    tool was exposed already or not, so re-loading at the boundary buys a fresh TTL rather than
+    nothing. This is the discriminator — the exposure survives one cycle past the expiry its FIRST
+    load would have had.
+
+    Validates: Requirements 7.3, 7.4.
+    """
+    plugin = _plugin(ttl_cycles=ttl_cycles)
+    agent = _agent(plugin)
+    registered = agent.tool_registry.registry["list_accounts"].tool_spec
+
+    _load(plugin, agent, ["list_accounts"])
+    assert plugin._states[agent].exposed == {"list_accounts": 0}
+
+    agent.event_loop_metrics.cycle_count = ttl_cycles
+    _load(plugin, agent, ["list_accounts"])
+    assert plugin._states[agent].exposed == {"list_accounts": ttl_cycles}
+    assert plugin._states[agent].loads == 2
+
+    # One cycle past the first load's expiry: the renewal is the only reason this is still resident.
+    agent.event_loop_metrics.cycle_count = ttl_cycles + 1
+    projected = _run(plugin._projection_handler(_model_call(agent)))
+    assert _projected(projected)["list_accounts"] == registered
+
+
+def test_a_load_that_names_nothing_usable_costs_the_cycle_and_exposes_nothing() -> None:
+    """Feature: progressive-tool-disclosure-plugin, Property 16.
+
+    Repeated use keeps a schema resident without re-loading.
+
+    The counter is incremented before the request is inspected, so an empty or unusable load is
+    counted like any other: it consumed the cycle. What it must NOT do is create an exposure.
+
+    Validates: Requirements 7.3, 8.6.
+    """
+    plugin = _plugin()
+    agent = _agent(plugin)
+
+    assert _load(plugin, agent, []) == _run(plugin.get_tool_details(["  "], _tool_context(agent)))
+    assert plugin._states[agent].loads == 2
+    assert plugin._states[agent].exposed == {}
+
+    # An unknown name is reported, not exposed, and it does not block the known name beside it.
+    answered = _load(plugin, agent, ["not_a_tool", "list_accounts"])
+    assert "not_a_tool" in answered
+    assert plugin._states[agent].exposed == {"list_accounts": 0}
+    assert plugin._states[agent].loads == 3

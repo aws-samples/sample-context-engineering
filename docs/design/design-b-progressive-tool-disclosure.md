@@ -7,15 +7,17 @@ Agents are given every tool's full description on every call. That schema is a l
 whether the turn uses one tool or none. No window management touches it: summarization works on the
 conversation, while tool schema is a separate parameter of the call.
 
-Progressive tool disclosure sends a **lean catalog** (each tool as a name plus a one-line summary)
-together with a **search tool**. The model asks, in natural language, for the capability it needs;
-it receives the *full* schema of the matching tool, uses it, and the detail is **forgotten through
-inactivity** after a few cycles. Because the conversation branches, forgetting is what keeps the cost
-flat — if every tool ever touched stayed resident, the floor would grow without bound again.
+Progressive tool disclosure sends a **lean catalog** — each tool as a name plus a one-line summary,
+listed in the **system prompt** — together with two small tools: `get_tool_details`, which loads the
+full schema of one or more tools by name, and `find_tools`, which searches when no listed name fits.
+The model loads what it needs, uses it, and the detail is **forgotten through inactivity** after a
+few cycles. Because the conversation branches, forgetting is what keeps the cost flat — if every tool
+ever touched stayed resident, the floor would grow without bound again.
 
-This works precisely because a tool's description, unlike a tool's *result*, has its signal at the
-front: the first line of a docstring is the summary. The reverse of relevance filtering (idea A),
-where the beginning of a result is rarely what matters.
+The catalog line is a **summary**, not a cut: a description longer than the configured character
+limit is summarized once, by a model, and the line is cached, so the catalog stays byte-stable from
+call to call. A truncated first sentence often keeps the tool's purpose and drops what tells it apart
+from its neighbours; a summary asked for exactly that distinction does not.
 
 ## Example
 
@@ -29,9 +31,9 @@ Status: **draft for discussion**
 
 ## 1. What it does
 
-Instead of sending the full description of every tool on every call, it sends a lean catalog
-plus a search tool. The model asks for what it needs in natural language, receives the full
-schema, uses it — and the detail is forgotten through inactivity.
+Instead of sending the full description of every tool on every call, it lists every tool as one
+summarized line in the system prompt and sends only the schemas that are actually in use. The model
+loads the schemas it needs by name, uses them — and the detail is forgotten through inactivity.
 
 ## 2. The problem
 
@@ -60,29 +62,43 @@ A new plugin:
 ```python
 plugins=[
     ProgressiveToolDisclosure(
-        catalog_tokens=20,        # description budget per tool in the catalog
-                                  # None = no catalog, search only
+        catalog_chars=80,         # character limit of each catalog line's summary
+                                  # None = no catalog, the two plugin tools only
+        summarizer=None,          # None = the agent's own model, once per tool, cached
         ttl_cycles=5,             # how many cycles the schema stays after last use
         always_available=[...],   # tools that never go through the cycle
     )
 ]
 ```
 
-`catalog_tokens` covers the entire spectrum in one knob:
+`catalog_chars` covers the entire spectrum in one knob:
 
 | Value | Resident | Risk |
 |---|---|---|
 | full (today) | ~63,000 | none |
-| ~20 tokens | ~2,500 | low |
+| ~80 characters | ~2,500 | low |
 | `None` | ~200 | the model may not know it has tools |
 
 From full to lean is 96% of the savings. Zeroing it buys the remaining 2.3k at the cost of
 depending on the model suspecting it is worth searching — which is why `None` is optional, not
 the default.
 
-Cutting the description by budget works here because docstring convention puts the summary on
-the first line. It is the opposite of the tool result, where the beginning is rarely what
-matters.
+**How a line is written.** A description that already fits the limit is used verbatim and costs no
+call. A longer one goes to the summarizer — by default one plain call to the agent's own model, with
+no tools and no history, asking for what distinguishes the tool within the limit. The line is cached
+per `(name, description)` for the life of the plugin, so a tool is summarized once no matter how many
+calls or agents use it, and the catalog does not drift between calls (which would invalidate a prompt
+cache). If the summarizer fails or answers nothing, the line falls back to a cut at a sentence or word
+boundary; an answer over the limit is clamped the same way. The summary calls are an auxiliary cost of
+the strategy and are reported as `summary_usage` in the disclosure state.
+
+**Why the catalog is in the system prompt and not in `tool_specs`.** A catalog entry in `tool_specs`
+has to carry an `inputSchema` — providers reject a spec without one — and the only schema a reduced
+entry can carry is `{"type": "object", "properties": {}}`, which reads as "takes no arguments". The
+model believes it, calls the tool by name, and the call has to be cancelled and retried: a full round
+trip carrying no information. In the system prompt the name makes no claim about its arguments, and
+the rule governing it ("load it with `get_tool_details` before calling") sits in the same block as the
+name, not in a sibling tool's description. `tool_specs` carries only what is callable on the call.
 
 ## 4. Hook point
 
@@ -90,14 +106,15 @@ matters.
 
 `BeforeModelCallEvent` does not work — it carries `agent`, `invocation_state` and
 `projected_input_tokens`, it does not carry `tool_specs`. The one that has it is
-`InvokeModelContext`, and there the field is a defensive copy, made to be replaced.
+`InvokeModelContext`, and there the fields are defensive copies, made to be replaced.
 
-There is no system prompt injection: the usage instruction lives in the description of the
-search tool itself, which already travels in `tool_specs`. One hook less and no catalog format
-to maintain.
+The catalog is appended to the system prompt by that same middleware, so there is still one hook and
+one place where what the model is told about tools gets decided.
 
 A plugin can register middleware in `init_agent`. The pattern is already used by vended plugins
-and by the memory manager.
+and by the memory manager. The middleware writes two fields of the context and nothing else:
+`tool_specs` (the callable tools) and `system_prompt` (the catalog appended after the caller's own
+prompt, so the operator's text keeps its offset).
 
 ## 5. Mechanism
 
@@ -108,34 +125,48 @@ sequenceDiagram
     participant M as Model
     participant T as Tool
 
-    Note over B: index built on the first call,<br/>over the registry objects
+    Note over B: first call: index built, long descriptions<br/>summarized once and cached
 
     Note over AG,B: InvokeModelStage.Input middleware
-    AG->>B: assembles tool_specs for this call
-    B-->>AG: find() + lean catalog<br/>no full inputSchema
+    AG->>B: assembles tool_specs and system_prompt
+    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)
 
     AG->>M: call
-    M-->>AG: find("list investment transactions")
-
-    AG->>B: semantic search in the registry
-    B-->>AG: full inputSchema of the chosen tool
-    AG->>M: call — costs one cycle
+    M-->>AG: get_tool_details(["list_investment_transactions"])
+    AG->>B: loads the named tools
+    B-->>AG: "Loaded" (the schema travels in tool_specs, not in the result)
+    AG->>M: call — costs one cycle, full inputSchema now in tool_specs
 
     M-->>AG: calls the tool with the right arguments
     AG->>T: executes
     T-->>AG: result
     Note over B: use renews the schema TTL
+
+    Note over M,B: fallback, when no catalog name fits
+    M-->>AG: find_tools("list investment transactions")
+    AG->>B: search the index
+    B-->>AG: matching names + summaries, nothing loaded
+    M-->>AG: get_tool_details([...]) — then as above
 ```
 
-### Composition of the `tool_specs` of each call
+The common path is **catalog → `get_tool_details` → call**. `find_tools` only finds; loading is always
+`get_tool_details`, so the model takes the same road to a schema wherever it started. A load takes a
+list, so every tool a step needs is loaded in one cycle.
+
+### Composition of each call
 
 ```
-tool_specs = find()
-           ∪ catalog (name + catalog_tokens of description, no inputSchema)
-           ∪ always_available
-           ∪ in_use (TTL, renewed on every use)
-           ∪ referenced_in_retained_history            [guard]
+tool_specs    = find_tools ∪ get_tool_details
+              ∪ always_available
+              ∪ in_use (TTL, renewed on every use)
+              ∪ referenced_in_retained_history          [guard]
+
+system_prompt = caller's prompt
+              + catalog: every other tool as "- name: summary (≤ catalog_chars)"
 ```
+
+The two partition the registry: no tool appears in both, and none is missing from both. Every entry
+of `tool_specs` is a verbatim, callable specification.
 
 `in_use` carries most of the load and is deterministic. Seven consecutive calls of the same tool
 trigger no search at all — use renews the deadline, and it leaves through inactivity.
@@ -163,10 +194,13 @@ shortlist.
 ## 6. Deterministic guards
 
 - **`tool_specs` is never empty.** The provider rejects an empty `toolConfig` when the history
-  has tool blocks — the SDK already works around it by injecting a `noop`. With `find()` always
-  present, the case does not occur.
+  has tool blocks — the SDK already works around it by injecting a `noop`. With `find_tools` and
+  `get_tool_details` always present, the case does not occur.
 - **The schema of a tool referenced in the history is kept**, so no `toolUse` is left without a
   matching definition.
+- **A call to a catalog name that skipped the load is recovered.** The name is not in `tool_specs`,
+  so the common path never produces it; if a model calls one anyway and the call reaches the plugin,
+  it is cancelled with "call it again", and the schema is already loaded for the retry.
 - **`always_available`** is the escape hatch for a small tool used on every turn, which should
   not go through the discovery cycle.
 
@@ -174,9 +208,11 @@ shortlist.
 
 | Failure | Effect | Mitigation |
 |---|---|---|
-| Model does not search and answers without a tool | denies a capability it has | lean catalog, `catalog_tokens` != None |
-| Search returns the wrong tool | one cycle lost | the model searches again with another description |
-| Need maps to a combination of tools | search returns independent top-K and loses the composition | hypothesis, measure before treating |
+| Model does not load and answers without a tool | denies a capability it has | catalog in the system prompt, `catalog_chars` != None |
+| Summary drops what tells two tools apart | the wrong tool is loaded, one cycle lost | the model loads another; raise `catalog_chars` or supply a `summarizer` |
+| Summarizer fails | none visible | the line falls back to a boundary cut |
+| No catalog name fits the need | one search cycle | `find_tools`, then `get_tool_details` |
+| Need maps to a combination of tools | several tools needed at once | `get_tool_details` takes a list: one load for all of them |
 | Thrash on repeated use | extra cycles | `ttl_cycles`, renewed on every use |
 
 ## 8. What it does not solve
@@ -190,9 +226,9 @@ shortlist.
 
 - Sum of `tool_specs` tokens per call, before and after. It is arithmetic and does not depend on
   judgment — it can be asserted in a test.
-- Cycles spent on search per session. If the same set is always requested, it is a signal to
-  reintroduce pre-loading as an optimization, then with data in hand.
-- Search hit rate: how many times the model searched more than once for the same intent.
+- Cycles spent on loading and on search per session (`loads`, `searches`). If the same set is always
+  loaded, it is a signal to move it to `always_available`.
+- Tokens the summaries cost (`summary_usage`), billed next to what the catalog saves.
 
 ## 10. Open decisions
 

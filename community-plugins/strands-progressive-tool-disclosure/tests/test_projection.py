@@ -1,23 +1,25 @@
-"""Property tests for the projection: the five-block union, its guards, and the state behind it.
+"""Property tests for the projection: the four-block union, the catalog beside it, and the state behind it.
 
-Feature: progressive-tool-disclosure-plugin, Property 1: Projection is the ordered, de-duplicated union of the five
-blocks.
+Feature: progressive-tool-disclosure-plugin, Property 1: Projection is the ordered, de-duplicated union of the four
+full-specification blocks, and the catalog holds everything else.
 Validates: Requirements 3.1, 3.2, 3.3.
 
 Feature: progressive-tool-disclosure-plugin, Property 2: Projection names are a subset of incoming names.
 Validates: Requirements 3.4.
 
-Feature: progressive-tool-disclosure-plugin, Property 3: Projection is never empty and always contains the search tool.
+Feature: progressive-tool-disclosure-plugin, Property 3: Projection is never empty and always leads with the plugin
+tools.
 Validates: Requirements 3.5, 9.5.
 
-Feature: progressive-tool-disclosure-plugin, Property 4: A suppressed catalog omits every reduced entry and keeps the
-full-spec blocks.
+Feature: progressive-tool-disclosure-plugin, Property 4: A suppressed catalog leaves the system prompt untouched and
+keeps the full-spec blocks.
 Validates: Requirements 3.6.
 
 Feature: progressive-tool-disclosure-plugin, Property 5: The projection is deterministic.
 Validates: Requirements 3.8.
 
-Feature: progressive-tool-disclosure-plugin, Property 6: The projection changes only ``tool_specs``.
+Feature: progressive-tool-disclosure-plugin, Property 6: The projection changes only ``tool_specs`` and
+``system_prompt``.
 Validates: Requirements 3.9.
 
 Feature: progressive-tool-disclosure-plugin, Property 20: History-referenced tools are kept, unknown references are
@@ -35,19 +37,23 @@ Validates: Requirements 1.4, 10.5.
 
 The projection is the whole point of the plugin, so these properties run the real handler against a real ``Agent``
 carrying a real ``ToolRegistry`` — what the model would be told about a call is what gets asserted, not an intermediate
-the handler happens to compute. Two consequences shape the assertions below.
+the handler happens to compute. Three consequences shape the assertions below.
 
-First, the full-specification blocks emit the *incoming* specification object rather than a copy, so "arrived at full
-specification" is checked by object identity and "arrived as a catalog entry" by the empty, closed schema. An identity
-check cannot be satisfied by a spec that was rebuilt, re-ordered or re-described on the way through.
+First, ``tool_specs`` now carries full specifications and nothing else: there is no reduced entry to recognize, so every
+projected specification is checked by object identity against the one that arrived. An identity check cannot be
+satisfied by a spec that was rebuilt, re-ordered or re-described on the way through.
 
-Second, the search index is a deterministic double that records every ``build`` and every ``search``. "Built once per
-fingerprint" is then a count rather than an inference, and no example reaches the network: the double scores by
-substring, on names, over what it was last handed.
+Second, every tool that does *not* reach ``tool_specs`` reaches the model as one ``- name: summary`` line appended to
+``system_prompt``. The two sides partition the incoming names, and that partition is asserted directly: a name in both
+would describe a tool twice, a name in neither would hide it outright.
 
-Incoming specifications are deep copies of the registered ones and the search tool is placed at a generated position
-rather than first, so the claim that the projection *leads* with the search tool is tested against an incoming order
-that does not already agree with it.
+Third, nothing here reaches the network. The search index is a deterministic double that records every ``build`` and
+every ``search``, so "built once per fingerprint" is a count rather than an inference; and the summarizer is a stub, so
+the stub model's ``stream`` — which raises — is never reached even for the descriptions that do not fit the limit.
+
+Incoming specifications are deep copies of the registered ones. The two plugin tools are placed at a generated position
+and at the very end rather than first, so the claim that the projection *leads* with them is tested against an incoming
+order that does not already agree with it.
 """
 
 import asyncio
@@ -67,10 +73,12 @@ from strands.types.tools import ToolContext
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
+    _DETAILS_LOADED_HEADER,
+    _MATCHES_HEADER,
+    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
-    _CATALOG_SIGIL,
+    GET_TOOL_DETAILS_NAME,
     _DisclosureState,
-    _truncate_description,
 )
 
 PROPERTY_SETTINGS = settings(
@@ -78,9 +86,6 @@ PROPERTY_SETTINGS = settings(
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
-
-EMPTY_CLOSED_SCHEMA = {"json": {"type": "object", "properties": {}, "additionalProperties": False}}
-"""The schema a catalog entry carries. Its presence is how an unexposed tool is recognized in a projection."""
 
 UNKNOWN_NAMES = ("ghost_tool", "StructuredOutput")
 """Names no registry has: the first stands for a stale history reference, the second for the synthetic specification
@@ -169,7 +174,9 @@ names_strategy = st.lists(st.sampled_from(TOOL_NAMES), min_size=1, max_size=len(
 
 subset_strategy = st.lists(st.sampled_from(TOOL_NAMES), max_size=3, unique=True)
 
-catalog_tokens_strategy = st.one_of(st.none(), st.integers(min_value=1, max_value=40))
+catalog_chars_strategy = st.one_of(st.none(), st.integers(min_value=1, max_value=120))
+"""Character limits on both sides of the tool pool's description lengths, so the examples cover the line that is used
+verbatim and the line that has to be summarized, plus ``None`` for the suppressed catalog."""
 
 ttl_strategy = st.integers(min_value=1, max_value=6)
 
@@ -178,6 +185,22 @@ cycle_strategy = st.integers(min_value=0, max_value=12)
 position_strategy = st.integers(min_value=0, max_value=len(TOOL_NAMES))
 
 need_strategy = st.sampled_from(["list the accounts", "move money", "read the audit trail", "send a message"])
+
+
+def _stub_summary(spec: dict[str, Any], max_chars: int) -> str:
+    """Summarize ``spec`` offline and deterministically, in the shape a real summary arrives in.
+
+    A stub rather than the default summarizer, which would call the model — and the model here raises. What it returns
+    is the plugin's to clamp, so the answer deliberately ignores ``max_chars``.
+
+    Args:
+        spec: Full specification to summarize.
+        max_chars: Character limit, unused on purpose.
+
+    Returns:
+        A one-line summary naming the tool.
+    """
+    return f"does {spec['name'].replace('_', ' ')}"
 
 
 class _RecordingIndex:
@@ -215,7 +238,7 @@ class _RecordingIndex:
 def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
     """Build an offline agent carrying the tool pool and ``plugin``.
 
-    Registering through ``plugins`` is what puts the search tool in the registry and the projection handler in the
+    Registering through ``plugins`` is what puts both plugin tools in the registry and the projection handler in the
     middleware registry, which is the state every claim here is made about.
 
     Args:
@@ -228,16 +251,19 @@ def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
 
 
 def _incoming_specs(agent: Agent, names: Sequence[str], find_tools_position: int = 0) -> list[dict[str, Any]]:
-    """The specifications a call arrives with: ``names`` with the search tool inserted at a given position.
+    """The specifications a call arrives with: ``names`` plus both plugin tools, neither of them first.
 
     Deep copies rather than the registry's own objects, so an example cannot reach the registry the next example reads,
     and so "the projection emitted the incoming specification" is a claim identity can actually settle.
 
+    Both plugin tools have to be present or the call is a passthrough, so they are always added — ``find_tools`` at a
+    generated position and ``get_tool_details`` last, which is the arrival order least likely to agree by accident with
+    the order the projection must produce.
+
     Args:
         agent: Agent whose registry holds the full specifications.
-        names: Tool names the call offers, excluding the search tool.
-        find_tools_position: Where the search tool sits in the incoming order. Not pinned to the front, so the
-            projection's own ordering is what has to put it first.
+        names: Tool names the call offers, excluding the plugin tools.
+        find_tools_position: Where the search tool sits in the incoming order.
 
     Returns:
         The incoming specifications, in arrival order.
@@ -245,6 +271,7 @@ def _incoming_specs(agent: Agent, names: Sequence[str], find_tools_position: int
     registry = agent.tool_registry.registry
     specs = [copy.deepcopy(registry[name].tool_spec) for name in names]
     specs.insert(min(find_tools_position, len(specs)), copy.deepcopy(registry[FIND_TOOLS_NAME].tool_spec))
+    specs.append(copy.deepcopy(registry[GET_TOOL_DETAILS_NAME].tool_spec))
     return specs
 
 
@@ -321,17 +348,17 @@ def _seed_state(
     return state
 
 
-def _tool_context(agent: Agent) -> ToolContext:
-    """The context the framework would hand the search tool, built by hand for a direct call."""
+def _tool_context(agent: Agent, name: str = FIND_TOOLS_NAME) -> ToolContext:
+    """The context the framework would hand a plugin tool, built by hand for a direct call."""
     return ToolContext(
-        tool_use={"toolUseId": "use-search", "name": FIND_TOOLS_NAME, "input": {}},
+        tool_use={"toolUseId": f"use-{name}", "name": name, "input": {}},
         agent=agent,
         invocation_state={},
     )
 
 
 def _before_tool_call(agent: Agent, name: str) -> BeforeToolCallEvent:
-    """A pre-call event for an argument-less call to ``name``: the shape of a call made off a catalog entry."""
+    """A pre-call event for an argument-less call to ``name``: the shape of a call made off a catalog line."""
     return BeforeToolCallEvent(
         agent=cast("AgentType", agent),
         selected_tool=None,
@@ -347,7 +374,7 @@ def _run(step: Coroutine[Any, Any, _Resolved]) -> _Resolved:
     an ``async def`` body under ``@given`` is never awaited, so every assertion in it would pass by not running.
 
     Args:
-        step: The coroutine to run: a projection or a search.
+        step: The coroutine to run: a projection, a search or a load.
 
     Returns:
         What the step returned.
@@ -361,13 +388,30 @@ def _names(specs: Sequence[dict[str, Any]]) -> list[str]:
 
 
 def _projected(context: InvokeModelContext) -> dict[str, dict[str, Any]]:
-    """Index a projection by tool name, for asking which form each tool arrived in."""
+    """Index a projection by tool name, for asking which specification each tool arrived with."""
     return {spec["name"]: spec for spec in context.tool_specs}
 
 
-def _is_catalog_entry(spec: dict[str, Any]) -> bool:
-    """Report whether ``spec`` is the reduced form rather than a full specification."""
-    return spec["inputSchema"] == EMPTY_CLOSED_SCHEMA
+def _catalog_names(result: InvokeModelContext, received: InvokeModelContext) -> list[str]:
+    """The tool names listed in the catalog block ``result`` appended to ``received``'s system prompt.
+
+    Read off the appended text rather than off the plugin's renderer, so the assertion is about what the model is
+    actually told. The block is the only thing appended, and only its entries start with a list marker.
+
+    Args:
+        result: Context the handler returned.
+        received: Context the handler was given.
+
+    Returns:
+        The catalogued names, in listed order. Empty when nothing was appended.
+    """
+    before = received.system_prompt
+    after = result.system_prompt
+    assert isinstance(before, str) and isinstance(after, str)
+    assert after.startswith(before), "the catalog did not keep the caller's own prompt at the front"
+
+    appended = after[len(before) :]
+    return [line[2:].split(":", 1)[0].strip() for line in appended.splitlines() if line.startswith("- ")]
 
 
 def _expected_projection(
@@ -375,11 +419,10 @@ def _expected_projection(
     exposed: Sequence[str],
     referenced: Sequence[str],
     always_available: Sequence[str],
-    catalog_tokens: int | None,
 ) -> list[dict[str, Any]]:
     """Compose the projection the properties expect, independently of the plugin's own composition.
 
-    Written as the requirement reads — five blocks in a fixed order, each name taken at most once, the incoming order
+    Written as the requirement reads — four blocks in a fixed order, each name taken at most once, the incoming order
     inside every block — rather than by calling the plugin's composer, which would make the assertion circular.
 
     Args:
@@ -387,33 +430,18 @@ def _expected_projection(
         exposed: Names with a live exposure.
         referenced: Names the retained history references.
         always_available: Names configured to carry a full specification on every call.
-        catalog_tokens: Catalog budget in tokens, or ``None`` to omit every catalog entry.
 
     Returns:
-        The expected projection: the very incoming objects for the four full-specification blocks, and freshly built
-        reduced entries for the catalog block.
+        The expected projection: the very incoming objects, since every block emits a full specification.
     """
     expected: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for block in ({FIND_TOOLS_NAME}, set(always_available), set(exposed), set(referenced)):
+    for block in (_PLUGIN_TOOL_NAMES, set(always_available), set(exposed), set(referenced)):
         for spec in incoming:
             if spec["name"] in block and spec["name"] not in seen:
                 seen.add(spec["name"])
                 expected.append(spec)
-
-    if catalog_tokens is not None:
-        for spec in incoming:
-            if spec["name"] not in seen:
-                seen.add(spec["name"])
-                expected.append(
-                    {
-                        "name": spec["name"],
-                        "description": _CATALOG_SIGIL
-                        + _truncate_description(spec["description"], catalog_tokens),
-                        "inputSchema": copy.deepcopy(EMPTY_CLOSED_SCHEMA),
-                    }
-                )
 
     return expected
 
@@ -425,33 +453,31 @@ def _project_once(
     exposed: Sequence[str] = (),
     referenced: Sequence[str] = (),
     always_available: Sequence[str] = (),
-    catalog_tokens: int | None = 20,
+    catalog_chars: int | None = 80,
     ttl_cycles: int = 5,
     cycle: int = 0,
-    catalog_in_system_prompt: bool = False,
 ) -> tuple[ProgressiveToolDisclosure, Agent, InvokeModelContext, InvokeModelContext]:
     """Run one projection end to end, and hand back everything an assertion may need to look at.
 
     Args:
-        names: Tool names the call offers, excluding the search tool.
+        names: Tool names the call offers, excluding the plugin tools.
         find_tools_position: Where the search tool sits in the incoming order.
         exposed: Names to expose, live at ``cycle``.
         referenced: Names the retained history references.
         always_available: Names configured to carry a full specification on every call.
-        catalog_tokens: Catalog budget in tokens, or ``None``.
+        catalog_chars: Character limit of a catalog line, or ``None`` to add no catalog at all.
         ttl_cycles: Cycles an exposure survives after its last use.
         cycle: Cycle counter to run the call at.
-        catalog_in_system_prompt: Place the catalog in the system prompt instead of in ``tool_specs``.
 
     Returns:
         The plugin, the agent, the context received by the handler, and the context it returned.
     """
     plugin = ProgressiveToolDisclosure(
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
+        summarizer=_stub_summary,
         ttl_cycles=ttl_cycles,
         always_available=tuple(always_available),
         index=_RecordingIndex(),
-        catalog_in_system_prompt=catalog_in_system_prompt,
     )
     agent = _agent(plugin)
     _seed_state(plugin, agent, exposed, cycle)
@@ -467,23 +493,24 @@ def _project_once(
     exposed=subset_strategy,
     referenced=subset_strategy,
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
-def test_the_projection_is_the_ordered_de_duplicated_union_of_the_five_blocks(
+def test_the_projection_is_the_ordered_de_duplicated_union_of_the_four_blocks(
     names: list[str],
     find_tools_position: int,
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 1.
 
-    Projection is the ordered, de-duplicated union of the five blocks.
+    Projection is the ordered, de-duplicated union of the four full-specification blocks, and the catalog holds
+    everything else.
 
     Validates: Requirements 3.1, 3.2, 3.3.
     """
@@ -493,13 +520,13 @@ def test_the_projection_is_the_ordered_de_duplicated_union_of_the_five_blocks(
         exposed=exposed,
         referenced=referenced,
         always_available=always_available,
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
         ttl_cycles=ttl_cycles,
         cycle=cycle,
     )
 
     incoming = context.tool_specs
-    expected = _expected_projection(incoming, exposed, referenced, always_available, catalog_tokens)
+    expected = _expected_projection(incoming, exposed, referenced, always_available)
 
     # Requirement 3.1: the union, in the fixed block order, with the incoming order inside each block.
     assert _names(result.tool_specs) == _names(expected)
@@ -508,15 +535,20 @@ def test_the_projection_is_the_ordered_de_duplicated_union_of_the_five_blocks(
     # Requirement 3.3: each name once, so no tool is described to the provider twice.
     assert len(_names(result.tool_specs)) == len(set(_names(result.tool_specs)))
 
-    # Requirement 3.2: a name any of the first four blocks reached carries the specification that arrived — asserted by
-    # identity, which a re-described or rebuilt spec could not satisfy. Everything else is a reduced entry.
-    full_spec_names = {FIND_TOOLS_NAME, *always_available, *exposed, *referenced} & set(_names(incoming))
+    # Requirement 3.2: every name that reaches ``tool_specs`` carries the specification that arrived — asserted by
+    # identity, which a re-described or rebuilt spec could not satisfy. There is no reduced form to allow for.
     incoming_by_name = {spec["name"]: spec for spec in incoming}
     for name, spec in _projected(result).items():
-        if name in full_spec_names:
-            assert spec is incoming_by_name[name], f"{name} did not arrive at full specification"
-        else:
-            assert _is_catalog_entry(spec), f"{name} did not arrive as a catalog entry"
+        assert spec is incoming_by_name[name], f"{name} did not arrive at full specification"
+
+    # And the catalog holds precisely the rest: the two sides partition the incoming names, so no tool is described
+    # twice and none is hidden outright. A suppressed catalog is the one case with a rest and no list for it.
+    catalogued = _catalog_names(result, context)
+    if catalog_chars is None:
+        assert catalogued == []
+    else:
+        assert set(catalogued) == set(incoming_by_name) - set(_projected(result))
+        assert len(catalogued) == len(set(catalogued))
 
 
 @PROPERTY_SETTINGS
@@ -526,7 +558,7 @@ def test_the_projection_is_the_ordered_de_duplicated_union_of_the_five_blocks(
     exposed=subset_strategy,
     referenced=st.lists(st.sampled_from([*TOOL_NAMES, *UNKNOWN_NAMES]), max_size=4, unique=True),
     always_available=st.lists(st.sampled_from([*TOOL_NAMES, *UNKNOWN_NAMES]), max_size=3, unique=True),
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     cycle=cycle_strategy,
 )
 def test_the_projection_names_are_a_subset_of_the_incoming_names(
@@ -535,7 +567,7 @@ def test_the_projection_names_are_a_subset_of_the_incoming_names(
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 2.
@@ -552,15 +584,17 @@ def test_the_projection_names_are_a_subset_of_the_incoming_names(
         exposed=exposed,
         referenced=referenced,
         always_available=always_available,
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
         cycle=cycle,
     )
 
     incoming_names = set(_names(context.tool_specs))
 
     assert set(_names(result.tool_specs)) <= incoming_names
-    # Requirement 3.10: a configured name the call did not offer is omitted rather than raised over.
+    # Requirement 3.10: a configured name the call did not offer is omitted rather than raised over — from the
+    # projection, and from the catalog beside it.
     assert not set(_names(result.tool_specs)) & set(UNKNOWN_NAMES)
+    assert set(_catalog_names(result, context)) <= incoming_names
 
 
 @PROPERTY_SETTINGS
@@ -570,23 +604,23 @@ def test_the_projection_names_are_a_subset_of_the_incoming_names(
     exposed=subset_strategy,
     referenced=subset_strategy,
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
-def test_the_projection_is_never_empty_and_always_leads_with_the_search_tool(
+def test_the_projection_is_never_empty_and_always_leads_with_the_plugin_tools(
     names: list[str],
     find_tools_position: int,
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 3.
 
-    Projection is never empty and always contains the search tool.
+    Projection is never empty and always leads with the plugin tools.
 
     Validates: Requirements 3.5, 9.5.
     """
@@ -596,7 +630,7 @@ def test_the_projection_is_never_empty_and_always_leads_with_the_search_tool(
         exposed=exposed,
         referenced=referenced,
         always_available=always_available,
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
         ttl_cycles=ttl_cycles,
         cycle=cycle,
     )
@@ -604,24 +638,30 @@ def test_the_projection_is_never_empty_and_always_leads_with_the_search_tool(
     assert result is not context, "the projection did not apply"
 
     # Requirement 9.5: a non-empty ``toolConfig`` is what keeps the provider's protocol error out of reach.
-    assert len(result.tool_specs) >= 1
-    assert FIND_TOOLS_NAME in _names(result.tool_specs)
+    projected_names = _names(result.tool_specs)
+    assert len(projected_names) >= len(_PLUGIN_TOOL_NAMES)
+    assert _PLUGIN_TOOL_NAMES <= set(projected_names)
 
-    # First, whatever position it arrived in: that ordering is what makes the projection non-empty by construction
-    # rather than by the accident of some other block having a member.
-    assert _names(result.tool_specs)[0] == FIND_TOOLS_NAME
+    # First, whatever positions they arrived in: that ordering is what makes the projection non-empty by construction
+    # rather than by the accident of some other block having a member. One of the two arrives last, so a projection
+    # that merely preserved the incoming order could not satisfy this.
+    assert set(projected_names[: len(_PLUGIN_TOOL_NAMES)]) == _PLUGIN_TOOL_NAMES
+
+    # And neither is ever catalogued: both are in ``tool_specs`` in full, so a line for them would be a second, weaker
+    # description of a tool the model can already call.
+    assert not set(_catalog_names(result, context)) & _PLUGIN_TOOL_NAMES
 
 
 @PROPERTY_SETTINGS
 @given(names=names_strategy, find_tools_position=position_strategy, cycle=cycle_strategy)
-def test_the_leanest_configuration_still_projects_the_search_tool(
+def test_the_leanest_configuration_still_projects_the_plugin_tools(
     names: list[str],
     find_tools_position: int,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 3.
 
-    Projection is never empty and always contains the search tool.
+    Projection is never empty and always leads with the plugin tools.
 
     Validates: Requirements 3.5, 9.5.
     """
@@ -630,11 +670,12 @@ def test_the_leanest_configuration_still_projects_the_search_tool(
     _, _, _, result = _project_once(
         names=names,
         find_tools_position=find_tools_position,
-        catalog_tokens=None,
+        catalog_chars=None,
         cycle=cycle,
     )
 
-    assert _names(result.tool_specs) == [FIND_TOOLS_NAME]
+    assert set(_names(result.tool_specs)) == _PLUGIN_TOOL_NAMES
+    assert len(result.tool_specs) == len(_PLUGIN_TOOL_NAMES)
 
 
 @PROPERTY_SETTINGS
@@ -647,7 +688,7 @@ def test_the_leanest_configuration_still_projects_the_search_tool(
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
-def test_a_suppressed_catalog_omits_every_reduced_entry_and_keeps_the_full_spec_blocks(
+def test_a_suppressed_catalog_leaves_the_system_prompt_untouched_and_keeps_the_full_spec_blocks(
     names: list[str],
     find_tools_position: int,
     exposed: list[str],
@@ -658,31 +699,41 @@ def test_a_suppressed_catalog_omits_every_reduced_entry_and_keeps_the_full_spec_
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 4.
 
-    A suppressed catalog omits every reduced entry and keeps the full-spec blocks.
+    A suppressed catalog leaves the system prompt untouched and keeps the full-spec blocks.
 
     Validates: Requirements 3.6.
     """
-    _, _, context, result = _project_once(
-        names=names,
-        find_tools_position=find_tools_position,
-        exposed=exposed,
-        referenced=referenced,
-        always_available=always_available,
-        catalog_tokens=None,
-        ttl_cycles=ttl_cycles,
-        cycle=cycle,
-    )
+    configuration: dict[str, Any] = {
+        "names": names,
+        "find_tools_position": find_tools_position,
+        "exposed": exposed,
+        "referenced": referenced,
+        "always_available": always_available,
+        "ttl_cycles": ttl_cycles,
+        "cycle": cycle,
+    }
 
-    incoming = context.tool_specs
-    incoming_by_name = {spec["name"]: spec for spec in incoming}
-    exp_full_spec = {FIND_TOOLS_NAME, *always_available, *exposed, *referenced} & set(incoming_by_name)
+    _, _, context, result = _project_once(catalog_chars=None, **configuration)
 
-    # ``catalog_tokens=None`` removes exactly one block. The other four are unaffected, so the projection is precisely
-    # the names the four of them reach — nothing reduced, and nothing missing either.
+    incoming_by_name = {spec["name"]: spec for spec in context.tool_specs}
+    exp_full_spec = {*_PLUGIN_TOOL_NAMES, *always_available, *exposed, *referenced} & set(incoming_by_name)
+
+    # ``catalog_chars=None`` removes the catalog and nothing else. The four full-specification blocks are unaffected,
+    # so the projection is precisely the names the four of them reach — nothing missing, nothing added.
     assert set(_names(result.tool_specs)) == exp_full_spec
     for name, spec in _projected(result).items():
-        assert spec is incoming_by_name[name], f"{name} was reduced despite the catalog being suppressed"
-        assert not _is_catalog_entry(spec)
+        assert spec is incoming_by_name[name], f"{name} was not emitted at full specification"
+
+    # The prompt comes back by identity, so no block was appended and no shape was rewritten: a model given this
+    # configuration has the two plugin tools' own descriptions as the only hint that other tools exist.
+    assert result.system_prompt is context.system_prompt
+
+    # And the suppression is the only difference: the same configuration with a catalog projects the same names.
+    _, _, with_catalog_context, with_catalog = _project_once(catalog_chars=80, **configuration)
+    assert _names(with_catalog.tool_specs) == _names(result.tool_specs)
+    assert set(_catalog_names(with_catalog, with_catalog_context)) == set(
+        _names(with_catalog_context.tool_specs)
+    ) - set(_names(with_catalog.tool_specs))
 
 
 @PROPERTY_SETTINGS
@@ -692,7 +743,7 @@ def test_a_suppressed_catalog_omits_every_reduced_entry_and_keeps_the_full_spec_
     exposed=subset_strategy,
     referenced=subset_strategy,
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
@@ -702,7 +753,7 @@ def test_the_projection_is_deterministic(
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
@@ -718,7 +769,7 @@ def test_the_projection_is_deterministic(
         "exposed": exposed,
         "referenced": referenced,
         "always_available": always_available,
-        "catalog_tokens": catalog_tokens,
+        "catalog_chars": catalog_chars,
         "ttl_cycles": ttl_cycles,
         "cycle": cycle,
     }
@@ -738,11 +789,16 @@ def test_the_projection_is_deterministic(
     assert _names(second.tool_specs) == _names(first.tool_specs)
     assert second.tool_specs == first.tool_specs
 
-    # And across instances: an identically configured plugin on an identically built agent projects the same list, so
-    # the order is a function of the state, the history and the configuration alone.
+    # The catalog too, byte for byte: the summaries are cached per description, so a second call re-renders the same
+    # block rather than a freshly worded one, and the provider's prompt cache survives the call.
+    assert second.system_prompt == first.system_prompt
+
+    # And across instances: an identically configured plugin on an identically built agent projects the same list and
+    # the same catalog, so both are a function of the state, the history and the configuration alone.
     _, _, _, elsewhere = _project_once(**configuration)
     assert _names(elsewhere.tool_specs) == _names(first.tool_specs)
     assert elsewhere.tool_specs == first.tool_specs
+    assert elsewhere.system_prompt == first.system_prompt
 
 
 @PROPERTY_SETTINGS
@@ -752,28 +808,29 @@ def test_the_projection_is_deterministic(
     exposed=subset_strategy,
     referenced=subset_strategy,
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
-def test_the_projection_changes_only_tool_specs(
+def test_the_projection_changes_only_tool_specs_and_the_system_prompt(
     names: list[str],
     find_tools_position: int,
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 6.
 
-    The projection changes only ``tool_specs``.
+    The projection changes only ``tool_specs`` and ``system_prompt``.
 
     Validates: Requirements 3.9.
     """
     plugin = ProgressiveToolDisclosure(
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
+        summarizer=_stub_summary,
         ttl_cycles=ttl_cycles,
         always_available=tuple(always_available),
         index=_RecordingIndex(),
@@ -786,17 +843,26 @@ def test_the_projection_changes_only_tool_specs(
     context = _context(agent, incoming, messages)
 
     exp_incoming = copy.deepcopy(incoming)
+    exp_prompt = context.system_prompt
     exp_messages = copy.deepcopy(messages)
     exp_registry = {name: copy.deepcopy(entry.tool_spec) for name, entry in agent.tool_registry.registry.items()}
     exp_tool_names = sorted(agent.tool_names)
 
     result = _run(plugin._projection_handler(context))
 
-    # Every declared field other than ``tool_specs`` is carried over by the same object, so the handler cannot have
-    # rewritten one in a way a value comparison would forgive.
+    # Every declared field other than the two is carried over by the same object, so the handler cannot have rewritten
+    # one in a way a value comparison would forgive.
     for field in dataclasses.fields(InvokeModelContext):
-        if field.name != "tool_specs":
+        if field.name not in ("tool_specs", "system_prompt"):
             assert getattr(result, field.name) is getattr(context, field.name), f"the handler changed {field.name}"
+
+    # The prompt is appended to, never edited: the caller's own text keeps the opening position, and a call with
+    # nothing left to catalog gets the very object it arrived with.
+    assert context.system_prompt == exp_prompt
+    assert isinstance(result.system_prompt, str)
+    assert result.system_prompt.startswith(cast("str", exp_prompt))
+    if set(_names(result.tool_specs)) == set(_names(incoming)):
+        assert result.system_prompt is context.system_prompt
 
     # The received list is a defensive copy the handler is free to replace but not to edit: the call it was handed has
     # to read the same after the projection as before it.
@@ -816,7 +882,7 @@ def test_the_projection_changes_only_tool_specs(
     find_tools_position=position_strategy,
     exposed=subset_strategy,
     unknown_referenced=st.lists(st.sampled_from(UNKNOWN_NAMES), max_size=2, unique=True),
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
@@ -825,7 +891,7 @@ def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
     find_tools_position: int,
     exposed: list[str],
     unknown_referenced: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
@@ -836,11 +902,13 @@ def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
     Validates: Requirements 9.3, 9.4.
     """
     # The history references everything the call offers, plus names nothing has. The offered ones must come back at
-    # full specification whatever the exposure state and whatever the budget says; the others must simply not appear.
+    # full specification whatever the exposure state and whatever the catalog is configured to do; the others must
+    # simply not appear.
     referenced = [*names, *unknown_referenced]
 
     plugin = ProgressiveToolDisclosure(
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
+        summarizer=_stub_summary,
         ttl_cycles=ttl_cycles,
         index=_RecordingIndex(),
     )
@@ -863,20 +931,25 @@ def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
     assert not set(projected) & set(unknown_referenced)
     assert set(projected) == set(incoming_by_name)
 
+    # Every incoming tool is carrying a full specification here, so there is nothing left for the catalog to list and
+    # the prompt is left exactly as it arrived rather than gaining a header promising a list.
+    assert _catalog_names(result, context) == []
+    assert result.system_prompt is context.system_prompt
+
 
 @PROPERTY_SETTINGS
 @given(
     names=st.lists(st.sampled_from(TOOL_NAMES), min_size=2, max_size=len(TOOL_NAMES), unique=True),
     find_tools_position=position_strategy,
     repeats=st.integers(min_value=1, max_value=4),
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     cycle=cycle_strategy,
 )
 def test_the_index_is_built_once_per_registry_fingerprint(
     names: list[str],
     find_tools_position: int,
     repeats: int,
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 14.
@@ -889,9 +962,10 @@ def test_the_index_is_built_once_per_registry_fingerprint(
     # calls on. That is what a runtime registration looks like from the projection's side — the fingerprint changes.
     late = names[-1]
     initial = names[:-1]
+    fixed = frozenset(_PLUGIN_TOOL_NAMES)
 
     index = _RecordingIndex()
-    plugin = ProgressiveToolDisclosure(catalog_tokens=catalog_tokens, index=index)
+    plugin = ProgressiveToolDisclosure(catalog_chars=catalog_chars, summarizer=_stub_summary, index=index)
     agent = _agent(plugin)
     _seed_state(plugin, agent, (), cycle)
     state = plugin._states[agent]
@@ -901,8 +975,8 @@ def test_the_index_is_built_once_per_registry_fingerprint(
         _run(plugin._projection_handler(_context(agent, _incoming_specs(agent, initial, find_tools_position), [])))
 
     assert len(index.builds) == 1, f"the index was built {len(index.builds)} times for one fingerprint"
-    assert state.fingerprint == frozenset([FIND_TOOLS_NAME, *initial])
-    assert set(index.builds[0]) == frozenset([FIND_TOOLS_NAME, *initial])
+    assert {n for n, _ in state.fingerprint} == fixed | frozenset(initial)
+    assert set(index.builds[0]) == fixed | frozenset(initial)
 
     # Requirement 6.7: the late tool changes the fingerprint, which buys exactly one rebuild, however many calls the
     # new fingerprint then sees.
@@ -910,28 +984,42 @@ def test_the_index_is_built_once_per_registry_fingerprint(
         _run(plugin._projection_handler(_context(agent, _incoming_specs(agent, names, find_tools_position), [])))
 
     assert len(index.builds) == 2, f"a changed fingerprint produced {len(index.builds)} builds"
-    assert state.fingerprint == frozenset([FIND_TOOLS_NAME, *names])
-    assert set(index.builds[1]) == frozenset([FIND_TOOLS_NAME, *names])
+    assert {n for n, _ in state.fingerprint} == fixed | frozenset(names)
+    assert set(index.builds[1]) == fixed | frozenset(names)
 
     # Requirement 6.11: and it is findable from that projection on — the rebuild is what makes the late tool reachable
     # through the search rather than merely present in the call.
     assert index.searches == []
-    _run(plugin.find_tools(need=late.replace("_", " "), tool_context=_tool_context(agent)))
+    need = late.replace("_", " ")
+    found = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
 
-    assert index.searches == [late.replace("_", " ")]
-    assert late in state.exposed, f"{late} was indexed but not findable"
+    assert index.searches == [need]
+    assert found.startswith(_MATCHES_HEADER)
+    assert f"- {late}:" in found, f"{late} was indexed but not findable"
+
+    # A search finds and lists; it exposes nothing. So the late tool is still not carrying a schema, and the one way to
+    # a schema is the load — which is also the only channel that counts a cycle as a load.
+    assert state.exposed == {}
+    assert state.loads == 0
+
+    loaded = _run(plugin.get_tool_details(names=[late], tool_context=_tool_context(agent, GET_TOOL_DETAILS_NAME)))
+
+    assert loaded.startswith(_DETAILS_LOADED_HEADER)
+    assert f"- {late}:" in loaded
+    assert state.exposed == {late: cycle}
+    assert state.loads == 1
 
 
 @PROPERTY_SETTINGS
 @given(
     names=names_strategy,
     find_tools_position=position_strategy,
-    guard=st.sampled_from(["unknown_name", "no_search_tool", "both"]),
+    guard=st.sampled_from(["unknown_name", "no_find_tools", "no_get_tool_details", "no_plugin_tools", "both"]),
     unknown=st.sampled_from(UNKNOWN_NAMES),
     exposed=subset_strategy,
     referenced=subset_strategy,
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     cycle=cycle_strategy,
 )
 def test_passthrough_triggers_on_either_structural_guard(
@@ -942,7 +1030,7 @@ def test_passthrough_triggers_on_either_structural_guard(
     exposed: list[str],
     referenced: list[str],
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 19.
@@ -953,7 +1041,8 @@ def test_passthrough_triggers_on_either_structural_guard(
     """
     index = _RecordingIndex()
     plugin = ProgressiveToolDisclosure(
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
+        summarizer=_stub_summary,
         always_available=tuple(always_available),
         index=index,
     )
@@ -967,19 +1056,27 @@ def test_passthrough_triggers_on_either_structural_guard(
         # mode flag on the context — so a synthetic specification is all it takes to abstain.
         synthetic: dict[str, Any] = {"name": unknown, "description": "x", "inputSchema": {}}
         incoming.insert(min(find_tools_position, len(incoming)), synthetic)
-    if guard in ("no_search_tool", "both"):
-        # The window between ``init_agent`` and the plugin registry registering the vended tool: with no way back to a
-        # hidden schema, there is nothing to hide.
-        incoming = [spec for spec in incoming if spec["name"] != FIND_TOOLS_NAME]
+    # The window between ``init_agent`` and the plugin registry registering the vended tools. Either one missing is
+    # enough: without ``get_tool_details`` the model cannot load a hidden schema, and without ``find_tools`` it cannot
+    # find one, so in both cases there is nothing to hide.
+    missing = {
+        "no_find_tools": {FIND_TOOLS_NAME},
+        "no_get_tool_details": {GET_TOOL_DETAILS_NAME},
+        "no_plugin_tools": set(_PLUGIN_TOOL_NAMES),
+        "both": set(_PLUGIN_TOOL_NAMES),
+    }.get(guard, set())
+    incoming = [spec for spec in incoming if spec["name"] not in missing]
 
     context = _context(agent, incoming, _messages(referenced))
     exp_incoming = copy.deepcopy(incoming)
 
     result = _run(plugin._projection_handler(context))
 
-    # Requirements 9.1 and 9.2: unchanged by object identity, not merely equal — the stage gets back what it handed in.
+    # Requirements 9.1 and 9.2: unchanged by object identity, not merely equal — the stage gets back what it handed in,
+    # prompt included, so a passthrough cannot leave a catalog behind for tools it did not hide.
     assert result is context
     assert result.tool_specs is incoming
+    assert result.system_prompt is context.system_prompt
     assert incoming == exp_incoming
 
     # Abstaining is total: a passthrough reads no state, builds no index and records no fingerprint.
@@ -993,7 +1090,7 @@ def test_passthrough_triggers_on_either_structural_guard(
     find_tools_position=position_strategy,
     exposed=subset_strategy,
     referenced=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     cycle=cycle_strategy,
 )
 def test_the_projection_applies_when_neither_structural_guard_holds(
@@ -1001,7 +1098,7 @@ def test_the_projection_applies_when_neither_structural_guard_holds(
     find_tools_position: int,
     exposed: list[str],
     referenced: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     cycle: int,
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 19.
@@ -1017,7 +1114,7 @@ def test_the_projection_applies_when_neither_structural_guard_holds(
         find_tools_position=find_tools_position,
         exposed=exposed,
         referenced=referenced,
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
         cycle=cycle,
     )
 
@@ -1030,9 +1127,10 @@ def test_the_projection_applies_when_neither_structural_guard_holds(
     names=st.lists(st.sampled_from(TOOL_NAMES), min_size=1, max_size=len(TOOL_NAMES), unique=True),
     first_need=need_strategy,
     second_need=need_strategy,
+    loaded=st.sampled_from(TOOL_NAMES),
     premature=st.sampled_from(TOOL_NAMES),
     always_available=subset_strategy,
-    catalog_tokens=catalog_tokens_strategy,
+    catalog_chars=catalog_chars_strategy,
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
@@ -1040,9 +1138,10 @@ def test_per_agent_state_is_isolated(
     names: list[str],
     first_need: str,
     second_need: str,
+    loaded: str,
     premature: str,
     always_available: list[str],
-    catalog_tokens: int | None,
+    catalog_chars: int | None,
     ttl_cycles: int,
     cycle: int,
 ) -> None:
@@ -1053,7 +1152,8 @@ def test_per_agent_state_is_isolated(
     Validates: Requirements 1.4, 10.5.
     """
     plugin = ProgressiveToolDisclosure(
-        catalog_tokens=catalog_tokens,
+        catalog_chars=catalog_chars,
+        summarizer=_stub_summary,
         ttl_cycles=ttl_cycles,
         always_available=tuple(always_available),
         index=_RecordingIndex(),
@@ -1069,9 +1169,11 @@ def test_per_agent_state_is_isolated(
     first.event_loop_metrics.cycle_count = cycle
     second.event_loop_metrics.cycle_count = cycle
 
-    # Every channel that writes state, exercised on the first agent only: a projection, a search, and a premature call.
+    # Every channel that writes state, exercised on the first agent only: a projection, a search, a load and a
+    # premature call.
     _run(plugin._projection_handler(_context(first, _incoming_specs(first, names), [])))
     _run(plugin.find_tools(need=first_need, tool_context=_tool_context(first)))
+    _run(plugin.get_tool_details(names=[loaded], tool_context=_tool_context(first, GET_TOOL_DETAILS_NAME)))
     plugin._on_before_tool_call(_before_tool_call(first, premature))
 
     assert plugin._states.get(second) is None, "activity on one agent created state on another"
@@ -1080,6 +1182,7 @@ def test_per_agent_state_is_isolated(
     # Now the second agent runs the same channels with a need of its own.
     _run(plugin._projection_handler(_context(second, _incoming_specs(second, names), [])))
     _run(plugin.find_tools(need=second_need, tool_context=_tool_context(second)))
+    _run(plugin.get_tool_details(names=[loaded], tool_context=_tool_context(second, GET_TOOL_DETAILS_NAME)))
     plugin._on_before_tool_call(_before_tool_call(second, premature))
 
     # Requirement 1.4 and 10.5: two agents, one plugin instance, two states — and updating one leaves the other exactly

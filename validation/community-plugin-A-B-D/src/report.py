@@ -730,7 +730,7 @@ def _interpretation(results: dict[str, dict[str, Any]], order: list[str], baseli
             "- Premature cancellations are the number to watch. Each one costs a cycle, and a cycle",
             "  carries the whole history — so they can hand back more than the schema saving. When this",
             "  count is high relative to searches, the catalog is telling the model a tool exists",
-            "  without telling it enough to call correctly, and raising `catalog_tokens` or naming the",
+            "  without telling it enough to call correctly, and raising `catalog_chars` or naming the",
             "  frequent tools in `always_available` is the cheaper fix.",
             "",
         ]

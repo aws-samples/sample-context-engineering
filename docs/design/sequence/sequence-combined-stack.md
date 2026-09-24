@@ -23,8 +23,9 @@ job of deciding what of a large payload survives" — was wrong:
   (`plugin.py:417`, the `@hook`-decorated `_on_after_tool_call`).
 - **`ContextGraph` acts at delivery**, on a history that **already exists**. It never sees a payload;
   it sees whatever was written down, and folds it to Titles / Descriptions / Full Content.
-- **`ProgressiveToolDisclosure` acts at delivery too**, but on the other field: it rewrites the call's
-  `tool_specs` down to a lean catalog plus a search tool, and never touches `messages`.
+- **`ProgressiveToolDisclosure` acts at delivery too**, but on the other two fields: it cuts the call's
+  `tool_specs` down to the tools that are callable on it plus its own two tools, moves every other tool
+  to a one-line catalog in `system_prompt`, and never touches `messages`.
 
 So the filter makes the graph's input *smaller*, not *different in kind*. This is stated as the design
 argument in `GraphTuning`'s own docstring (`config.py:450` onward).
@@ -47,9 +48,9 @@ are defined in `RUN_CONFIGS` (`config.py:614`) with the boolean flags `disclosur
 Construction order inside `build_plugins`, and what each plugin is attached with:
 
 - **Relevance filter** — built under `if config.relevance:` (`runner.py:343`). Constructed at
-  `runner.py:359` as `RelevanceFilter(...)` with `store=FileStore(str(storage_root))`
-  (`runner.py:363`), **`include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:368`)**,
-  `max_result_tokens=THRESHOLDS.max_result_tokens` (`runner.py:369`), and a `config={...}` dict
+  `runner.py:362` as `RelevanceFilter(...)` with `store=FileStore(str(storage_root))`
+  (`runner.py:366`), **`include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:371`)**,
+  `max_result_tokens=THRESHOLDS.max_result_tokens` (`runner.py:372`), and a `config={...}` dict
   carrying `reranker` (`runner.py:371`), `relevance_threshold`, `chunk_tokens`, `preview_tokens`.
   Appended at `runner.py:378`. The reranker is `_MeteredDensityReranker` or `_MeteredReranker`,
   selected at `runner.py:351` by `DENSITY_RERANK` (`runner.py:190`).
@@ -64,11 +65,11 @@ Construction order inside `build_plugins`, and what each plugin is attached with
   `runner.py:384`). Appended at `runner.py:418`.
 - **Progressive tool disclosure** — built under `if config.disclosure:` (`runner.py:420`), appended and
   constructed at `runner.py:421`–`runner.py:422` as `ProgressiveToolDisclosure(...)` with
-  `catalog_tokens=THRESHOLDS.catalog_tokens` (`runner.py:421`), `ttl_cycles`, `top_k`, the
-  `always_available=[...]` list (`runner.py:433`, composition in §6),
+  `catalog_chars=THRESHOLDS.catalog_chars` (`runner.py:423`), `ttl_cycles` (`runner.py:424`), `top_k`
+  (`runner.py:425`), the `always_available=[...]` list (`runner.py:433`, composition in §6), and
   `referenced_source=_graph_referenced_source(graph) if graph is not None else None` (`runner.py:437`,
-  the bridge defined at `runner.py:268`), and
-  `catalog_in_system_prompt=THRESHOLDS.catalog_in_system_prompt` (`runner.py:438`).
+  the bridge defined at `runner.py:271`). There is no placement flag: the catalog always goes to the
+  system prompt.
 
 The five configurations, expressed as which of the above three branches fire:
 
@@ -127,20 +128,21 @@ Therefore, in the `all` configuration:
 
 1. **`ContextGraph` delivery runs first** (index 0) and folds `messages`.
 2. **`ProgressiveToolDisclosure._projection_handler` runs next** (appended at
-   `strands-progressive-tool-disclosure/.../plugin.py`, line 1008 in `init_agent`) and rewrites
+   `strands-progressive-tool-disclosure/.../plugin.py`, line 1031 in `init_agent`) and rewrites
    `tool_specs`.
-3. **The catalog block, when it is in the system prompt, is appended last.** The graph's delivery
+3. **The catalog block is appended last.** The graph's delivery
    returns `await self._fold(replace(context, messages=removed))` (`projection.py:217`), a
    `dataclasses.replace` that substitutes `messages` and carries **every other field over unchanged** —
-   `system_prompt` included. With `catalog_in_system_prompt` on, the disclosure handler then appends its
+   `system_prompt` included. The disclosure handler then appends its
    block via `_append_to_system_prompt(context.system_prompt, block)`
-   (`strands-progressive-tool-disclosure/.../plugin.py`, line 879, helper at line 216). Because
+   (`strands-progressive-tool-disclosure/.../plugin.py`, line 916, helper at line 293). Because
    disclosure runs after the graph and the graph preserved the prompt, the catalog lands on an untouched
-   system prompt and lands last.
+   system prompt and lands last. This is no longer conditional: the catalog is the only placement, so the
+   guarantee carries every projected call rather than one opt-in mode.
 
 The two delivery-side plugins do not contend for a field: the graph only folds `messages`, disclosure
-only rewrites `tool_specs` (its docstring at line 1013 states it is "the only place `tool_specs` is ever
-rewritten"). Index 0 is load-bearing for the graph-vs-memory-manager rule
+rewrites `tool_specs` and appends to `system_prompt` (its docstring at line 1036 states it is "the only
+place either field is ever rewritten"). Index 0 is load-bearing for the graph-vs-memory-manager rule
 (`_delivery_precedes_memory_fold`, graph `plugin.py` line 284), not for graph-vs-disclosure.
 
 ## 4. The hook-order table
@@ -154,7 +156,7 @@ follows the `plugins=[...]` list order — per §2: `RelevanceFilter`, then `Con
 Registration sites:
 
 - `RelevanceFilter`: `AfterToolCallEvent` only, via the `@hook`-decorated `_on_after_tool_call`
-  (`plugin.py:417`; event imported at `plugin.py:20`). Its `retrieve_context` `@tool` (`plugin.py:299`)
+  (`plugin.py:420`; event imported at `plugin.py:20`). Its `retrieve_context` `@tool` (`plugin.py:302`)
   is **de-registered in `init_agent`** unless the tool is switched on — see §5.
 - `ContextGraph`: four engagement points in `init_agent`
   (`strands-context-graph/.../plugin.py`, line 616): `agent.add_hook(self._on_before_invocation,
@@ -165,15 +167,16 @@ Registration sites:
   (line 1102), `find_context` (line 1145) — of which `expand_artifact` is dropped when
   `include_artifact_tool` is false (lines 668–672).
 - `ProgressiveToolDisclosure`: one `InvokeModelStage.Input` middleware handler
-  (`strands-progressive-tool-disclosure/.../plugin.py`, line 1008) plus the `@hook`-decorated
-  `_on_before_tool_call` on `BeforeToolCallEvent` (line 1168), and the `find_tools` `@tool` (line 1094).
+  (`strands-progressive-tool-disclosure/.../plugin.py`, line 1031) plus the `@hook`-decorated
+  `_on_before_tool_call` on `BeforeToolCallEvent` (line 1256), and two `@tool` members — `find_tools`
+  (line 1152) and `get_tool_details` (line 1212).
 
 Events with more than one subscriber in the `all` configuration:
 
 | SDK event | Subscribers, in SDK call order | Load-bearing? | Why |
 |---|---|---|---|
 | `AfterToolCallEvent` | `RelevanceFilter._on_after_tool_call` and `ContextGraph._on_after_tool_call` — registration order is relevance-first, and `After*` is reversed within the group, so the graph runs first at call time | **No — the graph is engineered not to depend on it.** | The filter rewrites `event.result` into a marker + preview; the graph's `_on_after_tool_call` reads references off that text to register artifact Cards. Running before the rewrite, it sees no reference on the fast path. The graph's own docstring settles it (graph `plugin.py`, line 880): the hook is "the fast path, not the only one", because the rebuild scan reads the same references off the same preview text later, which "makes this hook's registration order against the offloader's irrelevant, costing at most a turn of latency". **In the default configuration the question is moot**: no reference token is emitted at all (§5), and "a result naming no reference registers nothing and logs nothing" (same docstring, line 883). |
-| `InvokeModelStage.Input` (middleware, not a hook, but a shared stage) | `ContextGraph` delivery at index 0, then `ProgressiveToolDisclosure._projection_handler`, then the harness's measurement middleware (`runner.py:471`) | **Yes — and guaranteed, not incidental.** | Per §3: index 0 plus back-to-front composition means the graph folds `messages` first, disclosure projects `tool_specs` second, and the catalog block (when in the prompt) is appended last on a `system_prompt` the graph carried over unchanged. |
+| `InvokeModelStage.Input` (middleware, not a hook, but a shared stage) | `ContextGraph` delivery at index 0, then `ProgressiveToolDisclosure._projection_handler`, then the harness's measurement middleware (`runner.py:471`) | **Yes — and guaranteed, not incidental.** | Per §3: index 0 plus back-to-front composition means the graph folds `messages` first, disclosure projects `tool_specs` second, and the catalog block is appended last on a `system_prompt` the graph carried over unchanged. |
 
 Events with a single subscriber: `MessageAddedEvent` → `ContextGraph._on_message_added` (graph
 `plugin.py`, line 797) only; `BeforeInvocationEvent` → `ContextGraph._on_before_invocation` (line 924)
@@ -182,24 +185,25 @@ only; `BeforeToolCallEvent` → `ProgressiveToolDisclosure._on_before_tool_call`
 ## 5. The headline change: in the default configuration there is only one retrieval tool
 
 **`RelevanceFilter.include_retrieval_tool` now defaults to `False`** — the signature default at
-`plugin.py:187`, documented at `plugin.py:198`. In `init_agent` the plugin removes its own
+`plugin.py:188`, documented at `plugin.py:199`. In `init_agent` the plugin removes its own
 auto-discovered tool when the flag is off, matched by `tool_name` rather than by a literal
-(`plugin.py:233`–`plugin.py:236`). The harness passes the flag through from the environment:
+(`plugin.py:236`–`plugin.py:239`). The harness passes the flag through from the environment:
 `include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:368`), where
 `RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL") == "1"`
 (`runner.py:198`).
 
-With the flag off, three things do not happen — all in `_store_and_rewrite` (`plugin.py:481`):
+With the flag off, three things do not happen — filtering itself (chunk, rerank, preview, rewrite in
+`_filter_and_rewrite`, `plugin.py:523`) runs unchanged, because storage is optional:
 
-1. **Nothing is stored.** The store-write loop sits under `if self._include_retrieval_tool:`
-   (`plugin.py:509`), so the `FileStore` directory stays empty (the comment at `runner.py:361`–
-   `runner.py:362` says exactly this).
+1. **Nothing is stored.** `_store_raw` returns an empty list when the tool is off
+   (`plugin.py:498`), so the `FileStore` directory stays empty (the comment at `runner.py:363`–
+   `runner.py:365` says exactly this).
 2. **No reference token is minted.** `references` stays empty, so the `[ref: …]` / `[refs: …]` suffix
-   (`plugin.py:540`) is never appended: the rewritten result is the `[Relevance: …]` marker plus the
-   verbatim preview and nothing else (`plugin.py:538`).
+   (`plugin.py:555`) is never appended: the rewritten result is the `[Relevance: …]` marker plus the
+   verbatim preview and nothing else (`plugin.py:553`).
 3. **No `retrieve_context` tool is registered**, so nothing exists to resolve a reference — which is why
    the plugin suppresses the other two: "a reference would be a promise nothing can keep"
-   (`plugin.py:200`).
+   (`plugin.py:201`).
 
 **So the two-retrieval-tool hazard does not arise in the default configuration.** The README's
 accuracy-regression section — two plausible artifact-retrieval tools for one job, over two stores that
@@ -227,9 +231,9 @@ on, the de-duplication at `runner.py:411` is load-bearing again, and the orderin
 
 ## 6. Sequence diagram — one full turn, all three plugins, default configuration
 
-Default configuration means `include_retrieval_tool=False` and `catalog_in_system_prompt=False`: one
+Default configuration means `include_retrieval_tool=False`: one
 tool result filtered to a preview with **no reference token**, the graph folding history, the disclosure
-plugin projecting `toolConfig` last.
+plugin projecting `toolConfig` last and appending its catalog to the system prompt.
 
 ```mermaid
 sequenceDiagram
@@ -245,13 +249,13 @@ sequenceDiagram
 
     Note over Graph: BeforeInvocationEvent — freeze TurnChoice<br/>graph plugin.py line 924
     Graph->>Disc: per-call input (InvokeModelStage.Input), graph FIRST at index 0
-    Note over Graph: deliver() folds messages to Titles/Descriptions/Full<br/>projection.py:175 forces index 0; replace() keeps system_prompt
-    Note over Disc: _projection_handler rewrites tool_specs -> catalog + find_tools<br/>disclosure plugin.py line 1008 / 1010
+    Note over Graph: deliver() folds messages to Titles/Descriptions/Full<br/>projection.py:175 forces index 0 · replace() keeps system_prompt
+    Note over Disc: _projection_handler keeps only the callable tools in tool_specs<br/>and appends the catalog to system_prompt<br/>disclosure plugin.py line 1031 / 1033
     Disc->>Model: model call (folded history + projected toolConfig)
 
     Model->>Tool: toolUse (a scenario tool)
     Tool-->>Rel: AfterToolCallEvent (oversized result)
-    Note over Rel: _on_after_tool_call -> _store_and_rewrite<br/>marker + verbatim preview, NO store write, NO [ref:]
+    Note over Rel: _on_after_tool_call -> _filter_and_rewrite<br/>marker + verbatim preview, NO store write, NO [ref:]
     Rel-->>Graph: AfterToolCallEvent (result is marker + preview)
     Note over Graph: _on_after_tool_call — no reference in the text,<br/>so no artifact Card is registered
 
@@ -272,19 +276,21 @@ Annotated arrows / handlers:
   `self._projection.register(agent)` (graph `plugin.py`, line 650); body is `deliver`
   (`projection.py`, line 185), which returns `replace(context, messages=removed)` folded
   (`projection.py:217`).
-- `tool_specs` projection → `ProgressiveToolDisclosure._projection_handler` — disclosure `plugin.py`,
-  line 1010, registered on `InvokeModelStage.Input` at line 1008.
-- oversized tool result intercepted → `RelevanceFilter._on_after_tool_call` (`plugin.py:417`) →
-  `_store_and_rewrite` (`plugin.py:481`): guards, then — with the retrieval tool off — no store write
-  (`plugin.py:509`), a `[Relevance: …]` marker plus preview (`plugin.py:538`), no reference suffix
-  (`plugin.py:540` skipped), and `event.result` replaced (`plugin.py:555`).
+- `tool_specs` projection and catalog append → `ProgressiveToolDisclosure._projection_handler` —
+  disclosure `plugin.py`, line 1033, registered on `InvokeModelStage.Input` at line 1031.
+- oversized tool result intercepted → `RelevanceFilter._on_after_tool_call` (`plugin.py:420`) →
+  `_filter_and_rewrite` (`plugin.py:523`): guards, then — with the retrieval tool off — no store write
+  (`plugin.py:498`), a `[Relevance: …]` marker plus preview (`plugin.py:553`), no reference suffix
+  (`plugin.py:555` skipped), and `event.result` replaced (`plugin.py:570`).
 - graph sees the rewritten result → `ContextGraph._on_after_tool_call` (graph `plugin.py`, line 872):
   with no reference in the text it registers nothing, which is the ordinary nothing-offloaded path
   (docstring, line 883).
 
 The premature-call guard (`ProgressiveToolDisclosure._on_before_tool_call`, disclosure `plugin.py`,
-line 1168) sits on the `toolUse` edge: if the model calls a tool whose schema was only a catalog entry,
-it cancels the call and exposes the schema — one recovered cycle.
+line 1256) sits on the `toolUse` edge: if the model calls a tool it only read as a catalog line in the
+system prompt, without loading it through `get_tool_details`, the guard cancels the call and exposes the
+schema — one recovered cycle. It is a safety net rather than a path, because a catalog name is not in
+`tool_specs` at all.
 
 `always_available` is what keeps a retrieval tool off that edge — `runner.py:433`–`runner.py:436`:
 
@@ -301,9 +307,10 @@ is what names it. And the composition is now the graph's `retrieval_tool_names` 
 property at line 675, returning `expand_card`, `find_context`, and `expand_artifact` only when it was
 not de-registered) plus **one literal, `list_accounts`** — which is a **domain tool of the scenario, not
 a plugin's** (comment at `runner.py:430`–`runner.py:432`). These names must be always-available because a
-catalog entry carries an **empty** `inputSchema`, so a hidden tool needing arguments is called with none
-and cancelled by the premature-call guard before it runs (`runner.py:424`–`runner.py:428`; the same
-argument from the plugin's side at graph `plugin.py`, lines 678–683).
+tool that is only in the catalog is not in `tool_specs` at all and has to be loaded with
+`get_tool_details` before it can be called, so a retrieval tool left to discovery would cost a cycle
+learning what the folded-context guidance already told the model to do (`runner.py:426`–`runner.py:428`;
+the same argument from the plugin's side at graph `plugin.py`, lines 678–683).
 
 ## 7. The graph's one tuning
 
@@ -367,15 +374,14 @@ which accepts `none/null/off/unbounded`):
 | `VALIDATION_AGENT_MODEL_ID` | agent model id (not a plugin knob) | `"us.anthropic.claude-opus-4-8"` | no | `config.py:133` |
 | `VALIDATION_MAX_OUTPUT_TOKENS` | model `max_tokens` (not a plugin knob) | `4_096` | no | `config.py:156` |
 | `VALIDATION_WINDOW_REGIME` | regime selector (drives §9 budgets) | derived (`tight`/`large`) | no | `config.py:341` |
-| `VALIDATION_MAX_RESULT_TOKENS` | RelevanceFilter `max_result_tokens` | `4_000` | no | `config.py:437` |
-| `VALIDATION_PREVIEW_TOKENS` | RelevanceFilter `preview_tokens` | `BUDGETS.preview_tokens` (`800`/`2_000`) | no | `config.py:438` |
-| `VALIDATION_CHUNK_TOKENS` | RelevanceFilter `chunk_tokens` | `500` | no | `config.py:439` |
-| `VALIDATION_RELEVANCE_THRESHOLD` | RelevanceFilter `relevance_threshold` | `0.02` | no | `config.py:440` |
-| `VALIDATION_CATALOG_TOKENS` | ProgressiveToolDisclosure `catalog_tokens` | `20` | no | `config.py:441` |
-| `VALIDATION_TTL_CYCLES` | ProgressiveToolDisclosure `ttl_cycles` | `5` | no | `config.py:442` |
-| `VALIDATION_TOP_K` | ProgressiveToolDisclosure `top_k` | `4` | no | `config.py:443` |
-| `VALIDATION_MIN_CARDS` | ContextGraph `min_cards` | `3` | no | `config.py:444` |
-| **`VALIDATION_CATALOG_IN_SYSTEM_PROMPT`** | ProgressiveToolDisclosure `catalog_in_system_prompt` | `False` | no (`_env_bool`) | `config.py:445` |
+| `VALIDATION_MAX_RESULT_TOKENS` | RelevanceFilter `max_result_tokens` | `4_000` | no | `config.py:416` |
+| `VALIDATION_PREVIEW_TOKENS` | RelevanceFilter `preview_tokens` | `BUDGETS.preview_tokens` (`800`/`2_000`) | no | `config.py:417` |
+| `VALIDATION_CHUNK_TOKENS` | RelevanceFilter `chunk_tokens` | `500` | no | `config.py:418` |
+| `VALIDATION_RELEVANCE_THRESHOLD` | RelevanceFilter `relevance_threshold` | `0.02` | no | `config.py:419` |
+| `VALIDATION_CATALOG_CHARS` | ProgressiveToolDisclosure `catalog_chars` | `80` | no | `config.py:420` |
+| `VALIDATION_TTL_CYCLES` | ProgressiveToolDisclosure `ttl_cycles` | `5` | no | `config.py:421` |
+| `VALIDATION_TOP_K` | ProgressiveToolDisclosure `top_k` | `4` | no | `config.py:422` |
+| `VALIDATION_MIN_CARDS` | ContextGraph `min_cards` | `3` | no | `config.py:423` |
 | `VALIDATION_GRAPH_EXPAND` | ContextGraph `expand_threshold` | `0.62` | no | `config.py:519` |
 | `VALIDATION_GRAPH_COLLAPSE` | ContextGraph `collapse_floor` | `0.45` | no | `config.py:520` |
 | `VALIDATION_GRAPH_LINK` | ContextGraph `link_threshold` | `0.50` | no | `config.py:521` |

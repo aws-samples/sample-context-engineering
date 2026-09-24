@@ -216,7 +216,7 @@ picks one, executes — and forgets the detail. If he needs it, he checks again.
 ```
   TODAY                             PROPOSAL
   ┌──────────────────────────┐      ┌──────────────────────────┐
-  │ full manual for          │      │ find()  +  CATALOG       │
+  │ full manual for          │      │ CATALOG + 2 small tools  │
   │ ALL tools,               │      │  drill: makes holes      │
   │ on EVERY call            │      │  saw: cuts               │
   │                          │      │  tape: measures          │
@@ -240,11 +240,13 @@ The life cycle of the detail:
 
 Translating:
 
-- **Lean catalog**, always present: the name plus a token budget for each tool's
-  description. It is not a separate artifact — it is generated from the objects that are
-  already registered.
-- **Detail on demand**: the model asks for what it needs, in natural language, and the
-  semantic search runs straight over those same objects.
+- **Lean catalog**, always present, listed in the **system prompt**: each tool as its name plus a
+  summary of its description within a character budget (`catalog_chars`). It is not a separate
+  artifact — it is generated from the objects that are already registered, and the summary of a
+  description too long to fit is written once and cached.
+- **Detail on demand**: the model names the tools it wants and `get_tool_details` loads their full
+  parameters for the next call; when no listed name fits, `find_tools` searches over those same
+  objects first.
 - **Forgetting**: the detail leaves when it stops being used.
 
 Forgetting is free — the tool is never removed from the agent, it just stops being sent.
@@ -388,19 +390,19 @@ sequenceDiagram
     participant M as Model
     participant T as Tool
 
-    Note over B: index built once over the<br/>registry objects — tools are static
+    Note over B: index built once over the<br/>registry objects — tools are static<br/>long descriptions summarized once and cached
 
     Note over AG,B: middleware InvokeModelStage.Input<br/>single hook point
 
-    AG->>B: builds tool_specs for this call
-    B-->>AG: find() + catalog entries<br/>name + catalog_tokens of description<br/>no full inputSchema
+    AG->>B: builds tool_specs and system_prompt for this call
+    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)<br/>no other tool is in tool_specs at all
 
     AG->>M: call
-    Note over M: the instruction lives in the description<br/>of find() itself
+    Note over M: the rule lives in the catalog block itself,<br/>beside the names it governs
 
-    M-->>AG: find("list investment transactions")
-    AG->>B: semantic search straight in the registry
-    B-->>AG: full inputSchema of the chosen one
+    M-->>AG: get_tool_details(["list_investment_transactions"])
+    AG->>B: loads the named tools
+    B-->>AG: full inputSchema of each, in the next call's tool_specs
     AG->>M: call — costs a cycle
 
     M-->>AG: calls the tool with the right arguments
@@ -408,7 +410,8 @@ sequenceDiagram
     T-->>AG: result
 
     Note over B: the schema stays while it is in use<br/>and is forgotten by inactivity
-    Note over B: catalog_tokens = None sends only find()<br/>saves more, but the model may<br/>not know it has tools
+    Note over B: fallback — when no catalog name fits,<br/>find_tools searches and lists matches,<br/>then get_tool_details loads them
+    Note over B: catalog_chars = None sends only the two tools<br/>saves more, but the model may<br/>not know it has tools
 ```
 
 ### The full path, in one sequence
@@ -428,14 +431,14 @@ sequenceDiagram
     U->>AG: message
 
     Note over AG,B: middleware InvokeModelStage.Input
-    AG->>B: builds tool_specs for this call
-    B-->>AG: find() + lean catalog
+    AG->>B: builds tool_specs and system_prompt for this call
+    B-->>AG: two plugin tools + those in use<br/>lean catalog appended to the system prompt
 
     AG->>M: call
 
-    opt needs a tool
-        M-->>AG: find(description of what it needs)
-        AG->>B: semantic search in the registry
+    opt needs a tool it has not loaded
+        M-->>AG: get_tool_details([names from the catalog])
+        AG->>B: loads them — find_tools first when no name fits
         B-->>AG: full inputSchema
         AG->>M: call — costs a cycle
     end

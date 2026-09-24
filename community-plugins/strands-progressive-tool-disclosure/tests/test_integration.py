@@ -3,20 +3,24 @@
 Validates: Requirements 12.5.
 
 The other test files each hold one part of the mechanism still: the projection algebra, the catalog
-entry, the index contract, the exposure lifecycle, the degradation paths. None of them walks the loop
-the model actually walks. This one does, once, in order:
+block, the summary path, the index contract, the exposure lifecycle, the degradation paths. None of
+them walks the loop the model actually walks. This one does, once, in order:
 
-1. a first projection, where the tool the model needs arrives as a catalog entry — a name and a short
-   description, with an empty closed ``inputSchema`` and no parameters to call it with;
-2. a search, which is how the model says what it needs and is what exposes the tool;
-3. the next projection, which carries that tool's registered full specification, parameters included;
-4. the call, which succeeds against the real registered tool and renews the exposure, so the schema
+1. a first projection, where ``tool_specs`` carries the two plugin tools and NOTHING else, and the tool
+   the model needs arrives as one ``- name: summary`` line of the catalog in the system prompt — a name
+   and a summary, with no parameters anywhere in the call to invoke it with;
+2. a search, which is how the model says what it needs when no catalog name fits, and which only
+   lists: it exposes nothing, so the schema is still not loaded after it answers;
+3. a load, ``get_tool_details([name])``, which is the one path to a schema and the step that exposes;
+4. the next projection, which carries that tool's registered full specification, parameters included,
+   and drops its catalog line — the projection and the catalog partition the registry;
+5. the call, which succeeds against the real registered tool and renews the exposure, so the schema
    stays resident past the TTL it would otherwise have aged out of.
 
 The point of running it as one sequence is that every step consumes what the previous one produced:
-the search only exposes a name the first projection listed, the second projection only widens because
-the search wrote an exposure, and the renewal is only observable because the call went through the
-registered tool rather than a stand-in.
+the load only resolves a name the catalog listed, the second projection only widens because the load
+wrote an exposure, and the renewal is only observable because the call went through the registered
+tool rather than a stand-in.
 
 Requirement 12.5 is the other half of the file. Every search path here goes through a ``ToolIndex``
 double, and the suite performs zero network calls — asserted rather than assumed: the test body runs
@@ -24,7 +28,8 @@ with socket construction, connection and name resolution all replaced by refusal
 implementation that reached for the network would fail here instead of quietly needing it. The event
 loop is created before that guard goes up, because ``asyncio`` builds its self-pipe out of a socket
 pair at loop construction and a ban installed earlier would fail the runner rather than the code
-under test. The model is a stub that raises when called, so no provider call goes out either.
+under test. The model is a stub that raises when called, and the catalog lines come from a
+deterministic summarizer stub, so no provider call goes out for a summary either.
 """
 
 import asyncio
@@ -46,16 +51,32 @@ from strands.types.tools import ToolContext, ToolSpec
 
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
-from strands_progressive_tool_disclosure.plugin import _CATALOG_SIGIL, FIND_TOOLS_NAME
+from strands_progressive_tool_disclosure.plugin import (
+    _DETAILS_LOADED_HEADER,
+    _MATCHES_HEADER,
+    _PLUGIN_TOOL_NAMES,
+    FIND_TOOLS_NAME,
+    GET_TOOL_DETAILS_NAME,
+)
 
-EMPTY_CLOSED_SCHEMA = {"json": {"type": "object", "properties": {}, "additionalProperties": False}}
-"""The schema a catalog entry carries. Its presence is how an unexposed tool is recognized."""
+CATALOG_CHARS = 80
+"""Character budget of one catalog line. The default, and wide enough that the short description of one
+of the two registered tools fits it verbatim while the other has to be summarized."""
 
 TTL_CYCLES = 3
 """Short on purpose: the renewal assertion has to outlive a full TTL to mean anything."""
 
+TOP_K = 2
+"""Two, so a plugin tool can rank inside the window and be seen being filtered out of the listing."""
+
 NEED = "list the transactions of an investment account"
 """What the model says it is trying to do. A capability, not a guess at a tool name."""
+
+CATALOG_LINE_PREFIX = "- "
+"""What opens a catalog line, in the system-prompt block and in both tools' answers alike."""
+
+WANTED = "list_investment_transactions"
+"""The tool the whole sequence is about: cataloged, searched for, loaded, then called."""
 
 _Resolved = TypeVar("_Resolved")
 
@@ -85,8 +106,8 @@ class _StubModel(Model):
 def list_investment_transactions(account: str, since: str) -> str:
     """List the transactions of an investment account.
 
-    The second sentence exists to be cut: a catalog entry has a token budget, and what the model gets
-    to read of this description is the boundary-cut prefix that fits it.
+    The second sentence exists to overrun the budget: a catalog line is at most ``catalog_chars``
+    characters, so this description cannot be used verbatim and is what sends the summarizer a tool.
 
     Args:
         account: Investment account to report on.
@@ -106,13 +127,32 @@ def send_wire(account: str, amount: str) -> str:
     return f"{account}:{amount}"
 
 
+class _StubSummarizer:
+    """Summarizer that writes a deterministic line and records which tools it was asked about.
+
+    Offline and byte-stable, which is what keeps the catalog assertions exact. It records its calls
+    because "a description that fits is used verbatim and costs no call" and "a summary is written
+    once and cached" are claims about a number of invocations, not inferences from the lines produced.
+    """
+
+    def __init__(self) -> None:
+        """Start having been asked about nothing."""
+        self.asked: list[str] = []
+
+    def __call__(self, spec: ToolSpec, max_chars: int) -> str:
+        """Return a line derived from the tool's name, within the budget."""
+        self.asked.append(spec["name"])
+        return f"summary of {spec['name']}"[:max_chars]
+
+
 class _ContainmentIndex:
     """Search double that ranks a name by how many of the need's words its full text contains.
 
     Deterministic and offline, which is what Requirement 12.5 asks of every search path: the ranking
     is a word count over the text ``build`` received, ties break by indexing order, and the same need
-    ranks the same way on every run. It counts its calls because "the search is what exposed the tool"
-    is a claim about a number of invocations, not an inference from the projection that followed.
+    ranks the same way on every run. It counts its calls because "the search did not load anything"
+    is a claim about a number of invocations next to an unchanged exposure map, not an inference from
+    the projection that followed.
     """
 
     def __init__(self) -> None:
@@ -172,7 +212,7 @@ def no_network(runner: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatc
 
 
 def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
-    """Build an offline agent carrying the two registered tools plus the plugin's search tool."""
+    """Build an offline agent carrying the two registered tools plus the plugin's two vended tools."""
     return Agent(
         model=_StubModel(),
         tools=[list_investment_transactions, send_wire],
@@ -184,7 +224,7 @@ def _model_call(agent: Agent) -> InvokeModelContext:
     """Build the invocation context of one model call, offering every registered specification.
 
     Offering the whole registry is what keeps the call off the passthrough path: a name the registry
-    does not have, or a missing ``find_tools``, is a structural guard rather than a projection.
+    does not have, or a missing plugin tool, is a structural guard rather than a projection.
     """
     candidates: dict[str, Any] = {
         "agent": agent,
@@ -205,16 +245,60 @@ def _run(loop: asyncio.AbstractEventLoop, step: Coroutine[Any, Any, _Resolved]) 
     return loop.run_until_complete(step)
 
 
+def _tool_context(agent: Agent) -> ToolContext:
+    """Build the minimal tool context the two vended tools read: the agent, and nothing else."""
+    return cast("ToolContext", SimpleNamespace(agent=agent))
+
+
 def _projected(context: InvokeModelContext) -> dict[str, ToolSpec]:
-    """Index a projection by tool name, for asking which form each tool arrived in."""
+    """Index a projection by tool name, for asking which tools are carrying a full specification."""
     return {spec["name"]: spec for spec in context.tool_specs}
+
+
+def _listed(text: str) -> dict[str, str]:
+    """Read the ``- name: summary`` lines of ``text`` as name to summary, ignoring everything else.
+
+    One parser for the three places a tool is named by line: the system-prompt catalog block, the
+    search result and the load result. They share the shape on purpose — the model reads one listing
+    format wherever it meets a tool it has not loaded — and asserting them through one reader is what
+    keeps that shared shape a property of the test rather than a coincidence of three copies.
+
+    Args:
+        text: A rendered block: a system prompt, or a tool's answer to the model.
+
+    Returns:
+        The line of each listed tool, empty when the text lists none.
+    """
+    listed: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith(CATALOG_LINE_PREFIX):
+            continue
+        name, _, summary = line.removeprefix(CATALOG_LINE_PREFIX).partition(":")
+        listed[name.strip()] = summary.strip()
+    return listed
+
+
+def _catalog(context: InvokeModelContext) -> dict[str, str]:
+    """Read the projected context's system-prompt catalog block as name to summary.
+
+    The block is the only place an unloaded tool is named, so this is how the test asks what the model
+    was told about a tool it cannot yet call.
+
+    Args:
+        context: The projected context.
+
+    Returns:
+        The catalog line of each listed tool, empty when no block was appended.
+    """
+    prompt = context.system_prompt
+    return _listed(prompt) if isinstance(prompt, str) else {}
 
 
 def _call_tool(loop: asyncio.AbstractEventLoop, agent: Agent, name: str, tool_input: dict[str, Any]) -> ToolResultEvent:
     """Run the pre-call hook and then the registered tool, returning the tool's final result event.
 
     Both halves matter. The hook is what renews the exposure and what would cancel a call made off a
-    catalog entry, and the registered tool is what turns "the schema arrived" into "the call works":
+    catalog line, and the registered tool is what turns "the schema arrived" into "the call works":
     the arguments are validated against the very specification the projection just carried.
     """
     event = BeforeToolCallEvent(
@@ -239,73 +323,106 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
     runner: asyncio.AbstractEventLoop,
     no_network: None,
 ) -> None:
-    """Requirement 12.5: projection, search, next projection and call, with zero network calls.
+    """Requirement 12.5: catalog, search, load, next projection and call, with zero network calls.
 
     One sequence, each step consuming the previous one's output, against a deterministic ``ToolIndex``
-    double and with the network unavailable.
+    double, a deterministic summarizer and with the network unavailable.
     """
     index = _ContainmentIndex()
-    # ``top_k=1`` so the step under test is unambiguous: one need, one tool exposed, and the tools the
-    # need only brushes against stay catalog entries.
-    plugin = ProgressiveToolDisclosure(index=index, ttl_cycles=TTL_CYCLES, catalog_tokens=20, top_k=1)
+    summarizer = _StubSummarizer()
+    plugin = ProgressiveToolDisclosure(
+        index=index,
+        summarizer=summarizer,
+        ttl_cycles=TTL_CYCLES,
+        catalog_chars=CATALOG_CHARS,
+        top_k=TOP_K,
+    )
     agent = _agent(plugin)
-    registered = agent.tool_registry.registry["list_investment_transactions"].tool_spec
-    registry_before = copy.deepcopy({name: entry.tool_spec for name, entry in agent.tool_registry.registry.items()})
+    registry = agent.tool_registry.registry
+    registered = registry[WANTED].tool_spec
+    registry_before = copy.deepcopy({name: entry.tool_spec for name, entry in registry.items()})
 
-    # 1. First projection: the tool is a catalog entry, so the model can read that the capability
-    # exists and cannot yet call it — there are no parameters in what it received.
-    first = _projected(_run(runner, plugin._projection_handler(_model_call(agent))))
-    assert set(first) == set(agent.tool_names)
-    assert first[FIND_TOOLS_NAME] == agent.tool_registry.registry[FIND_TOOLS_NAME].tool_spec
+    # 1. First projection: the two plugin tools carry full specifications and nothing else does, so the
+    # model can read that the capability exists and cannot call it — it has no parameters for it.
+    first = _run(runner, plugin._projection_handler(_model_call(agent)))
+    projected = _projected(first)
+    assert set(projected) == set(_PLUGIN_TOOL_NAMES)
+    assert projected[FIND_TOOLS_NAME] == registry[FIND_TOOLS_NAME].tool_spec
+    assert projected[GET_TOOL_DETAILS_NAME] == registry[GET_TOOL_DETAILS_NAME].tool_spec
 
-    entry = first["list_investment_transactions"]
-    assert entry["name"] == registered["name"]
-    assert entry["inputSchema"] == EMPTY_CLOSED_SCHEMA
-    # The sigil is what tells the model this is a listing: an entry carrying a real name, a readable
-    # description and a valid empty schema is otherwise indistinguishable from a tool that genuinely
-    # takes no arguments, and the only statement otherwise lived in find_tools' own description.
-    assert entry["description"].startswith(_CATALOG_SIGIL)
-    body = entry["description"][len(_CATALOG_SIGIL) :]
-    assert registered["description"].startswith(body.removesuffix("..."))
-    assert entry != registered
+    # The catalog is in the system prompt, one line per tool that is NOT in the projection, and the
+    # rule that governs those names arrives in the same block: they are loaded by name, not called.
+    prompt = first.system_prompt
+    assert isinstance(prompt, str)
+    assert GET_TOOL_DETAILS_NAME in prompt
+    assert _catalog(first) == {
+        # Over the budget, so this line was written by the summarizer.
+        WANTED: f"summary of {WANTED}",
+        # Already within it, so it is its own best summary and cost no call.
+        "send_wire": "Send a wire transfer from an account.",
+    }
+    assert summarizer.asked == [WANTED]
+    assert all(len(summary) <= CATALOG_CHARS for summary in _catalog(first).values())
+    # A catalog line is a name and a summary. No schema travels in it, so no parameter name appears.
+    assert "since" not in prompt
     # The index was built once, over the specifications this very call offered — nothing else.
     assert index.built == [[spec["name"] for spec in _model_call(agent).tool_specs]]
     assert index.searches == 0
 
-    # 2. The search: the model describes the need in its own words, and that is what exposes the tool.
-    result = _run(runner, plugin.find_tools(NEED, cast("ToolContext", SimpleNamespace(agent=agent))))
+    # 2. The search: the model describes the need in its own words, and gets names back. It finds; it
+    # does not load, so the exposure map is exactly as empty after it as it was before.
+    found = _run(runner, plugin.find_tools(NEED, _tool_context(agent)))
     assert index.searches == 1
-    assert "list_investment_transactions" in result
-    # The search result is a message, and a message is resident: it carries no schema, ever.
-    assert "inputSchema" not in result
-    assert "since" not in result
-    assert plugin._states[agent].exposed == {"list_investment_transactions": 0}
+    assert found.splitlines()[0] == _MATCHES_HEADER
+    # A plugin tool can rank — this need is quoted in find_tools' own description — and is never listed.
+    assert _listed(found) == {WANTED: f"summary of {WANTED}"}
+    # The answer is a message, and a message is resident: it carries no schema, ever.
+    assert "inputSchema" not in found
+    assert "since" not in found
+    assert plugin._states[agent].exposed == {}
+    assert plugin._states[agent].searches == 1
+    assert plugin._states[agent].loads == 0
 
-    # 3. The next projection carries the registered full specification, parameters included, while
-    # everything the search did not match stays a catalog entry.
+    # 3. The load: the one step that exposes a schema, and the only way to a callable tool.
+    loaded = _run(runner, plugin.get_tool_details([WANTED], _tool_context(agent)))
+    assert loaded.splitlines()[0] == _DETAILS_LOADED_HEADER
+    assert _listed(loaded) == {WANTED: f"summary of {WANTED}"}
+    assert plugin._states[agent].loads == 1
+    assert plugin._states[agent].exposed == {WANTED: 0}
+    # Loading resolves names against the registry: it never goes back to the index.
+    assert index.searches == 1
+
+    # 4. The next projection carries the registered full specification, parameters included, and the
+    # catalog drops that name: the projection and the catalog partition the registry between them.
     agent.event_loop_metrics.cycle_count = 1
-    second = _projected(_run(runner, plugin._projection_handler(_model_call(agent))))
-    assert second["list_investment_transactions"] == registered
-    assert set(second["list_investment_transactions"]["inputSchema"]["json"]["required"]) == {"account", "since"}
-    assert second["send_wire"]["inputSchema"] == EMPTY_CLOSED_SCHEMA
+    second = _run(runner, plugin._projection_handler(_model_call(agent)))
+    second_specs = _projected(second)
+    assert second_specs[WANTED] == registered
+    assert set(second_specs[WANTED]["inputSchema"]["json"]["required"]) == {"account", "since"}
+    assert "send_wire" not in second_specs
+    assert _catalog(second) == {"send_wire": "Send a wire transfer from an account."}
+    # The summary was written once and cached; a second projection does not pay for it again.
+    assert summarizer.asked == [WANTED]
 
-    # 4. The call: the arguments validate against the specification that just arrived, the tool runs,
+    # 5. The call: the arguments validate against the specification that just arrived, the tool runs,
     # and the call renews the exposure at the current cycle.
     agent.event_loop_metrics.cycle_count = 2
-    event = _call_tool(runner, agent, "list_investment_transactions", {"account": "IA-1", "since": "2026-01-01"})
+    event = _call_tool(runner, agent, WANTED, {"account": "IA-1", "since": "2026-01-01"})
     assert event.tool_result["status"] == "success"
     assert event.tool_result["content"] == [{"text": "IA-1:2026-01-01"}]
-    assert plugin._states[agent].exposed == {"list_investment_transactions": 2}
+    assert plugin._states[agent].exposed == {WANTED: 2}
 
     # The renewal is what it claims to be: the schema is still resident a full TTL after the *call*,
-    # which is past the point the original search-time exposure would have aged out.
+    # which is past the point the original load-time exposure would have aged out.
     agent.event_loop_metrics.cycle_count = 2 + TTL_CYCLES
-    renewed = _projected(_run(runner, plugin._projection_handler(_model_call(agent))))
-    assert renewed["list_investment_transactions"] == registered
+    renewed = _run(runner, plugin._projection_handler(_model_call(agent)))
+    assert _projected(renewed)[WANTED] == registered
+    assert WANTED not in _catalog(renewed)
 
-    # And one search paid for all of it: the projections in between never went back to the index.
+    # And one search and one load paid for all of it: the projections in between went back to neither.
     assert index.searches == 1
     assert plugin._states[agent].searches == 1
+    assert plugin._states[agent].loads == 1
 
     # The whole cycle changed what calls were told about, not what the agent has.
-    assert {name: entry.tool_spec for name, entry in agent.tool_registry.registry.items()} == registry_before
+    assert {name: entry.tool_spec for name, entry in registry.items()} == registry_before

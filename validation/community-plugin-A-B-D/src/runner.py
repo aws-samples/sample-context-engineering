@@ -420,14 +420,12 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
     if config.disclosure:
         plugins.append(
             ProgressiveToolDisclosure(
-                catalog_tokens=THRESHOLDS.catalog_tokens,
+                catalog_chars=THRESHOLDS.catalog_chars,
                 ttl_cycles=THRESHOLDS.ttl_cycles,
                 top_k=THRESHOLDS.top_k,
                 # A retrieval tool must never need discovery: the model is told to use it in the
-                # guidance text that replaces the payload, and a cycle spent finding it would be an
-                # artefact of the harness rather than of the strategy. Worse than a wasted cycle,
-                # actually -- a catalog entry carries an EMPTY inputSchema, so a hidden retrieval tool
-                # is called with no arguments and cancelled by the premature-call guard before it runs.
+                # guidance text that replaces the payload, and a cycle spent loading it would be an
+                # artefact of the harness rather than of the strategy.
                 #
                 # Derived from the plugins rather than hard-coded, so excluding the graph's artifact
                 # tool or renaming one cannot leave a stale name here. `list_accounts` is the one
@@ -437,7 +435,6 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                     "list_accounts",
                 ],
                 referenced_source=_graph_referenced_source(graph) if graph is not None else None,
-                catalog_in_system_prompt=THRESHOLDS.catalog_in_system_prompt,
             )
         )
 
@@ -518,12 +515,13 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
                 state = plugin._states[agent]
                 counters["disclosure"] = {
                     "searches": state.searches,
-                    # The cost of the missing referenced-source accessor, when the bridge is off or
-                    # could not answer: each cancellation is one model cycle spent re-learning a
-                    # schema the call had already dropped.
+                    "loads": state.loads,
+                    # Calls to a catalog tool that skipped get_tool_details, recovered by the guard.
                     "premature_cancellations": state.premature_cancellations,
                     "exposed_at_end": sorted(state.exposed),
                     "exposed_count_at_end": len(state.exposed),
+                    # Tokens the catalog summaries cost; billed in compare.py at the agent's rates.
+                    "summary_usage": dict(state.summary_usage),
                 }
             except Exception as error:  # noqa: BLE001
                 counters["disclosure"] = {"error": f"state unavailable: {error}"}
