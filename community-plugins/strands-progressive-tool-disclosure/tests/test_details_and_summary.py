@@ -41,7 +41,7 @@ from strands_progressive_tool_disclosure.plugin import (
     _SUMMARY_SYSTEM_PROMPT,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
-    _drop_plugin_exchanges,
+    _fold_tool_exchanges,
     _model_summarizer,
     _truncate_description,
 )
@@ -787,8 +787,12 @@ def _exchange(tool_use_id: str, name: str) -> list[dict[str, Any]]:
     ]
 
 
-def test_plugin_exchanges_already_acted_on_leave_the_call_but_not_the_history():
-    """A closed load pair is dead weight: it leaves the call's copy, the agent's history keeps it."""
+_CALLABLE = {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
+"""What ``tool_specs`` carries once every domain tool has been released."""
+
+
+def test_a_released_tool_exchange_becomes_one_sentence_and_plugin_pairs_vanish():
+    """No call shape left to repeat: the result survives as text, the arguments do not."""
     question = {"role": "user", "content": [{"text": "wire 10 to account 1"}]}
     messages = [
         question,
@@ -799,38 +803,59 @@ def test_plugin_exchanges_already_acted_on_leave_the_call_but_not_the_history():
     ]
     original = copy.deepcopy(messages)
 
-    trimmed = _drop_plugin_exchanges(messages)
+    folded = _fold_tool_exchanges(messages, _CALLABLE)
 
-    assert trimmed == [question, *_exchange("t2", "send_wire"), *messages[-2:]]
+    assert folded == [
+        {
+            "role": "user",
+            "content": [question["content"][0], {"text": "The tool send_wire was called and the result was: ok"}],
+        },
+        *messages[-2:],
+    ]
+    assert not any("toolUse" in block for message in folded for block in message["content"])
     assert messages == original
 
 
-def test_the_exchange_in_flight_and_mixed_calls_are_kept_safe():
-    """The last two messages stay whole; in a mixed call only the plugin blocks go."""
-    in_flight = [{"role": "user", "content": [{"text": "q"}]}, *_exchange("t1", GET_TOOL_DETAILS_NAME)]
-    assert _drop_plugin_exchanges(in_flight) is in_flight
+def test_a_callable_tool_keeps_its_tool_form():
+    """A tool still in ``tool_specs`` may be called again, so its exchange is left as it is."""
+    messages = [
+        {"role": "user", "content": [{"text": "q"}]},
+        *_exchange("t1", "send_wire"),
+        {"role": "assistant", "content": [{"text": "Done."}]},
+        {"role": "user", "content": [{"text": "next"}]},
+    ]
+    assert _fold_tool_exchanges(messages, {*_CALLABLE, "send_wire"}) is messages
+
+
+def test_the_exchange_in_flight_is_kept_and_mixed_calls_keep_their_callable_part():
+    """The last two messages stay in tool form; in a mixed call only the unreachable blocks fold."""
+    in_flight = [{"role": "user", "content": [{"text": "q"}]}, *_exchange("t1", "send_wire")]
+    assert _fold_tool_exchanges(in_flight, _CALLABLE) is in_flight
 
     mixed = [
         {"role": "user", "content": [{"text": "q"}]},
         {
             "role": "assistant",
             "content": [
-                {"toolUse": {"toolUseId": "t1", "name": FIND_TOOLS_NAME, "input": {}}},
-                {"toolUse": {"toolUseId": "t2", "name": "check_balance", "input": {}}},
+                {"toolUse": {"toolUseId": "t1", "name": "send_wire", "input": {"account": "1"}}},
+                {"toolUse": {"toolUseId": "t2", "name": "check_balance", "input": {"account": "1"}}},
             ],
         },
         {
             "role": "user",
             "content": [
-                {"toolResult": {"toolUseId": "t1", "content": [{"text": "matches"}]}},
-                {"toolResult": {"toolUseId": "t2", "content": [{"text": "10"}]}},
+                {"toolResult": {"toolUseId": "t1", "status": "error", "content": [{"text": "limit"}]}},
+                {"toolResult": {"toolUseId": "t2", "content": [{"json": {"balance": 10}}]}},
             ],
         },
         {"role": "assistant", "content": [{"text": "10"}]},
         {"role": "user", "content": [{"text": "thanks"}]},
     ]
-    trimmed = _drop_plugin_exchanges(mixed)
+    folded = _fold_tool_exchanges(mixed, {*_CALLABLE, "check_balance"})
 
-    assert [m["role"] for m in trimmed] == ["user", "assistant", "user", "assistant", "user"]
-    assert trimmed[1]["content"] == [mixed[1]["content"][1]]
-    assert trimmed[2]["content"] == [mixed[2]["content"][1]]
+    assert [m["role"] for m in folded] == ["user", "assistant", "user", "assistant", "user"]
+    assert folded[1]["content"] == [mixed[1]["content"][1]]
+    assert folded[2]["content"] == [
+        {"text": "The tool send_wire was called and failed with: limit"},
+        mixed[2]["content"][1],
+    ]

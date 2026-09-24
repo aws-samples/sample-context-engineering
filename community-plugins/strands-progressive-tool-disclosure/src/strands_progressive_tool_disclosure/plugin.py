@@ -4,9 +4,10 @@ Every call carries, in ``tool_specs``, only the tools that are callable on it: t
 (``find_tools`` and ``get_tool_details``), the always-available ones and the ones loaded by
 ``get_tool_details`` and still in use. A loaded tool is released after ``ttl_cycles`` cycles without a
 call, and every call renews it, so a tool used in a stretch stays loaded without reloading and
-``tool_specs`` still goes back to the mandatory set once the work moves on. The plugin's own
-``get_tool_details`` and ``find_tools`` exchanges are dropped from the messages each call sends once the
-model has acted on them: they matter on the next call, and after it they are dead weight. Every
+``tool_specs`` still goes back to the mandatory set once the work moves on. In the messages each call
+sends, an exchange of a tool that call does not carry is folded to one sentence -- ``The tool X was
+called and the result was: Y`` -- so the model keeps the evidence without a call shape to repeat, and
+the plugin's own ``get_tool_details`` and ``find_tools`` exchanges are dropped outright. Every
 other tool reaches the model as one line of a catalog in the system prompt -- its name and a summary of
 its description, at most ``catalog_chars`` characters long.
 
@@ -720,70 +721,102 @@ def _record_premature_cancellation(state: _DisclosureState, name: str) -> None:
 
 
 _RECENT_MESSAGES_KEPT = 2
-"""Trailing messages never touched by :func:`_drop_plugin_exchanges`: the exchange in flight, which the
+"""Trailing messages never touched by :func:`_fold_tool_exchanges`: the exchange in flight, which the
 model has not acted on yet."""
 
 
-def _drop_plugin_exchanges(messages: Messages) -> Messages:
-    """Return ``messages`` without the ``find_tools``/``get_tool_details`` exchanges already acted on.
+def _fold_note(name: str, result: Mapping[str, Any]) -> str:
+    """Render a tool result as the one sentence that replaces its call in the history.
 
-    A load or a search matters on the call right after it: the specification is then in ``tool_specs``
-    and the model has picked its names. Past that it is dead weight re-sent on every call, so each call
-    drops those ``toolUse`` blocks and their ``toolResult`` blocks from the copy it sends. The agent's own
-    history is not touched.
+    Args:
+        name: Name of the tool that was called.
+        result: The ``toolResult`` block. Its text and JSON parts are rendered; other parts are kept apart.
 
-    An assistant message whose only tool calls are plugin calls is dropped whole, together with the user
-    message carrying their results -- the pair goes, so the roles keep alternating. In a message that
-    mixes them with other tool calls only the plugin blocks go. The last :data:`_RECENT_MESSAGES_KEPT`
-    messages and the first message are never touched.
+    Returns:
+        ``The tool X was called and the result was: Y``, or ``... and failed with: Y`` for an error.
+    """
+    parts: list[str] = []
+    for block in result.get("content") or ():
+        if "text" in block:
+            parts.append(str(block["text"]))
+        elif "json" in block:
+            parts.append(json.dumps(block["json"], ensure_ascii=False))
+    outcome = "failed with" if result.get("status") == "error" else "the result was"
+    return f"The tool {name} was called and {outcome}: {' '.join(parts)}"
+
+
+def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> Messages:
+    """Return the call's messages with every exchange the model cannot repeat folded out of tool form.
+
+    A ``toolUse`` with its arguments is a template: seen next to a success, the model repeats it, and if
+    the tool is no longer in ``tool_specs`` that repeat is a call to a tool it cannot see. So for every
+    closed exchange of a tool NOT callable on this call, the ``toolUse`` block goes and its ``toolResult``
+    becomes a plain sentence -- ``The tool X was called and the result was: Y`` -- which keeps the
+    evidence and drops the call shape. Image or document parts of the result are kept as they are.
+
+    The plugin's own ``find_tools`` and ``get_tool_details`` exchanges go entirely, with no sentence: they
+    matter on the call right after them and are dead weight past it.
+
+    Emptied messages are dropped and consecutive messages of the same role are merged, so the roles keep
+    alternating and every remaining ``toolResult`` still follows its ``toolUse``. The first message and the
+    last :data:`_RECENT_MESSAGES_KEPT` are never rewritten; the agent's own history is never touched.
 
     Args:
         messages: Messages of the call, ``context.messages``. Read only.
+        callable_names: Names carried in full in this call's ``tool_specs``.
 
     Returns:
-        ``messages`` itself when nothing is dropped; otherwise a new list with new message dicts where a
-        block was removed.
+        ``messages`` itself when nothing is folded; otherwise a new list.
     """
     last = len(messages) - _RECENT_MESSAGES_KEPT
-    dropped_ids: set[str] = set()
-    dropped_messages: set[int] = set()
-
-    for position in range(1, last):
-        message = messages[position]
-        if message.get("role") != "assistant":
-            continue
-        uses = [block["toolUse"] for block in message.get("content") or () if "toolUse" in block]
-        plugin_ids = {
-            use_id for use in uses if use.get("name") in _PLUGIN_TOOL_NAMES and (use_id := use.get("toolUseId"))
-        }
-        if not plugin_ids:
-            continue
-        answer = position + 1
-        answer_content = messages[answer].get("content") or () if answer < last else ()
-        answer_ids = {block["toolResult"].get("toolUseId") for block in answer_content if "toolResult" in block}
-        # The results must be in the next message and outside the kept tail, or the pair is not closed.
-        if not plugin_ids <= answer_ids:
-            continue
-        dropped_ids |= plugin_ids
-        if len(plugin_ids) == len(uses) and answer_ids == plugin_ids:
-            dropped_messages |= {position, answer}
-
-    if not dropped_ids:
+    if last <= 1:
         return messages
 
-    kept: Messages = []
-    for position, message in enumerate(messages):
-        if position in dropped_messages:
-            continue
-        content = message.get("content") or []
-        filtered = [
-            block
-            for block in content
-            if block.get("toolUse", {}).get("toolUseId") not in dropped_ids
-            and block.get("toolResult", {}).get("toolUseId") not in dropped_ids
-        ]
-        kept.append(message if len(filtered) == len(content) else {**message, "content": filtered})
-    return kept
+    uses: dict[str, str] = {}
+    results: set[str] = set()
+    for message in messages[1:last]:
+        for block in message.get("content") or ():
+            if (use := block.get("toolUse")) and (use_id := use.get("toolUseId")):
+                name = use.get("name") or ""
+                if name in _PLUGIN_TOOL_NAMES or name not in callable_names:
+                    uses[use_id] = name
+            elif (result := block.get("toolResult")) and (result_id := result.get("toolUseId")):
+                results.add(result_id)
+    # Only closed pairs: a call whose result is still in the kept tail stays in tool form.
+    fold = {use_id: name for use_id, name in uses.items() if use_id in results}
+    if not fold:
+        return messages
+
+    rebuilt: Messages = [messages[0]]
+    for message in messages[1:last]:
+        content: list[Any] = []
+        changed = False
+        for block in message.get("content") or ():
+            use, result = block.get("toolUse"), block.get("toolResult")
+            if use and use.get("toolUseId") in fold:
+                changed = True
+                continue
+            if result and (folded_name := fold.get(result.get("toolUseId") or "")) is not None:
+                changed = True
+                if folded_name not in _PLUGIN_TOOL_NAMES:
+                    content.append({"text": _fold_note(folded_name, result)})
+                    content.extend(b for b in result.get("content") or () if "text" not in b and "json" not in b)
+                continue
+            content.append(block)
+        if not changed:
+            rebuilt.append(message)
+        elif content:
+            rebuilt.append({**message, "content": content})
+    rebuilt.extend(messages[last:])
+
+    merged: Messages = []
+    for message in rebuilt:
+        if merged and merged[-1].get("role") == message.get("role"):
+            previous = merged[-1]
+            merged[-1] = {**previous, "content": [*(previous.get("content") or ()), *(message.get("content") or ())]}
+        else:
+            merged.append(message)
+    return merged
 
 
 def _should_passthrough(
@@ -875,8 +908,8 @@ def _project(
 
     A new context object rather than a mutation of the received one. Three fields are written:
     ``tool_specs`` carries ONLY the tools that are callable on this call, ``system_prompt`` carries one
-    line for every other tool, and ``messages`` loses the plugin's own exchanges the model already acted
-    on (:func:`_drop_plugin_exchanges`). The agent's history, the ``ToolRegistry`` and every other field
+    line for every other tool, and ``messages`` folds every exchange of a tool this call does not carry
+    (:func:`_fold_tool_exchanges`). The agent's history, the ``ToolRegistry`` and every other field
     are left untouched — the projection changes what a call is told about, not what the agent has.
 
     Args:
@@ -891,7 +924,7 @@ def _project(
         ``None`` or nothing is left to list.
     """
     projected = _compose_projection(context.tool_specs, exposed, always_available)
-    messages = _drop_plugin_exchanges(context.messages)
+    messages = _fold_tool_exchanges(context.messages, {spec["name"] for spec in projected})
 
     if summaries is None:
         return replace(context, tool_specs=projected, messages=messages)
@@ -917,8 +950,8 @@ class ProgressiveToolDisclosure(Plugin):
     The flow is catalog -> ``get_tool_details([names])`` -> call. A loaded tool is released after
     ``ttl_cycles`` cycles without a call, and each call renews it, so ``tool_specs`` goes back to the
     mandatory set once the work moves on. ``find_tools`` stays for a need the model cannot map to a
-    listed name: it searches and lists matches, and loading them is still ``get_tool_details``' job. The
-    plugin's own exchanges are dropped from the messages a call sends once the model has acted on them.
+    listed name: it searches and lists matches, and loading them is still ``get_tool_details``' job. In
+    the messages a call sends, the exchanges of tools it does not carry are folded to plain sentences.
 
     No failure here leaves the agent without tool specifications. A summary that cannot be produced
     falls back to a boundary truncation, a search that raises returns guidance, and a failure on the
