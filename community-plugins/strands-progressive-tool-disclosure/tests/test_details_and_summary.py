@@ -25,7 +25,7 @@ from typing import Any, TypeVar, cast
 import pytest
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
-from strands.hooks.events import BeforeToolCallEvent
+from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models.model import Model
 from strands.tools.decorator import tool
 from strands.types.tools import ToolContext, ToolSpec
@@ -686,7 +686,8 @@ def test_the_premature_call_guard_never_cancels_the_loading_tool():
     plugin._on_before_tool_call(event)
 
     assert not event.cancel_tool
-    assert plugin._states[agent].premature_cancellations == 0
+    # The plugin tools return before any state is touched, so none may exist at all.
+    assert agent not in plugin._states or plugin._states[agent].premature_cancellations == 0
 
 
 def test_the_guard_exempts_the_loading_tool_called_with_no_arguments_too():
@@ -698,7 +699,8 @@ def test_the_guard_exempts_the_loading_tool_called_with_no_arguments_too():
     plugin._on_before_tool_call(event)
 
     assert not event.cancel_tool
-    assert plugin._states[agent].premature_cancellations == 0
+    # The plugin tools return before any state is touched, so none may exist at all.
+    assert agent not in plugin._states or plugin._states[agent].premature_cancellations == 0
 
 
 def test_a_tool_loaded_through_the_loading_tool_is_no_longer_premature():
@@ -711,9 +713,62 @@ def test_a_tool_loaded_through_the_loading_tool_is_no_longer_premature():
     assert premature.cancel_tool
     assert plugin._states[agent].premature_cancellations == 1
 
+    # The cancellation loads nothing: without get_tool_details the next call still cannot see it.
+    assert "send_wire" not in plugin._states[agent].exposed
+    assert GET_TOOL_DETAILS_NAME in premature.cancel_tool
+
     _load(plugin, agent, ["send_wire"])
+    _run(plugin._projection_handler(_model_call(agent)))
     retried = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
     plugin._on_before_tool_call(retried)
 
     assert not retried.cancel_tool
     assert plugin._states[agent].premature_cancellations == 1
+
+
+def _after_tool_call(agent: Agent, name: str, cancel_message: str | None = None) -> AfterToolCallEvent:
+    """Build a real post-call event for ``name``."""
+    return AfterToolCallEvent(
+        agent=cast("AgentType", agent),
+        selected_tool=None,
+        tool_use={"toolUseId": "t1", "name": name, "input": {}},
+        invocation_state={},
+        result={"toolUseId": "t1", "status": "success", "content": [{"text": "ok"}]},
+        cancel_message=cancel_message,
+    )
+
+
+def test_a_loaded_tool_is_released_from_tool_specs_once_it_has_returned():
+    """After use, ``tool_specs`` goes back to the mandatory set; the history does not keep it."""
+    plugin = _plugin()
+    agent = _agent(plugin)
+
+    _load(plugin, agent, ["send_wire"])
+    loaded = _run(plugin._projection_handler(_model_call(agent)))
+    assert "send_wire" in {spec["name"] for spec in loaded.tool_specs}
+
+    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
+    released = _run(plugin._projection_handler(_model_call(agent)))
+
+    assert {spec["name"] for spec in released.tool_specs} == {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
+    assert "- send_wire" in released.system_prompt
+    # Calling it again without loading it again is a premature call.
+    again = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
+    plugin._on_before_tool_call(again)
+    assert again.cancel_tool
+
+
+def test_a_cancelled_call_releases_nothing_and_parallel_calls_share_one_load():
+    """Release waits for the next projection, so a second parallel call still finds the tool loaded."""
+    plugin = _plugin()
+    agent = _agent(plugin)
+    _load(plugin, agent, ["send_wire"])
+    _run(plugin._projection_handler(_model_call(agent)))
+
+    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire", cancel_message="cancelled"))
+    assert not plugin._states[agent].consumed
+
+    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
+    second = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
+    plugin._on_before_tool_call(second)
+    assert not second.cancel_tool

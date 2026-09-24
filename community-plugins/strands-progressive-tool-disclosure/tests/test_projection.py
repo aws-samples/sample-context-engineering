@@ -22,8 +22,7 @@ Feature: progressive-tool-disclosure-plugin, Property 6: The projection changes 
 ``system_prompt``.
 Validates: Requirements 3.9.
 
-Feature: progressive-tool-disclosure-plugin, Property 20: History-referenced tools are kept, unknown references are
-dropped.
+Feature: progressive-tool-disclosure-plugin, Property 20: History-referenced tools are not kept resident.
 Validates: Requirements 9.3, 9.4.
 
 Feature: progressive-tool-disclosure-plugin, Property 14: The index is built once per registry fingerprint.
@@ -422,13 +421,14 @@ def _expected_projection(
 ) -> list[dict[str, Any]]:
     """Compose the projection the properties expect, independently of the plugin's own composition.
 
-    Written as the requirement reads — four blocks in a fixed order, each name taken at most once, the incoming order
-    inside every block — rather than by calling the plugin's composer, which would make the assertion circular.
+    Written as the requirement reads — three blocks in a fixed order, each name taken at most once, the incoming order
+    inside every block — rather than by calling the plugin's composer, which would make the assertion circular. The
+    names the history references are accepted and deliberately ignored: the history keeps nothing resident.
 
     Args:
         incoming: Specifications received in the call, in arrival order.
         exposed: Names with a live exposure.
-        referenced: Names the retained history references.
+        referenced: Names the retained history references. Ignored by the projection.
         always_available: Names configured to carry a full specification on every call.
 
     Returns:
@@ -437,7 +437,7 @@ def _expected_projection(
     expected: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for block in (_PLUGIN_TOOL_NAMES, set(always_available), set(exposed), set(referenced)):
+    for block in (_PLUGIN_TOOL_NAMES, set(always_available), set(exposed)):
         for spec in incoming:
             if spec["name"] in block and spec["name"] not in seen:
                 seen.add(spec["name"])
@@ -716,7 +716,7 @@ def test_a_suppressed_catalog_leaves_the_system_prompt_untouched_and_keeps_the_f
     _, _, context, result = _project_once(catalog_chars=None, **configuration)
 
     incoming_by_name = {spec["name"]: spec for spec in context.tool_specs}
-    exp_full_spec = {*_PLUGIN_TOOL_NAMES, *always_available, *exposed, *referenced} & set(incoming_by_name)
+    exp_full_spec = {*_PLUGIN_TOOL_NAMES, *always_available, *exposed} & set(incoming_by_name)
 
     # ``catalog_chars=None`` removes the catalog and nothing else. The four full-specification blocks are unaffected,
     # so the projection is precisely the names the four of them reach — nothing missing, nothing added.
@@ -886,7 +886,7 @@ def test_the_projection_changes_only_tool_specs_and_the_system_prompt(
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
 )
-def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
+def test_history_referenced_tools_are_not_kept_resident(
     names: list[str],
     find_tools_position: int,
     exposed: list[str],
@@ -897,13 +897,13 @@ def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 20.
 
-    History-referenced tools are kept, unknown references are dropped.
+    The history keeps nothing resident: a tool the history already used is back to a catalog line.
+
+    A ``toolUse`` whose tool is absent from ``tool_specs`` is accepted by the Bedrock Converse API, so keeping those
+    tools only grew ``tool_specs`` with every tool the conversation had touched.
 
     Validates: Requirements 9.3, 9.4.
     """
-    # The history references everything the call offers, plus names nothing has. The offered ones must come back at
-    # full specification whatever the exposure state and whatever the catalog is configured to do; the others must
-    # simply not appear.
     referenced = [*names, *unknown_referenced]
 
     plugin = ProgressiveToolDisclosure(
@@ -919,22 +919,11 @@ def test_history_referenced_tools_are_kept_and_unknown_references_are_dropped(
     context = _context(agent, incoming, _messages(referenced))
 
     result = _run(plugin._projection_handler(context))
-    projected = _projected(result)
-    incoming_by_name = {spec["name"]: spec for spec in incoming}
+    live = {name for name, loaded in plugin._states[agent].exposed.items() if cycle - loaded <= ttl_cycles}
 
-    # Requirement 9.3: a ``toolUse`` in the retained history without its definition in the call is a protocol error, so
-    # a referenced tool keeps its full specification even under a suppressed catalog and with no exposure at all.
-    for name in names:
-        assert projected[name] is incoming_by_name[name], f"{name} was referenced but not projected in full"
-
-    # Requirement 9.4: an unknown reference is omitted, and the projection finishes rather than raising over it.
-    assert not set(projected) & set(unknown_referenced)
-    assert set(projected) == set(incoming_by_name)
-
-    # Every incoming tool is carrying a full specification here, so there is nothing left for the catalog to list and
-    # the prompt is left exactly as it arrived rather than gaining a header promising a list.
-    assert _catalog_names(result, context) == []
-    assert result.system_prompt is context.system_prompt
+    # Only the plugin tools and the live loads carry a specification; the history adds nothing, known or unknown.
+    assert set(_projected(result)) == ({*_PLUGIN_TOOL_NAMES, *live} & {spec["name"] for spec in incoming})
+    assert not set(_projected(result)) & set(unknown_referenced)
 
 
 @PROPERTY_SETTINGS

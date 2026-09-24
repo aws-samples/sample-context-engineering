@@ -1,9 +1,15 @@
 """Progressive tool disclosure: the projection sent on each model call.
 
 Every call carries, in ``tool_specs``, only the tools that are callable on it: the two plugin tools
-(``find_tools`` and ``get_tool_details``), the always-available ones, the exposed ones and the ones the
-retained history still references. Every other tool reaches the model as one line of a catalog in the
-system prompt -- its name and a summary of its description, at most ``catalog_chars`` characters long.
+(``find_tools`` and ``get_tool_details``), the always-available ones and the ones loaded by
+``get_tool_details`` and not yet used. A loaded tool is released once it has returned, so ``tool_specs``
+goes back to the mandatory set instead of growing with every tool the conversation has touched. Every
+other tool reaches the model as one line of a catalog in the system prompt -- its name and a summary of
+its description, at most ``catalog_chars`` characters long.
+
+A ``toolUse`` left in the history for a tool that is no longer in ``tool_specs`` is accepted by the
+Bedrock Converse API (checked on Claude Haiku 4.5, Claude Opus 4.8, GLM 4.7 Flash and Qwen3 Next), so
+releasing a tool never breaks the protocol.
 
 The summary is written by a model, once per tool, and cached for the life of the plugin instance, so
 the catalog is byte-stable across calls. A description that already fits the limit is used verbatim and
@@ -22,11 +28,11 @@ import json
 import logging
 import math
 import weakref
-from collections.abc import Awaitable, Callable, Container, Iterable, KeysView, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from strands.hooks.events import BeforeToolCallEvent
+from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.plugins import Plugin, hook
 from strands.tools.decorator import tool
 from strands.types.content import Messages, SystemPrompt
@@ -87,7 +93,10 @@ _MATCHES_HEADER = (
 )
 """Opens the search result. A search only finds; loading is the other tool's job, and this says so."""
 
-_DETAILS_LOADED_HEADER = "Loaded. These tools are callable with their full parameters on your next call:"
+_DETAILS_LOADED_HEADER = (
+    "Loaded. These tools are callable with their full parameters on your next call. Each one is unloaded "
+    f"again after it returns; to call it again later, call `{GET_TOOL_DETAILS_NAME}` again:"
+)
 """Opens the loading result. The specification itself travels in ``tool_specs``, not in this text: a tool
 result is resident in the history, a projection is per call and forgettable."""
 
@@ -112,9 +121,14 @@ _SEARCH_FAILED_GUIDANCE = "Tool search is unavailable right now. Try a different
 same two ways out as a no-match: from where the model stands the two cases are the same one, and the
 failure is the plugin's to log, not the model's to reason about."""
 
-_PREMATURE_CALL_MESSAGE = "Parameters for '{name}' were not loaded. They are available now - call it again."
-"""Cancellation message of a premature call. Names the tool, says why it did not run, and asks for the
-same call again: the schema is exposed by the time the model reads this, so a retry is what fixes it."""
+_PREMATURE_CALL_MESSAGE = (
+    "'{name}' did not run: it is not loaded, so its parameters are unknown to you. Call `"
+    + GET_TOOL_DETAILS_NAME
+    + "` with [\"{name}\"] first, then call '{name}' with its real parameters."
+)
+"""Cancellation message of a premature call. Names the tool and points at ``get_tool_details``. The guard
+does NOT load the tool on the model's behalf: a recovery that loads it would teach the model that calling
+a catalog name directly works, which is the very shortcut the catalog rule forbids."""
 
 _CHARS_PER_TOKEN = 4
 """Approximate characters per token — same heuristic ContextOffloader uses for preview slicing."""
@@ -124,13 +138,6 @@ _ELLIPSIS = "..."
 
 _SENTENCE_ENDINGS = ".!?"
 """Characters that end a sentence when followed by whitespace or by the end of the text."""
-
-ReferencedSource: TypeAlias = "Callable[[Agent], Iterable[str]]"
-"""Supplemental Referenced Source: receives the agent of the call and returns tool names.
-
-It receives the agent because one plugin instance serves many agents, and the supplemental set is
-per agent. Without that argument the source would have to keep global state, which is exactly what
-this channel exists to avoid."""
 
 
 def _estimate_tokens(text: str) -> int:
@@ -151,14 +158,18 @@ def _estimate_tokens(text: str) -> int:
 _CATALOG_PROMPT_HEADER = """\
 # Tools available on request
 
-The tools listed below are NOT in your tool list for this call. They exist and they work, but their
-parameters have not been loaded, so you cannot call them yet.
+The tools listed below are NOT in your tool list, and you MUST NOT call them directly: their parameters
+are not loaded, and a direct call is rejected without running.
 
-To use one or more of them, call `{get_tool_details}` with their names as a list. They arrive complete,
-with their parameters, in your tool list on the next call, and you call them from there. If none of the
-names below fits what you need, call `{find_tools}` and describe the need in your own words.
+To use any of them, always follow these steps:
+1. Call `{get_tool_details}` with the names you need, as a list, in one call.
+2. On your next call they are in your tool list with their full parameters. Call them from there.
+3. Each tool is unloaded again after it returns. To call it again later, repeat step 1.
 
-Your tool list for this call is complete and callable as it stands. Anything in it, you call directly.
+If no name below fits what you need, call `{find_tools}` with the need in your own words, then go to
+step 1 with the names it returns.
+
+The tools that ARE in your tool list for this call you call directly.
 
 """
 """Preamble of the system-prompt catalog: the rule, stated where the model reads the names.
@@ -517,23 +528,6 @@ def _validate_index(index: object) -> None:
             raise ValueError(f"index=<{index!r}> | must expose a callable '{member}' member")
 
 
-def _validate_referenced_source(referenced_source: object) -> None:
-    """Reject anything that is neither ``None`` nor callable.
-
-    ``None`` means there is no supplemental source, which is the default and the configuration that
-    reproduces the behaviour of every call before this channel existed.
-
-    Args:
-        referenced_source: Value received by the constructor.
-
-    Raises:
-        ValueError: When ``referenced_source`` is not ``None`` and is not callable.
-    """
-    if referenced_source is None or callable(referenced_source):
-        return
-    raise ValueError(f"referenced_source=<{referenced_source!r}> | must be None or a callable taking the agent")
-
-
 @dataclass
 class _DisclosureState:
     """Per-agent disclosure state: which tools are exposed, and against which registry.
@@ -549,7 +543,12 @@ class _DisclosureState:
     catalog was bought with.
 
     Attributes:
-        exposed: Tool name to the cycle count of its last use. A fresh state has zero exposures.
+        exposed: Tool name to the cycle count of its load. A fresh state has zero exposures.
+        projected: Names carried in full by the last projection -- what the model could actually see
+            when it chose its calls. The guard reads this, not ``exposed``, so a tool released between
+            two parallel calls of the same assistant message is never mistaken for a guessed call.
+        consumed: Loaded tools that have returned since the last projection. The next projection
+            releases them from ``exposed``, which is what keeps ``tool_specs`` from growing.
         fingerprint: ``(name, description)`` pairs as of the last index build, or ``None`` when the
             index has not been built yet — the value that makes the first projection build it.
         searches: Cycles this session spent searching: one per ``find_tools`` invocation.
@@ -560,6 +559,8 @@ class _DisclosureState:
     """
 
     exposed: dict[str, int] = field(default_factory=dict)
+    projected: frozenset[str] = frozenset()
+    consumed: set[str] = field(default_factory=set)
     fingerprint: frozenset[tuple[str, str]] | None = None
     searches: int = 0
     loads: int = 0
@@ -603,25 +604,26 @@ def _state_for(states: _DisclosureStates, agent: Agent) -> _DisclosureState:
 
 
 def _expire(state: _DisclosureState, cycle: int, ttl_cycles: int) -> None:
-    """Drop from ``state`` every exposure idle for more than ``ttl_cycles`` cycles.
+    """Release every tool that has returned since the last projection, and every idle load.
 
-    Age is measured exclusively against the cycle counter: no wall-clock time, no message count, no
-    tool-call count. That keeps the TTL tied to the agent's own progress, so a slow provider call or
-    a burst of messages inside one cycle never ages an exposure.
-
-    An exposure at exactly ``cycle - last_used == ttl_cycles`` is kept — the boundary belongs to the
-    live side, so a tool used ``ttl_cycles`` cycles ago still projects its full specification.
+    Two ways out of ``exposed``. The main one is use: a loaded tool that has returned is released on
+    the next projection, so ``tool_specs`` goes back to the mandatory set once the work is done. The
+    backstop is age: a tool loaded and never called is released after ``ttl_cycles`` cycles, measured
+    against the cycle counter only, so a slow provider call never ages a load.
 
     Only the exposure map is touched. The ``ToolRegistry`` and ``agent.tool_names`` are left alone:
-    expiring an exposure withdraws a schema from the next projection, it does not unregister a tool.
+    releasing a tool withdraws a schema from the next projection, it does not unregister it.
 
     Args:
         state: Disclosure state of the agent. Mutated in place.
         cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
-        ttl_cycles: Cycles an exposure survives after its last use. At least ``1``.
+        ttl_cycles: Cycles a load that was never used survives. At least ``1``.
     """
+    for name in state.consumed:
+        state.exposed.pop(name, None)
+    state.consumed.clear()
     # Materialize the names first: the map is mutated while the decision is applied.
-    for name in [n for n, last_used in state.exposed.items() if cycle - last_used > ttl_cycles]:
+    for name in [n for n, loaded in state.exposed.items() if cycle - loaded > ttl_cycles]:
         del state.exposed[name]
 
 
@@ -718,35 +720,6 @@ def _record_premature_cancellation(state: _DisclosureState, name: str) -> None:
     )
 
 
-def _tool_names_referenced_in(messages: Messages) -> KeysView[str]:
-    """Collect the tool names of every ``toolUse`` block in ``messages``.
-
-    A ``toolUse`` left in the retained history without its definition in the projection is a protocol
-    error: the provider sees a call to a tool it was never told about. So whatever the exposure state
-    says, a tool the history still talks about keeps its full specification in the projection, and
-    this scan is what finds those names.
-
-    The result is an ordered set: names come out in the order they are first seen, which keeps the
-    projection reproducible across repeated calls over the same history, and membership stays O(1)
-    for the caller that tests every incoming spec against it.
-
-    Args:
-        messages: Retained history, ``context.messages``. Left unmodified — the scan only reads.
-
-    Returns:
-        A view over the referenced tool names, in first-appearance order, without duplicates.
-    """
-    referenced: dict[str, None] = {}
-    for message in messages:
-        for block in message.get("content") or ():
-            tool_use = block.get("toolUse")
-            # Malformed blocks are skipped rather than raised on: an unnamed toolUse cannot be
-            # matched against an incoming spec anyway, and the projection must not fail over one.
-            if tool_use and (name := tool_use.get("name")):
-                referenced[name] = None
-    return referenced.keys()
-
-
 def _should_passthrough(
     incoming_names: Iterable[str],
     registry_names: Container[str],
@@ -786,27 +759,27 @@ def _should_passthrough(
 def _compose_projection(
     incoming: Sequence[ToolSpec],
     exposed: Container[str],
-    referenced: Container[str],
     always_available: Container[str],
 ) -> list[ToolSpec]:
-    """Build the projection as the union of four blocks of full specifications, each name at most once.
+    """Build the projection as the union of three blocks of full specifications, each name at most once.
 
-    The blocks are visited in a fixed order — the plugin tools, ``always_available``, the live
-    exposures, and the names the retained history still references. Every name that reaches the
-    projection carries its full, verbatim specification: there is no reduced form in ``tool_specs``,
-    so nothing in it asserts an empty ``inputSchema``. Whatever is left goes to the system-prompt
-    catalog instead. The plugin tools come first, which is what makes the projection non-empty on every
+    The blocks are visited in a fixed order — the plugin tools, ``always_available`` and the tools
+    currently loaded. Every name that reaches the projection carries its full, verbatim specification:
+    there is no reduced form in ``tool_specs``. Whatever is left goes to the system-prompt catalog
+    instead. The plugin tools come first, which is what makes the projection non-empty on every
     projected path.
 
+    Tools the history already used are NOT kept: a ``toolUse`` whose tool is absent from ``tool_specs``
+    is accepted by the provider, and keeping them is what made ``tool_specs`` grow with every tool the
+    conversation had touched.
+
     Inside a block, iteration follows ``incoming`` rather than the block's own container. Two calls
-    with the same disclosure state, the same history and the same configuration then produce the
-    same list in the same order, which is what keeps the provider's prompt cache from being
-    invalidated by a reordering that changes no content.
+    with the same disclosure state and the same configuration then produce the same list in the same
+    order, which keeps the provider's prompt cache from being invalidated by a reordering alone.
 
     Args:
         incoming: Specifications received in ``context.tool_specs``, in arrival order. Left unmodified.
-        exposed: Names with a live exposure, after expiration has been applied.
-        referenced: Names of the ``toolUse`` blocks in the retained history.
+        exposed: Names currently loaded, after release has been applied.
         always_available: Names configured to carry their full specification on every call.
 
     Returns:
@@ -816,7 +789,7 @@ def _compose_projection(
     projected: list[ToolSpec] = []
     seen: set[str] = set()
 
-    for block in (_PLUGIN_TOOL_NAMES, always_available, exposed, referenced):
+    for block in (_PLUGIN_TOOL_NAMES, always_available, exposed):
         for spec in incoming:
             name = spec["name"]
             if name in block and name not in seen:
@@ -826,60 +799,11 @@ def _compose_projection(
     return projected
 
 
-def _union_referenced(
-    referenced: Container[str],
-    source: ReferencedSource | None,
-    agent: Agent,
-) -> Container[str]:
-    """Union the retained history's names with the Supplemental Referenced Source's, keeping order.
-
-    ``source is None`` returns ``referenced`` by the same object. That is what makes ``tool_specs``
-    come out field for field identical to what was produced before this channel existed: the
-    regression guarantee is by identity, not by comparison.
-
-    A failure of the source degrades to the retained history alone. The ``try`` covers the call and
-    the materialization and nothing more — the union itself is outside it, so a half-built set never
-    survives a failure. That is the same delimitation :meth:`ProgressiveToolDisclosure.find_tools`
-    already practices by keeping its exposure loop out of the guard.
-
-    Args:
-        referenced: Names of the ``toolUse`` blocks in the retained history.
-        source: Supplemental source, or ``None`` when there is none.
-        agent: Agent of the call, passed on to the source.
-
-    Returns:
-        ``referenced`` itself when there is no source or the source failed; otherwise a view over the
-        union, history names first, in first-appearance order and without duplicates.
-    """
-    if source is None:
-        return referenced
-
-    try:
-        supplemental: list[str] = []
-        for name in source(agent):
-            # A non-string name cannot be matched against a specification name, and honoring the rest
-            # of a malformed return would hide the defect. Raised so the guard below reports it once.
-            if not isinstance(name, str):
-                raise TypeError(f"referenced_source returned the non-string element <{name!r}>")
-            if name:
-                supplemental.append(name)
-    except Exception:
-        # A non-iterable return lands here too: the iteration is what raises on it.
-        logger.debug("referenced_source failed | composing referenced from the retained history only", exc_info=True)
-        return referenced
-
-    merged: dict[str, None] = dict.fromkeys(referenced) if isinstance(referenced, Iterable) else {}
-    merged.update(dict.fromkeys(supplemental))
-    return merged.keys()
-
-
 def _project(
     context: InvokeModelContext,
     exposed: Container[str],
-    referenced: Container[str],
     always_available: Container[str],
     summaries: Mapping[str, str] | None,
-    referenced_source: ReferencedSource | None = None,
 ) -> InvokeModelContext:
     """Return ``context`` with ``tool_specs`` replaced by the projection and the catalog in the prompt.
 
@@ -891,20 +815,15 @@ def _project(
 
     Args:
         context: Invocation context received by the ``InvokeModelStage.Input`` handler.
-        exposed: Names with a live exposure, after expiration has been applied.
-        referenced: Names of the ``toolUse`` blocks in ``context.messages``.
+        exposed: Names currently loaded, after release has been applied.
         always_available: Names configured to carry their full specification on every call.
         summaries: Catalog line of each tool, by name, or ``None`` to add no catalog at all.
-        referenced_source: Supplemental Referenced Source, or ``None``. The union happens here rather
-            than in the caller because this is already the boundary between what the history says and
-            what the projection emits, and ``_compose_projection`` stays unaware the source exists.
 
     Returns:
         A new invocation context whose ``tool_specs`` is the projection, and whose ``system_prompt``
         carries the catalog block unless ``summaries`` is ``None`` or nothing is left to list.
     """
-    resolved_referenced = _union_referenced(referenced, referenced_source, context.agent)
-    projected = _compose_projection(context.tool_specs, exposed, resolved_referenced, always_available)
+    projected = _compose_projection(context.tool_specs, exposed, always_available)
 
     if summaries is None:
         return replace(context, tool_specs=projected)
@@ -922,14 +841,15 @@ class ProgressiveToolDisclosure(Plugin):
 
     Every registered tool stays in the ``ToolRegistry`` and stays callable. What changes is the
     projection: ``tool_specs`` carries only the tools that are callable on the call -- ``find_tools``,
-    ``get_tool_details``, the tools configured as always available, the tools whose schema is currently
-    exposed and the tools the retained history still references -- and every other tool is one line of a
-    catalog appended to the system prompt: its name and a summary of its description.
+    ``get_tool_details``, the tools configured as always available and the tools loaded and not yet
+    used -- and every other tool is one line of a catalog appended to the system prompt: its name and a
+    summary of its description.
 
-    The flow is catalog -> ``get_tool_details([names])`` -> call. ``find_tools`` stays for a need the
-    model cannot map to a listed name: it searches and lists matches, and loading them is still
-    ``get_tool_details``' job. An exposure expires by inactivity, measured in event loop cycles and
-    renewed on each use.
+    The flow is catalog -> ``get_tool_details([names])`` -> call. A loaded tool is released once it has
+    returned, so ``tool_specs`` goes back to the mandatory set after each use; calling it again means
+    loading it again. ``find_tools`` stays for a need the model cannot map to a listed name: it searches
+    and lists matches, and loading them is still ``get_tool_details``' job. A tool loaded and never
+    called is released after ``ttl_cycles`` cycles.
 
     No failure here leaves the agent without tool specifications. A summary that cannot be produced
     falls back to a boundary truncation, a search that raises returns guidance, and a failure on the
@@ -956,7 +876,6 @@ class ProgressiveToolDisclosure(Plugin):
         always_available: Sequence[str] = (),
         index: ToolIndex | None = None,
         top_k: int = _DEFAULT_TOP_K,
-        referenced_source: ReferencedSource | None = None,
     ) -> None:
         """Fix the configuration of the instance. Nothing is indexed or summarized and no call goes out here.
 
@@ -971,16 +890,13 @@ class ProgressiveToolDisclosure(Plugin):
                 reported in the agent's disclosure state as ``summary_usage``. A description that
                 already fits is used verbatim and never reaches the summarizer, and a summarizer that
                 fails falls back to truncation at a sentence or word boundary.
-            ttl_cycles: Cycles an exposure survives after its last use.
+            ttl_cycles: Cycles a tool loaded by ``get_tool_details`` and never called survives. A tool
+                that is called is released as soon as it returns, whatever this says.
             always_available: Names that carry their full specification on every call, skipping the
                 discovery cycle.
             index: Search implementation behind ``find_tools``. Defaults to :class:`LexicalToolIndex`,
                 which needs no network.
             top_k: How many tools one search lists.
-            referenced_source: Callable receiving the agent of the call and returning tool names that
-                are to carry their full specification on this call, on top of the ones the retained
-                history references. ``None`` composes the referenced names from the retained history
-                alone.
 
         Raises:
             ValueError: When any parameter is outside its accepted values. Every check runs before
@@ -993,7 +909,6 @@ class ProgressiveToolDisclosure(Plugin):
         _validate_positive_int(top_k, "top_k")
         _validate_always_available(always_available)
         _validate_index(index)
-        _validate_referenced_source(referenced_source)
 
         self._catalog_chars = catalog_chars
         self._summarizer = summarizer
@@ -1004,7 +919,6 @@ class ProgressiveToolDisclosure(Plugin):
         # The index is only instantiated here, never built: building reads the specifications of a
         # call, which the first projection is what has.
         self._index: ToolIndex = LexicalToolIndex() if index is None else index
-        self._referenced_source = referenced_source
         # Keyed by (name, description): a tool re-registered with a different description gets a new
         # line, and the same description is never summarized twice, whichever agent asked first.
         self._summaries: dict[tuple[str, str], str] = {}
@@ -1060,11 +974,10 @@ class ProgressiveToolDisclosure(Plugin):
             projected = _project(
                 context,
                 state.exposed,
-                _tool_names_referenced_in(context.messages),
                 self._always_available,
                 None if self._catalog_chars is None else self._summaries_for(context.tool_specs),
-                referenced_source=self._referenced_source,
             )
+            state.projected = frozenset(spec["name"] for spec in projected.tool_specs)
             _instrument(lambda: _log_projection(projected.tool_specs))
             return projected
         except Exception:
@@ -1213,7 +1126,8 @@ class ProgressiveToolDisclosure(Plugin):
         """Load the full parameters of one or more tools from the catalog, so you can call them.
 
         Pass every tool you are about to need in one call. They arrive complete in your tool list on
-        your next call, and stay there while you keep using them.
+        your next call. Each one is unloaded again after it returns, so to call a tool again later,
+        call this again with its name.
 
         Args:
             names: Exact tool names, as written in the catalog or in a `find_tools` result.
@@ -1254,19 +1168,18 @@ class ProgressiveToolDisclosure(Plugin):
 
     @hook  # type: ignore[call-overload]  # sync hook method; the @hook overloads only infer async
     def _on_before_tool_call(self, event: BeforeToolCallEvent) -> None:
-        """Renew the exposure of the tool about to be called, and recover a premature call.
+        """Cancel a call to a tool whose schema the model could not see.
 
-        A tool being called is the strongest evidence that its schema is still worth sending, so the
-        call itself renews the TTL.
+        A premature call is a name the model read in the catalog and called without loading it first.
+        Whether the schema was visible is read off ``state.projected`` -- the names the last projection
+        actually carried -- rather than off ``exposed``, which a parallel call of the same assistant
+        message may already have released.
 
-        The second job is a call to a tool whose schema was never projected -- a name the model read in
-        the catalog and called without loading it first. Such a call is cancelled with a message asking
-        for the same call again, and the renewal has already exposed the tool, so the retry carries the
-        full specification. It is a safety net: the catalog names are not in ``tool_specs``, so the
-        common path never reaches it.
+        The call is cancelled with a message pointing at ``get_tool_details``, and nothing is loaded on
+        the model's behalf: a recovery that loaded the tool would teach the model that calling a catalog
+        name directly works.
 
-        Exempt: an already exposed tool, anything in ``always_available``, the two plugin tools (both
-        are emitted in full on every call but never written to ``exposed``), and a tool with no required
+        Exempt: anything in ``always_available``, the two plugin tools, and a tool with no required
         parameter, which is callable empty. A name the registry does not have is left alone entirely.
 
         Args:
@@ -1274,29 +1187,41 @@ class ProgressiveToolDisclosure(Plugin):
         """
         name = event.tool_use["name"]
         agent = event.agent
+        registry = agent.tool_registry.registry
 
-        if name not in agent.tool_registry.registry:
+        if name not in registry or name in _PLUGIN_TOOL_NAMES or name in self._always_available:
             return
 
         state = _state_for(self._states, agent)
-        # The plugin tools are projected in full on every call, so an exposure entry for them would
-        # carry no information and only age out for nothing.
-        if name in _PLUGIN_TOOL_NAMES:
-            return
-        # Read before the write: whether the schema was already projected is what tells a normal call
-        # apart from a call made off the catalog, and the renewal erases that distinction.
-        was_exposed = name in state.exposed
-        _renew(state, name, agent.event_loop_metrics.cycle_count)
-
-        if was_exposed or name in self._always_available or name in _PLUGIN_TOOL_NAMES:
+        if name in state.projected:
             return
 
         # Arguments or not, the model could not have known the parameters, so either way the call is a
         # guess: invented arguments against a permissive tool are the worse outcome, a confidently wrong
         # answer nothing in the run marks as suspect.
-        if _requires_parameters(agent.tool_registry.registry[name].tool_spec):
+        if _requires_parameters(registry[name].tool_spec):
             event.cancel_tool = _PREMATURE_CALL_MESSAGE.format(name=name)
             _instrument(lambda: _record_premature_cancellation(state, name))
+
+    @hook  # type: ignore[call-overload]  # sync hook method; the @hook overloads only infer async
+    def _on_after_tool_call(self, event: AfterToolCallEvent) -> None:
+        """Mark a loaded tool that has returned, so the next projection releases it.
+
+        The release waits for the next projection instead of happening here: two parallel calls of the
+        same tool in one assistant message both have to find it loaded, and the model's next call is the
+        first one that no longer needs it. A cancelled call ran nothing, so it releases nothing.
+
+        Args:
+            event: The post-call event. Read only.
+        """
+        if event.cancel_message is not None:
+            return
+        name = event.tool_use["name"]
+        if name in _PLUGIN_TOOL_NAMES or name in self._always_available:
+            return
+        state = _state_for(self._states, event.agent)
+        if name in state.exposed:
+            state.consumed.add(name)
 
     def _short_description(self, spec: ToolSpec) -> str:
         """Return ``spec``'s catalog line: the cached summary, or a truncation when there is none.

@@ -255,8 +255,6 @@ def test_the_constructor_adopts_the_documented_defaults():
     assert plugin._always_available == ()
     # Requirement 2.6: no index given means the standard-library lexical one, which needs no network.
     assert isinstance(plugin._index, LexicalToolIndex)
-    # Requirement 2.11: no supplemental source means the referenced names come from the history alone.
-    assert plugin._referenced_source is None
     # Requirement 12.6: the community plugin reports the same identifier as the vended one.
     assert plugin.name == "strands:progressive-tool-disclosure"
 
@@ -266,9 +264,6 @@ def test_a_configured_value_replaces_the_default_and_the_sequence_is_frozen():
     mutable = ["list_accounts"]
     index = _RecordingIndex()
 
-    def source(agent: Agent) -> list[str]:
-        return []
-
     plugin = ProgressiveToolDisclosure(
         catalog_chars=None,
         summarizer=_stub_summarizer,
@@ -276,7 +271,6 @@ def test_a_configured_value_replaces_the_default_and_the_sequence_is_frozen():
         top_k=7,
         always_available=mutable,
         index=index,
-        referenced_source=source,
     )
     mutable.append("send_wire")
 
@@ -285,7 +279,6 @@ def test_a_configured_value_replaces_the_default_and_the_sequence_is_frozen():
     assert plugin._ttl_cycles == 2
     assert plugin._top_k == 7
     assert plugin._index is index
-    assert plugin._referenced_source is source
     # The caller's list cannot reconfigure the instance after the fact: the tuple is a copy.
     assert plugin._always_available == ("list_accounts",)
 
@@ -329,8 +322,6 @@ def test_a_configured_value_replaces_the_default_and_the_sequence_is_frozen():
         ({"index": SimpleNamespace(build=lambda specs: None)}, ("index", "search")),
         ({"index": SimpleNamespace(build=None, search=lambda need, top_k: [])}, ("index", "build")),
         # Requirement 2.11: None or a callable taking the agent.
-        ({"referenced_source": 7}, ("referenced_source", "callable")),
-        ({"referenced_source": "list_accounts"}, ("referenced_source", "callable")),
     ],
 )
 def test_an_invalid_parameter_raises_a_value_error_naming_the_parameter(
