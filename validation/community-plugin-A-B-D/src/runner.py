@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -53,13 +54,13 @@ from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
 
 from . import accuracy, config, metrics, scenario, tools
+from .density_rerank import DensityReranker
 from .config import (
     AGENT_MODEL_ID,
     ARTIFACTS_DIR,
     AWS_PROFILE,
     EMBED_MODEL_ID,
-    GRAPH_ALONE,
-    GRAPH_WITH_RELEVANCE,
+    GRAPH_TUNING,
     REGION,
     RERANK_MODEL_ID,
     RUN_CONFIGS,
@@ -128,7 +129,7 @@ def _agent_model(session: boto3.Session) -> BedrockModel:
         boto_session=session,
         boto_client_config=_client_config(),
         model_id=AGENT_MODEL_ID,
-        max_tokens=4_096,
+        max_tokens=config.MAX_OUTPUT_TOKENS,
         **({"cache_config": cache_config} if cache_config else {}),
     )
     install_log_tagging(model.client, role="agent")
@@ -174,6 +175,35 @@ class _MeteredReranker(BedrockReranker):
         return await super().score(query, chunks)
 
 
+class _MeteredDensityReranker(_MeteredReranker, DensityReranker):
+    """Metering and the citable-density prior, composed rather than merged.
+
+    Both classes delegate through ``super().score``, so the method resolution order does the work:
+    ``_MeteredReranker`` counts the batch, ``DensityReranker`` lifts the dense chunks, and
+    ``BedrockReranker`` makes the one remote call. Neither class had to learn about the other.
+
+    Selected by ``VALIDATION_DENSITY_RERANK=1``, so one experiment arm differs from the control by this
+    class and nothing else.
+    """
+
+
+DENSITY_RERANK = os.environ.get("VALIDATION_DENSITY_RERANK") == "1"
+"""Whether the citable-density prior is in play, read once at import.
+
+An experiment switch and not a setting: it names which hypothesis a run is testing, and every run
+records it, so a result can never be read without knowing which scorer produced it.
+"""
+
+
+RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL") == "1"
+"""Whether the relevance filter registers its own ``retrieve_context`` tool, read once at import.
+
+Off by default, matching the plugin's own default: the filter's contract ends at the tool result, so
+the arm measures preview quality alone. Set ``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=1`` to reproduce
+the published figures, which were all measured with the tool present.
+"""
+
+
 class _MeteredMatcher(EmbeddingSimilarityMatcher):
     """Counts what the graph's similarity matcher actually sends to Bedrock.
 
@@ -212,50 +242,30 @@ _FULL = "full"
 """The resolution name meaning a Card's part entered the call whole."""
 
 _GRAPH_ARTIFACT_TOOL = "expand_artifact"
-"""The graph's artifact-retrieval tool, dropped when the relevance filter is also installed.
+"""The graph's artifact-retrieval tool. Registered in every arm since the filter lost its own.
 
-Measured, not assumed. On the first 60-turn run the ``all`` configuration was the only one that
+Kept as the record of why it was ever dropped, because the reason was measured, not assumed. On the
+first 60-turn run the ``all`` configuration was the only one that
 could not answer A5 -- the turn whose answer is one row of a 90-character-per-line statement -- and
 the model said why in its own answer: "every export's artifact reference has come back unreachable
 ... I can't read the stored artifacts". It had called ``expand_artifact`` with a reference the
 relevance filter had minted.
 
-The two packages each ship their own retrieval tool over their own store, and nothing bridges them:
-``RelevanceFilter`` stores the raw sub-blocks it replaced and hands out references its
-``retrieve_context`` resolves, while ``ContextGraph`` records addresses it saw in placeholder text
-and resolves them through a store of its own. The graph's README is explicit that its bridge to
+At that time the two packages each shipped their own retrieval tool over their own store, and nothing
+bridged them: ``RelevanceFilter`` stored the raw sub-blocks it replaced and handed out references its
+``retrieve_context`` resolved, while ``ContextGraph`` recorded addresses it saw in placeholder text
+and resolved them through a store of its own. The graph's README is explicit that its bridge to
 another plugin's stash is built entirely on private symbols and degrades to "answers as prose naming
 the miss" -- which is exactly what happened, and the vended stack never hit it because relevance
 lived *inside* the ContextManager whose stash the graph bridged to.
 
-So when both are installed there are two plausible tools for one job and only one of them can
-resolve the reference. Dropping the graph's leaves exactly one artifact path. Its two other tools --
-``expand_card`` and ``find_context`` -- are untouched: they reach back into the conversation's own
-turns, which is a different job and one the relevance filter does not do.
+So with both installed there were two plausible tools for one job and only one could resolve the
+reference, and dropping the graph's left exactly one artifact path. That collision is gone:
+``RelevanceFilter`` now defaults to ``include_retrieval_tool=False``, mints no reference and writes
+no store, so ``expand_artifact`` is the only artifact path there is and dropping it leaves none.
+The graph's two other tools -- ``expand_card`` and ``find_context`` -- were never part of this:
+they reach back into the conversation's own turns, a different job the relevance filter does not do.
 """
-
-
-def _drop_graph_artifact_tool(graph: ContextGraph) -> bool:
-    """Remove the graph's artifact-retrieval tool from the set it registers.
-
-    The same de-registration ``RelevanceFilter.init_agent`` performs on its own retrieval tool when
-    ``include_retrieval_tool`` is false, applied from the outside because ``ContextGraph`` exposes no
-    equivalent switch. Matched by ``tool_name`` rather than by a literal attribute so a rename
-    upstream costs the de-registration, not the run.
-
-    Args:
-        graph: The plugin instance, before it is handed to an agent.
-
-    Returns:
-        Whether the tool was found and removed.
-    """
-    try:
-        before = len(graph._tools)
-        graph._tools = [t for t in graph._tools if t.tool_name != _GRAPH_ARTIFACT_TOOL]
-        return len(graph._tools) < before
-    except Exception:  # noqa: BLE001 - losing the de-registration must not lose the run
-        logger.warning("could not drop the graph's %s tool | both retrieval paths stay", _GRAPH_ARTIFACT_TOOL)
-        return False
 
 
 def _graph_referenced_source(graph: ContextGraph) -> Any:
@@ -341,7 +351,8 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
-        reranker = _MeteredReranker(
+        reranker_class = _MeteredDensityReranker if DENSITY_RERANK else _MeteredReranker
+        reranker = reranker_class(
             model_id=RERANK_MODEL_ID,
             boto_session=session,
             boto_client_config=_client_config(),
@@ -349,9 +360,15 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         config.extra["_reranker"] = reranker
 
         relevance = RelevanceFilter(
-            # File-backed rather than in-memory: the payloads are large, the run is long, and a
-            # reference the model reads back hours into a run must still resolve.
+            # File-backed rather than in-memory: kept for the run's own inspection of what was cut.
+            # With the retrieval tool off the plugin writes nothing here, so the directory stays
+            # empty unless VALIDATION_RELEVANCE_RETRIEVAL_TOOL turns the tool back on.
             store=FileStore(str(storage_root)),
+            # The filter's job ends at the tool result: llm -> tool -> filtered result -> llm. A
+            # retrieval tool would put every recovered chunk into the history as a message that is
+            # re-sent on every later call, which is what made this arm cost MORE than no plugin on
+            # Haiku 4.5 (+21.6%) while saving on Opus.
+            include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL,
             max_result_tokens=THRESHOLDS.max_result_tokens,
             config={
                 "reranker": reranker,
@@ -370,13 +387,12 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         matcher = _MeteredMatcher(EMBED_MODEL_ID, boto_session=session)
         config.extra["_matcher"] = matcher
 
-        # Which tuning applies is a measured result, not a preference: with the relevance filter
-        # installed the payload is already a preview by the time the Card is derived, so folding
-        # harder costs recall without buying tokens. See the two docstrings in config.
-        tuning = GRAPH_WITH_RELEVANCE if config.relevance else GRAPH_ALONE
-        config.extra["_graph_tuning"] = (
-            "with-relevance" if config.relevance else "alone"
-        )
+        # One tuning for every arm the graph appears in. The split by "is the relevance filter also
+        # installed" is gone: the filter acts on a tool result before it enters the history, the graph
+        # acts on a history that already exists, so the filter only makes the graph's input smaller —
+        # it does not change what folding a history should cost. See GraphTuning's docstring.
+        tuning = GRAPH_TUNING
+        config.extra["_graph_tuning"] = "unified"
 
         graph = ContextGraph(
             expand_threshold=tuning.expand_threshold,
@@ -385,12 +401,19 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             description_tokens=tuning.description_tokens,
             body_budget=tuning.body_budget,
             min_cards=THRESHOLDS.min_cards,
+            max_retrieval_cycles=tuning.max_retrieval_cycles,
+            reuse_ttl_cycles=tuning.reuse_ttl_cycles,
+            tags_per_card=tuning.tags_per_card,
+            neighbors_per_candidate=tuning.neighbors_per_candidate,
+            # Always on. This used to be ``not config.relevance``, to leave exactly one artifact
+            # path when the filter shipped a competing ``retrieve_context`` over a store of its own.
+            # The filter no longer registers a retrieval tool at all, so there is no second path to
+            # disambiguate from and the condition only took the capability away.
+            # See _GRAPH_ARTIFACT_TOOL for the measurement that motivated the old drop.
+            include_artifact_tool=True,
             matcher=matcher,
         )
-        if config.relevance:
-            # Two retrieval tools for one job, over two stores that do not know each other, is what
-            # cost the first run its A5 answer. See _GRAPH_ARTIFACT_TOOL for the measurement.
-            config.extra["_graph_artifact_tool_dropped"] = _drop_graph_artifact_tool(graph)
+        config.extra["_graph_artifact_tool_dropped"] = False
         config.extra["_graph"] = graph
         plugins.append(graph)
 
@@ -402,17 +425,19 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                 top_k=THRESHOLDS.top_k,
                 # A retrieval tool must never need discovery: the model is told to use it in the
                 # guidance text that replaces the payload, and a cycle spent finding it would be an
-                # artefact of the harness rather than of the strategy. All four are listed because
-                # which ones exist depends on the configuration, and a name absent from the call is
-                # simply ignored by the plugin.
+                # artefact of the harness rather than of the strategy. Worse than a wasted cycle,
+                # actually -- a catalog entry carries an EMPTY inputSchema, so a hidden retrieval tool
+                # is called with no arguments and cancelled by the premature-call guard before it runs.
+                #
+                # Derived from the plugins rather than hard-coded, so excluding the graph's artifact
+                # tool or renaming one cannot leave a stale name here. `list_accounts` is the one
+                # literal: it is a domain tool of the scenario, not a plugin's.
                 always_available=[
-                    "retrieve_context",
-                    "expand_card",
-                    "expand_artifact",
-                    "find_context",
+                    *(graph.retrieval_tool_names if graph is not None else ()),
                     "list_accounts",
                 ],
                 referenced_source=_graph_referenced_source(graph) if graph is not None else None,
+                catalog_in_system_prompt=THRESHOLDS.catalog_in_system_prompt,
             )
         )
 
@@ -587,6 +612,33 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
     return counters
 
 
+def _partial_answer(agent: Agent) -> str:
+    """Return the assistant text the agent left in history, for a turn cut short at ``max_tokens``.
+
+    Strands adds the partial message to the conversation before raising, so the text exists; the
+    harness simply was not reading it. Only a trailing ``assistant`` message counts: a turn that
+    failed on a tool error ends on a tool result, and inventing an answer out of an earlier turn's
+    message would score one turn with another turn's work.
+
+    Args:
+        agent: The agent whose history to read. Not modified.
+
+    Returns:
+        The concatenated text blocks of the trailing assistant message, or ``""`` when the history
+        does not end in one -- which is every failure that is not an output truncation.
+    """
+    try:
+        messages = agent.messages
+        if not messages or messages[-1].get("role") != "assistant":
+            return ""
+
+        blocks = messages[-1].get("content") or []
+        return "\n".join(block["text"] for block in blocks if isinstance(block, dict) and "text" in block)
+    except Exception:  # noqa: BLE001 - a measurement must not raise inside an exception handler
+        logger.debug("could not recover a partial answer from history", exc_info=True)
+        return ""
+
+
 async def run_configuration(
     config: RunConfig,
     *,
@@ -628,6 +680,26 @@ async def run_configuration(
             record.error = f"{type(error).__name__}: {error}"
             collector.errors.append(f"{turn.label}: {record.error}")
             logger.warning("turn %s failed: %s", turn.label, record.error)
+            # An output cut short at ``max_tokens`` is not the same failure, and scoring it as an
+            # empty answer made it look like one. Strands states that the partial message was added
+            # to the history -- so the model DID say something, and the harness was throwing it away
+            # and then scoring the silence as materially wrong. Measured on GLM 4.7 Flash, one to two
+            # scored turns per run, on exactly the arms that fold context: folding makes the model
+            # restate figures verbatim, which is what runs an answer past the cap.
+            #
+            # Recovering the text is not leniency. It scores what the model actually produced, which
+            # is the only thing the comparison is entitled to judge -- a truncated answer that never
+            # reaches its figure still fails its check, and now it fails for the right reason.
+            recovered = _partial_answer(agent)
+            if recovered:
+                record.response_text = recovered
+                record.response_chars = len(recovered)
+                record.answer_truncated = True
+                logger.info(
+                    "turn %s truncated at max_tokens | scoring the %d chars the model did produce",
+                    turn.label,
+                    len(recovered),
+                )
         finally:
             record.turn_seconds = time.perf_counter() - turn_started
             record.live_message_count = len(agent.messages)

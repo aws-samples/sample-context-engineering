@@ -43,6 +43,71 @@ from pathlib import Path
 
 # --- AWS account -------------------------------------------------------------------
 
+# --- Sweep overrides ---------------------------------------------------------------
+#
+# Every tunable below can be overridden from the environment. The defaults are unchanged, so a run
+# that sets nothing behaves exactly as the committed configuration does -- the overrides exist so a
+# tuning sweep is a list of environment variables rather than a list of commits, which is what makes
+# "measure, change one knob, measure again" affordable enough to actually do.
+#
+# Each override is recorded in the run's metadata (see ``sweep_overrides``), so no result can be read
+# without knowing which knobs produced it.
+
+_OVERRIDES_SEEN: dict[str, str] = {}
+"""Every override actually read from the environment, in the order the module read it."""
+
+
+def _env(name: str) -> str | None:
+    """Return the raw value of ``name``, remembering that it was set."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    _OVERRIDES_SEEN[name] = raw
+    return raw
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name)
+    return default if raw is None else int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = _env(name)
+    return default if raw is None else float(raw)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean knob. Accepts ``1/true/yes/on`` and ``0/false/no/off``, case-insensitively.
+
+    A value that is neither raises rather than falling back to the default: a typo in a sweep variable
+    must not silently measure the default configuration under the variant's name.
+    """
+    raw = _env(name)
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name}=<{raw!r}> | must be one of 1/true/yes/on or 0/false/no/off")
+
+
+def _env_opt_int(name: str, default: int | None) -> int | None:
+    """Like :func:`_env_int` but accepts ``none`` to mean the package's unbounded behaviour."""
+    raw = _env(name)
+    if raw is None:
+        return default
+    if raw.strip().lower() in {"none", "null", "off", "unbounded"}:
+        return None
+    return int(raw)
+
+
+def sweep_overrides() -> dict[str, str]:
+    """Return the overrides this process read, for the run record."""
+    return dict(_OVERRIDES_SEEN)
+
+
 ACCOUNT_ID = os.environ.get("VALIDATION_ACCOUNT_ID", "")
 """Account a run must be executing in, or empty to accept whichever one the credentials resolve to.
 
@@ -88,6 +153,40 @@ error list alongside the token column: an arm that stopped completing turns has 
 and a percentage taken against it understates the saving.
 """
 
+MAX_OUTPUT_TOKENS = _env_int("VALIDATION_MAX_OUTPUT_TOKENS", 4_096)
+"""Output-token cap handed to every model under test. Override with ``VALIDATION_MAX_OUTPUT_TOKENS``.
+
+This was a hardcoded 4,096 applied to every model, and it was quietly costing accuracy on the arms
+that fold context. When a turn runs past the cap Strands raises, the harness recorded the error, and
+the answer was scored as an empty string -- so a model that answered and was interrupted scored the
+same as a model that said nothing. Measured on GLM 4.7 Flash: nine truncations in one 60-turn
+all-three run, one to two of them on SCORED turns.
+
+The bias is not random. Folded context tells the model to restate figures verbatim, and restating is
+what makes an answer long, so the cap fell hardest on exactly the configurations under test. The
+partial answer is now recovered from history and scored for what it says, and ``answer_truncated``
+marks the turn so a reader can still take the stricter view.
+
+Raising it is also the cheapest lever this harness has on a small model. GLM 4.7 Flash bills output at
+$0.40/Mtok: doubling the cap across a 60-turn run costs cents, where a lost scored turn costs a
+thirtieth of the accuracy column.
+
+**On a tight-window model that reasoning inverts, and the correction is the point of this note.** The
+provider subtracts the requested output cap from the context window before it admits the prompt, so
+the cap is not only a ceiling on the answer -- it is a reservation taken out of the window. Measured
+on GLM 4.7 Flash (202,752 tokens) with the cap at 8,192, Bedrock refused calls with::
+
+    This model's maximum context length is 202752 tokens. However, you requested 8192 output
+    tokens and your prompt contains at least 194561 input tokens, for a total of at least 202753
+
+That same 194,561-token prompt fits with the cap at 4,096. So raising the cap to buy back truncated
+answers spends 4,096 tokens of history to do it, and on the arms that do not fold context it converts
+calls that would have completed into ``ContextWindowOverflowException``. The lever is genuinely cheap
+in dollars and genuinely expensive in window, which is why it belongs in the tight-window
+configuration rather than in the default: raise it only as far as the answers actually need, and read
+any run that moved it against a run that did not.
+"""
+
 RERANK_MODEL_ID = "cohere.rerank-v3-5:0"
 """Rerank model the relevance filter scores chunks with. Latest rerank model in the account.
 
@@ -111,6 +210,150 @@ Configured account-wide with every data modality disabled, so entries carry the 
 token counts and the caller's ``requestMetadata`` but no prompts or completions.
 """
 
+# --- Window regime -----------------------------------------------------------------
+#
+# Three of the budgets below are not one number but two, and which pair applies is decided by the
+# agent model's context window. That condition is a measurement rather than a preference: a single set
+# of values is wrong because the window is what decides whether evidence starves or a larger budget
+# only buys a larger bill.
+
+TIGHT_WINDOW_CEILING = 300_000
+"""At or below this many tokens, a model is in the tight-window regime.
+
+Not a discovered constant -- a declared boundary, drawn where the measurements change sign. Below it
+the window is the binding constraint and evidence starves; above it the window is not reached at all
+and the only thing a larger budget buys is a larger bill.
+
+**It is 300K rather than the 250K the class is usually named after, and the reason is a measurement.**
+Qwen3 Next has a 256,000-token window -- above 250K -- and measured firmly inside this regime: on the
+60-turn script its bare agent lost **92 calls** to context-window overflow and finished 14 turns of 60,
+and the graph-alone arm peaked at **131% of the window**. A 250K ceiling would have handed it the
+large-window budgets, which are the ones calibrated for a window the conversation never fills.
+
+So the window alone is not really the determinant; the determinant is the window against the payload
+mass the workload puts in front of it, and the window is a proxy for it. The ceiling carries headroom
+because the proxy is imperfect and the failure is asymmetric: the tight budgets cost tokens on a large
+window (measured: +50.2% on Opus 4.8, buying nothing), while the large budgets cost *answers* on a tight
+one. Paying the cheaper error is the point of putting the boundary above the highest window measured to
+starve rather than at the round number.
+"""
+
+CONTEXT_WINDOWS = {
+    # Large window: the conversation never approaches the limit on this script.
+    "us.anthropic.claude-opus-4-8": 1_000_000,
+    "us.anthropic.claude-opus-5": 1_000_000,
+    "us.anthropic.claude-sonnet-5": 1_000_000,
+    "us.anthropic.claude-fable-5": 1_000_000,
+    "us.anthropic.claude-fable-5-1": 1_000_000,
+    "us.openai.gpt-6-astra": 1_050_000,
+    "global.openai.gpt-6-astra": 1_050_000,
+    "us.openai.gpt-5.6-sol": 1_000_000,
+    "global.openai.gpt-5.6-sol": 1_000_000,
+    "us.amazon.nova-2-lite-v1:0": 1_000_000,
+    "global.amazon.nova-2-lite-v1:0": 1_000_000,
+    # Tight window: the constraint this harness was extended to measure.
+    "zai.glm-5": 200_000,
+    "zai.glm-4.7": 202_752,
+    "zai.glm-4.7-flash": 202_752,
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+    "qwen.qwen3-next-80b-a3b": 256_000,
+    "nvidia.nemotron-nano-9b-v2": 128_000,
+    "nvidia.nemotron-super-3-120b": 128_000,
+}
+"""Context window per model id, from each model's Bedrock model card.
+
+Only used to pick a budget regime, never to predict an overflow: the harness measures overflows by
+letting them happen. GLM 4.7's 202,752 is the figure Bedrock's own refusal message states, which is
+why it is not the round 200K the card implies.
+
+A model absent from this map gets the large-window regime, on the ground that an unknown model is more
+likely to be a new frontier model than a small one -- and the regime is overridable, so a wrong guess
+costs one environment variable rather than a wrong run.
+"""
+
+
+@dataclass(frozen=True)
+class BudgetRegime:
+    """The three budgets that differ between window regimes, as one measured set.
+
+    They are held together rather than as three independent knobs because that is how they were
+    measured: the Opus 4.8 comparison reverted all three at once, so the aggregate is attributable and
+    the individual contributions are not. Splitting them here would claim an attribution the
+    measurement does not support.
+
+    Attributes:
+        preview_tokens: Relevance-filter preview budget -- how much of an oversized payload survives.
+        graph_description_tokens: ``description_tokens`` for a graph installed beside the filter.
+        graph_max_retrieval_cycles: Retrieval calls one turn may spend, or ``None`` for unbounded.
+    """
+
+    preview_tokens: int
+    graph_description_tokens: int
+    graph_max_retrieval_cycles: int | None
+
+
+LARGE_WINDOW = BudgetRegime(
+    preview_tokens=800,
+    graph_description_tokens=100,
+    graph_max_retrieval_cycles=8,
+)
+"""Budgets for a model whose window the conversation never fills. Measured on Opus 4.8, 1M tokens.
+
+These are the values every published large-window figure was measured with, and reverting to them is
+what established that the tight-window pair is not a general improvement. Replaying the five arms on
+Opus 4.8 with the tight-window budgets instead moved all three combined from 2,569,888 tokens to
+3,858,779 -- **+50.2%** -- for the same 28 of 30 materially correct turns.
+
+The mechanism is visible in the peak call: 49,943 -> 81,065 tokens, while the graph's resolution ladder
+barely moved (full 20/9/4 -> 19/8/7). The graph was not folding differently; every rung was carrying
+more. On a window this size there was no starvation to cure, so the larger budgets bought nothing and
+were billed anyway.
+
+Read the baseline row of that comparison before believing any of it: the baseline runs no plugin, so
+none of these values can reach it, and it still drifted +12.5% in tokens and two materially-correct
+turns between the two runs. That is the agent choosing a different tool path, and it is the floor below
+which nothing in this file is attributable.
+"""
+
+TIGHT_WINDOW = BudgetRegime(
+    preview_tokens=2_000,
+    graph_description_tokens=250,
+    graph_max_retrieval_cycles=4,
+)
+"""Budgets for a model at or below :data:`TIGHT_WINDOW_CEILING`. Measured on GLM 4.7 and GLM 4.7 Flash.
+
+Here the ceiling on the answer is the preview, not the window. ``preview_tokens`` of 800 admitted one
+or two chunks of a payload ten to thirty times its size, so a literal the answer needed -- an enum like
+``DEGRADED``, an error class like ``MFA_CHALLENGE_TIMEOUT``, a figure like ``907,35`` -- simply was not
+in the chunks that made the cut, while the all-three arm's peak call sat at 57,259 tokens against
+roughly 199,000 usable. 71% of the window was going unused while the plugin starved the evidence.
+
+``graph_description_tokens`` follows it rather than leading: the graph derives a Card's numeric lines
+from the message, and by then the message carries the preview. The two budgets are in series --
+
+    payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
+
+-- so raising the second while the first starves buys nothing, which is the measured reason the
+earlier calibration of 100 here was correct *for* a preview of 800 and wrong once it was raised.
+"""
+
+WINDOW_REGIME = (_env("VALIDATION_WINDOW_REGIME") or "").strip().lower() or (
+    "tight"
+    if (CONTEXT_WINDOWS.get(AGENT_MODEL_ID) or TIGHT_WINDOW_CEILING + 1) <= TIGHT_WINDOW_CEILING
+    else "large"
+)
+"""Which regime this run is in: ``tight`` or ``large``, derived from the model unless overridden.
+
+Derived rather than configured so the common case is right without anyone remembering to set it, and
+overridable with ``VALIDATION_WINDOW_REGIME`` so the boundary itself can be measured -- running a
+large-window model in the tight regime is exactly the experiment that produced the figures in
+:data:`LARGE_WINDOW`.
+"""
+
+BUDGETS = TIGHT_WINDOW if WINDOW_REGIME == "tight" else LARGE_WINDOW
+"""The regime's budgets. Individual values are still overridable one by one from the environment."""
+
 # --- Thresholds --------------------------------------------------------------------
 #
 # Deliberately low relative to the tool payloads: the mocked AWS-doc tools return 40k-120k
@@ -126,8 +369,18 @@ class Thresholds:
     max_result_tokens: int = 4_000
     """Above this, a tool result is relevance-filtered. Payloads are 10-30x this."""
 
-    preview_tokens: int = 800
-    """Preview budget. Small enough that chunk selection actually has to choose."""
+    preview_tokens: int = 2_000
+    """Preview budget: how much of an oversized payload survives, as whole verbatim chunks.
+
+    **Regime-dependent, and the default here is not the one that applies.** The value in force comes
+    from :data:`BUDGETS` -- 800 on a large window, 2,000 on a tight one -- and the two are documented
+    at :data:`LARGE_WINDOW` and :data:`TIGHT_WINDOW`. The literal below is only what the dataclass
+    falls back to when constructed with no argument, which the harness never does.
+
+    The preview is verbatim: ``RelevancePreview`` selects whole chunks that are exact substrings and
+    inserts only gap markers, so nothing here is lost to paraphrase. What a small budget loses is
+    *selection*, and what a large one costs is every downstream rung carrying more.
+    """
 
     chunk_tokens: int = 500
     """Scoring granularity. Small chunks mean more rerank sources and finer recall."""
@@ -153,23 +406,73 @@ class Thresholds:
 
     # -- context graph -------------------------------------------------------------
     #
-    # The graph's knobs are NOT here, because a single set of them is wrong. They depend on whether
-    # the relevance filter is also installed, which is a measured result rather than a preference --
-    # see GRAPH_ALONE and GRAPH_WITH_RELEVANCE below.
+    # The graph's knobs are NOT here: they live in GRAPH_TUNING below, as one set for every arm the
+    # graph appears in.
     min_cards: int = 3
     """Below this many Cards the whole choice is skipped: the only decision is 'send it all'."""
 
+    catalog_in_system_prompt: bool = False
+    """Place the disclosure catalog in the system prompt instead of in the tool schema.
 
-THRESHOLDS = Thresholds()
+    With this on, ``toolConfig`` carries only the tools that are callable on the call -- the search tool,
+    the always-available ones, the exposed ones and the referenced ones -- and every other name arrives
+    as a prose listing under a header stating the rule.
+
+    Two defects motivate it, both located by reading the projection rather than by a run. A catalog entry
+    in ``toolConfig`` declares ``{"type": "object", "properties": {}}``, which a model reads as a tool
+    that takes no arguments, and the statement that the entry is incomplete lives in the SEARCH tool's
+    description -- a different place from the entry being read at the moment of the decision. Measured on
+    Opus 4.8 over 60 turns, the combined arm made 22 searches AND 19 premature cancellations: the model
+    follows the instruction and guesses at the same time, and each guess is a round trip of about 31,000
+    tokens carrying no information.
+
+    Unmeasured. It is off by default because every published figure was measured with the catalog in the
+    tool schema, and because a name outside ``toolConfig`` is a name the provider does not know: a model
+    that calls one anyway may be refused by the provider before the plugin's guard is reached, which is a
+    harder failure than the cancellation it replaces.
+    """
+
+
+THRESHOLDS = Thresholds(
+    max_result_tokens=_env_int("VALIDATION_MAX_RESULT_TOKENS", 4_000),
+    preview_tokens=_env_int("VALIDATION_PREVIEW_TOKENS", BUDGETS.preview_tokens),
+    chunk_tokens=_env_int("VALIDATION_CHUNK_TOKENS", 500),
+    relevance_threshold=_env_float("VALIDATION_RELEVANCE_THRESHOLD", 0.02),
+    catalog_tokens=_env_int("VALIDATION_CATALOG_TOKENS", 20),
+    ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 5),
+    top_k=_env_int("VALIDATION_TOP_K", 4),
+    min_cards=_env_int("VALIDATION_MIN_CARDS", 3),
+    catalog_in_system_prompt=_env_bool("VALIDATION_CATALOG_IN_SYSTEM_PROMPT", False),
+)
 
 
 @dataclass(frozen=True)
 class GraphTuning:
-    """The graph's knobs, as one set. There are two of them, and which one applies is measured.
+    """The graph's knobs, as ONE set. There used to be two, selected by whether the filter was installed.
 
-    A single tuning for the graph is wrong, because what the graph should do depends on whether the
-    relevance filter has already acted on the same content. Both sets below were measured on the same
-    60-turn script against Haiku 4.5, one replay each.
+    **The split is gone, and the reason is a design argument rather than a new measurement.** It existed
+    because the graph "should fold less when relevance has already compressed the evidence" -- which
+    treats the two plugins as rivals for one job. They are not. They act at different moments on
+    different material:
+
+    - The relevance filter acts on ``AfterToolCallEvent``, on a payload that has not entered the history
+      yet. Its job is to decide what of that payload is worth keeping. Whether the survivor then goes to
+      the history, to the graph, or nowhere is not its concern.
+    - The graph acts at delivery, on a history that already exists. It never sees a payload; it sees
+      whatever was written down.
+
+    So the graph's input is *smaller* with the filter installed, not *different in kind*, and a knob that
+    decides how aggressively to fold a history has no business reading whether some other plugin trimmed
+    that history first. One set, and the filter's output is simply what the graph is given.
+
+    The measurement that justified the split is also confounded, which is what made it safe to drop.
+    Applying the graph-alone values with the filter present lost five materially correct turns -- but that
+    run had ``preview_tokens`` at 800 against payloads ten to thirty times that, so the Cards were starved
+    by the FIRST cut in the chain and a larger Description budget had nothing left to preserve. The
+    preview is 2,000 now, so the condition that produced the result no longer holds.
+
+    Unmeasured as a unified set: the values below are the graph's own measured optimum, which was measured
+    with no filter beside it. Every knob is env-overridable, so a sweep can settle it without a commit.
 
     Attributes:
         expand_threshold: Note at or above which a Card enters the call at full content.
@@ -177,6 +480,12 @@ class GraphTuning:
         link_threshold: Similarity at or above which two Cards link to each other.
         description_tokens: Token ceiling of a Card's Description.
         body_budget: Token ceiling across the Cards at full content, or ``None`` for no ceiling.
+        max_retrieval_cycles: Retrieval calls one turn may spend across the graph's three tools, or
+            ``None`` for the package's unbounded behaviour. Held here rather than left at the package
+            default because the value that is right depends on what else is installed: the measured
+            runaway was an ``all`` turn spending 31 tool calls, and a turn that has already had the
+            filter compress its evidence has less to gain from a fourth recovery attempt than a turn
+            running the graph alone.
     """
 
     expand_threshold: float
@@ -184,19 +493,43 @@ class GraphTuning:
     link_threshold: float
     description_tokens: int
     body_budget: int | None
+    max_retrieval_cycles: int | None = 8
+    reuse_ttl_cycles: int = 5
+    """Cycles a Card retrieved by a tool stays elevated for. The package default, restated here so a
+    sweep can reach it: on a tight-window model a longer reuse keeps recovered evidence resident
+    across the follow-up questions that usually come right after a retrieval, and a shorter one
+    stops a single retrieval from pinning content for the rest of the line."""
+    tags_per_card: int = 5
+    """Tags derived per Card, which is what ``find_context`` matches on. Reachable from a sweep
+    because the graph's discovery path is only as good as the tags it searches."""
+    neighbors_per_candidate: int = 3
+    """``similar`` neighbours ``find_context`` lists under each candidate. ``0`` lists none.
+
+    The edge had no reader before this: measured on the write path, stored with its similarity as the
+    weight, omitted from ``_STRUCTURAL_WEIGHTS`` so it propagates no Note, and traversed by no retrieval
+    path. It answers what the candidate ranking cannot -- that ranking scores each Description against
+    the QUESTION and never against another Description, so two turns covering the same ground in
+    different words are invisible to each other in it.
+
+    Unmeasured: every published figure was produced with the edge unread, so a run with this above zero
+    is not comparable to them on tokens. ``VALIDATION_GRAPH_NEIGHBORS=0`` reproduces them."""
 
 
-GRAPH_ALONE = GraphTuning(
-    expand_threshold=0.62,
-    collapse_floor=0.45,
-    link_threshold=0.50,
-    description_tokens=250,
-    body_budget=60_000,
+GRAPH_TUNING = GraphTuning(
+    expand_threshold=_env_float("VALIDATION_GRAPH_EXPAND", 0.62),
+    collapse_floor=_env_float("VALIDATION_GRAPH_COLLAPSE", 0.45),
+    link_threshold=_env_float("VALIDATION_GRAPH_LINK", 0.50),
+    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", BUDGETS.graph_description_tokens),
+    body_budget=_env_opt_int("VALIDATION_GRAPH_BODY_BUDGET", 40_000),
+    max_retrieval_cycles=_env_opt_int("VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", BUDGETS.graph_max_retrieval_cycles),
+    reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
+    tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
+    neighbors_per_candidate=_env_int("VALIDATION_GRAPH_NEIGHBORS", 3),
 )
-"""Tuning for a graph with no relevance filter beside it. Raised off the package's defaults.
+"""The graph's tuning, for every arm it appears in. Raised off the package's defaults.
 
-One hypothesis: move mass off the full-content rung and onto a Description rich enough to carry the
-facts a check asks for.
+One hypothesis behind the thresholds: move mass off the full-content rung and onto a Description rich
+enough to carry the facts a check asks for.
 
 The package's defaults (0.55 / 100 tokens) used all three rungs -- full 52%, Description 30%, Title
 18% -- yet the graph still lost scored turns the no-plugin baseline got right, and not by forgetting
@@ -214,33 +547,32 @@ What these values measured against the defaults, same script, same model: input 
 8,462,341 (-6.4%), peak call 139,917 -> 119,342 (-15%), weighted accuracy 85.0% -> 89.0%, materially
 correct 23/30 -> 24/30, and the ladder shifting from 17/10/6 to 12/15/6 exactly as intended. The token
 and ladder moves are mechanical; the one-turn accuracy gain is inside the noise of a single replay.
-"""
 
-GRAPH_WITH_RELEVANCE = GraphTuning(
-    expand_threshold=0.55,
-    collapse_floor=0.45,
-    link_threshold=0.50,
-    description_tokens=100,
-    body_budget=None,
-)
-"""Tuning for a graph installed alongside the relevance filter. The package's own defaults.
+``body_budget`` is 40,000, and the combined arm used to run it at ``None`` on the grounds that its "peak
+call sat at 49,863 tokens -- below any ceiling worth setting". **That premise is dead.** The same arm on
+Opus 4.8 now peaks at 75,000-81,000, and the peak call's composition says the growth is entirely message
+mass: 25,598 -> 38,507 tokens of messages against a flat 7,963 of tool schema.
 
-Deliberately NOT the set above, because applying it here was measured and it lost: input tokens moved
-1.2% while materially correct turns fell from 21/30 to 16/30, breaking five turns and fixing none.
+``None`` is not "no ceiling", it is *the step-down turned off*. ``distribute`` only moves a Card down a
+rung when the remaining budget cannot fit it (``scoring.py:382``: ``remaining is None or cost <=
+remaining``), so with ``None`` every Card at or above ``expand_threshold`` travels at full content however
+many of them there are. ``expand_threshold`` cannot substitute for the ceiling -- it is a per-Card
+classifier and knows nothing about the total, so the call grows linearly with the conversation and is
+bounded by nothing. The vended harness carries a ``gr-budget-40k`` variant for exactly this reason, "a
+ceiling that actually binds, so the budget-driven step down is exercised", and the combined arm was the
+one running without it. A Card that does not fit steps down ONE rung, to Description, never to Title, so
+the ceiling binding costs a Description on the lowest-Note Card of the turn rather than a dropped Card.
+``VALIDATION_GRAPH_BODY_BUDGET=none`` restores the measured configuration.
 
-The two strategies compete for the same job. With the filter installed, an oversized payload has
-already been replaced by an 800-token preview before the Card is derived, so the Card's numeric lines
-come from that preview rather than from the raw result: raising ``description_tokens`` has little left
-to preserve. And raising ``expand_threshold`` steps Cards off a full-content rung the filter already
-shrank, which costs recall without buying tokens. *When relevance has already compressed the evidence,
-the graph should fold less, not more.*
+``max_retrieval_cycles`` is 4 against the package's 8, and the distribution is why. Measured on GLM 4.7
+Flash over 60 turns, the combined arm's retrieval spend per turn was 1 call on 13 turns, 2 on 5, 3 on 2,
+then 5, 8 and 12 -- so 87% of the turns that retrieved at all finished inside three calls, and the whole
+tail above five is two turns. Eight therefore binds on nothing a healthy turn does while leaving the
+pathological turn eight real Card rebuilds to spend; four keeps every turn in that 87% untouched and
+halves what the outlier costs.
 
-``body_budget`` stays ``None`` here because that is how this arm was measured, and its peak call sat at
-49,863 tokens -- below any ceiling worth setting. Stating the measured configuration matters more than
-carrying a ceiling that never binds.
-
-One replay each, so read the five-turn regression as the direction it points rather than as a
-quantity. ``--repeats 3`` is what would settle it.
+One replay each, so read every quantity here as the direction it points rather than as a settled number.
+``--repeats 3`` is what would settle it.
 """
 
 # --- Paths -------------------------------------------------------------------------
@@ -334,6 +666,43 @@ RUN_CONFIGS = {
             "tool whose inputSchema left the call."
         ),
     ),
+    "no-disclosure": RunConfig(
+        name="no-disclosure",
+        disclosure=False,
+        relevance=True,
+        graph=True,
+        label="Relevance + graph (disclosure removed)",
+        notes=(
+            "Leave-one-out. Tuning three plugins together is only possible once each one's MARGINAL "
+            "contribution inside the stack is known, and a single-strategy arm does not give that: "
+            "what a plugin buys on its own and what it adds to the other two are different "
+            "quantities. This arm prices the schema floor against the round trips disclosure costs "
+            "when the model guesses a hidden tool's name instead of searching for it."
+        ),
+    ),
+    "no-relevance": RunConfig(
+        name="no-relevance",
+        disclosure=True,
+        relevance=False,
+        graph=True,
+        label="Graph + disclosure (relevance removed)",
+        notes=(
+            "Leave-one-out. Every arm with the graph now keeps its own artifact tool: the "
+            "``include_artifact_tool=not config.relevance`` drop is gone, because the filter no "
+            "longer registers a retrieval tool for it to collide with."
+        ),
+    ),
+    "no-graph": RunConfig(
+        name="no-graph",
+        disclosure=True,
+        relevance=True,
+        graph=False,
+        label="Relevance + disclosure (graph removed)",
+        notes=(
+            "Leave-one-out. The two payload-side strategies without any history folding, which is "
+            "what isolates whether the graph is adding recall or only removing tokens."
+        ),
+    ),
 }
 
 DEFAULT_CONFIGURATIONS = (
@@ -345,8 +714,43 @@ DEFAULT_CONFIGURATIONS = (
 )
 """What a run compares when no configuration is named: each strategy alone, plus all three."""
 
-CONFIGURATIONS = DEFAULT_CONFIGURATIONS
-"""Every configuration the runner accepts by name."""
+CONFIGURATIONS = DEFAULT_CONFIGURATIONS + (
+    "no-disclosure",
+    "no-relevance",
+    "no-graph",
+)
+"""Every configuration the runner accepts by name.
+
+The three leave-one-out arms are accepted but not run by default: they answer a tuning question
+rather than the comparison the report is built around, and adding them to the default would change
+what every published table means.
+
+**What they measured, and it is the most useful thing in this file for anyone tuning the stack.** On
+``zai.glm-4.7`` (a 202,752-token window, so the tight-window class), 20 turns of which 18 are scored,
+two to three replays each:
+
+======================================  =============  =========  ==============
+Configuration                           Total tokens   Δ tokens   Materially correct
+======================================  =============  =========  ==============
+Baseline, no plugin                         3,733,922         --   12.5/18
+All three                                   1,687,068     -54.8%   15.67/18
+Graph + disclosure                          1,524,740     -59.2%   15.5/18
+Relevance + graph (no disclosure)           3,960,855     +6.1%    14.5/18
+Relevance + disclosure (no graph)           4,222,162     +13.1%   14.5/18
+======================================  =============  =========  ==============
+
+**The saving is a conjunction, not a sum.** Either PAIR spends more than using no plugin at all, and
+only the full stack saves. Drop disclosure and the fixed tool-schema floor rides every call again,
+multiplied by the extra retrieval round trips the other two introduce. Drop the graph and the history
+never folds, so previews accumulate and the round trips are paid on a conversation that only grows.
+Neither pair is a degraded version of the stack; both are worse than doing nothing.
+
+Read the baseline's token column with the error column beside it, which is the whole reason they sit
+together: that baseline overflowed the window six times per replay, and a turn that overflows stops
+spending. Part of why the pairs look expensive against it is that they finish turns it abandoned. The
+comparison that is not contaminated by this is all-three against either pair, and there the full stack
+wins on both axes at once.
+"""
 
 # --- Web fetch ---------------------------------------------------------------------
 
@@ -399,6 +803,25 @@ class Pricing:
 
 
 MODEL_PRICING = {
+    # -- Amazon ---------------------------------------------------------------------
+    # Nova 2 Lite is INFERENCE_PROFILE only in us-east-1 -- the bare model id carries no ON_DEMAND
+    # entry, so the invocable ids are the us. and global. profiles, both verified ACTIVE.
+    #
+    # THE CACHE WRITE IS FREE. From the Price List API for us-east-1:
+    # USE1-Nova2.0Lite-cache-write-input-token-count = $0.0000/Mtok, and cache read $0.0825 against a
+    # $0.33 input rate (0.25x). Every other family measured here charges ~1.25x input to WRITE, which
+    # is what makes a prefix-mutating strategy expensive under caching. On Nova that penalty is zero,
+    # so this is the one model where caching and context compression can compose instead of compete.
+    # Worth a cache-on/cache-off pair for exactly that reason.
+    #
+    # Caching is also capped: the card states Nova models cache a maximum of 20K tokens, with a
+    # 5-minute TTL and checkpoints in system and messages only. The 1h field is therefore None -- a
+    # 1h run against Nova is refused rather than priced at an invented rate.
+    #
+    # Tool use verified by invocation, not by reading the card: one Converse call carrying a
+    # toolConfig returned stopReason=tool_use on both profiles (tmp/probe_tool_use.py).
+    "us.amazon.nova-2-lite-v1:0": Pricing(0.33, 2.75, 0.0825, 0.0, None),
+    "global.amazon.nova-2-lite-v1:0": Pricing(0.30, 2.50, 0.0750, 0.0, None),
     # -- Anthropic ----------------------------------------------------------------
     "us.anthropic.claude-opus-4-8": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
     "us.anthropic.claude-opus-5": Pricing(5.00, 25.00, 0.50, 6.25, 10.00),
@@ -429,9 +852,49 @@ MODEL_PRICING = {
     # No cache rates published for these, so the fields stay None and a cached run against one is
     # refused rather than priced with a guess.
     "us.deepseek.r1-v1:0": Pricing(1.35, 5.40),
-    # In-region only: GLM 5 publishes no cross-region inference profile, so the bare model id is
-    # the invocable one. Verified with list-foundation-models / list-inference-profiles.
+    # In-region only: the GLM models publish no cross-region inference profile, so the bare model id
+    # is the invocable one. Verified with list-foundation-models / list-inference-profiles for GLM 5,
+    # and the 4.7 cards state Geo and Global as not supported.
+    #
+    # None of the three publishes any prompt caching, so the cache fields stay None and a cached run
+    # against one is refused rather than priced with a guess. That is the point of running them: in
+    # this regime prompt caching is not an alternative to context engineering, it is unavailable.
+    #
+    # GLM 4.7 and 4.7 Flash cap max output at 4K tokens against GLM 5's 128K. This harness's answers
+    # are far below that, but a script with long-form answers would truncate.
     "zai.glm-5": Pricing(1.00, 3.20),
+    "zai.glm-4.7": Pricing(0.60, 2.20),
+    "zai.glm-4.7-flash": Pricing(0.07, 0.40),
+    # Small-window, no-caching models: the regime where these strategies are not an optimisation but
+    # the thing that lets a 60-turn conversation finish. None publishes prompt caching, so the cache
+    # field stays None on all of them and there is nothing for caching to compete against.
+    #
+    # Windows, from each model card: Nemotron Nano 9B v2 128K, Nemotron Nano 3 30B 256K, Ministral
+    # 3B/8B/14B 128K, Gemma 3 12B 128K. The bare-agent baseline peaks near 200K on this script, so a
+    # 128K model is where the overflow contrast is sharpest.
+    #
+    # Rates are the US East (N. Virginia) / US East (Ohio) / US West (Oregon) Standard-tier rows of
+    # the Bedrock pricing page, read 2026-09-22. Two models were left OUT deliberately: gpt-oss-20b
+    # /120b and Qwen3 32B publish Standard on-demand rows for Asia Pacific (Sydney) only, so pricing
+    # them in us-east-1 would be a guess.
+    "nvidia.nemotron-nano-9b-v2": Pricing(0.06, 0.23),
+    "nvidia.nemotron-nano-3-30b": Pricing(0.06, 0.24),
+    "nvidia.nemotron-super-3-120b": Pricing(0.15, 0.65),
+    "mistral.ministral-3-3b-instruct": Pricing(0.10, 0.10),
+    "mistral.ministral-3-8b-instruct": Pricing(0.15, 0.15),
+    "mistral.ministral-3-14b-instruct": Pricing(0.20, 0.20),
+    "mistral.magistral-small-2509": Pricing(0.50, 1.50),
+    "mistral.mistral-large-3-675b-instruct": Pricing(0.50, 1.50),
+    # Qwen3 Next 80B A3B, 256K window, no prompt caching published. Rates are the us-east-1 Standard
+    # tier from the Price List API (USE1-Qwen3Next-80B-A3B-*-tokens-standard). Tool use verified by
+    # invocation: stopReason=tool_use on a Converse call carrying a toolConfig.
+    "qwen.qwen3-next-80b-a3b": Pricing(0.14, 1.20),
+    # NOT ADDED, and deliberately: the Gemma family cannot run this harness. Gemma 3 12B/27B accept a
+    # Converse request carrying a toolConfig and then IGNORE it -- measured, the model answers in prose
+    # asking to be given the tool, and inputTokens comes back at 27, meaning the tool schema was
+    # dropped rather than read. Gemma 4 is bedrock-mantle only: Converse answers "The provided model
+    # identifier is invalid", and it is absent from list-foundation-models in us-east-1. A benchmark
+    # built entirely on tool payloads has nothing to measure on a model that cannot call a tool.
 }
 """Rates per model id, in USD per million tokens, for ``us-east-1`` Standard tier.
 

@@ -296,6 +296,11 @@ from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
 
 graph = ContextGraph(
     matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3", boto_session=session),
+    # The filter below ships its own retrieval tool over its own store, and the graph's
+    # `expand_artifact` reads a store that cannot resolve the filter's references. Two plausible
+    # tools for one job, and only one of them can answer -- see gotcha 1. Excluding it here is the
+    # supported way to say so; earlier revisions of this page reached into `graph._tools`.
+    include_artifact_tool=False,
 )
 
 # GOTCHA 1: two artifact-retrieval tools, two stores, no bridge. Drop the graph's so the only
@@ -344,7 +349,13 @@ agent = Agent(
             catalog_tokens=20,
             ttl_cycles=5,
             top_k=4,
-            always_available=["retrieve_context", "expand_card", "find_context"],
+            # Derived, never hard-coded. A tool disclosure has not exposed is reduced to a catalog
+            # entry with an EMPTY inputSchema, and every retrieval tool here needs arguments -- a
+            # Title, a reference, a search need. So a hidden one is called with nothing, cancelled by
+            # the premature-call guard, and only exposed on the retry: the model pays a round trip to
+            # learn what the folded-context guidance already told it to do. Reading the names off the
+            # plugin keeps this correct when `include_artifact_tool` is false, as it is above.
+            always_available=[*graph.retrieval_tool_names, "retrieve_context"],
             referenced_source=graph_referenced_tools,
         ),
     ],

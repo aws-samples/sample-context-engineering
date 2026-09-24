@@ -68,6 +68,7 @@ from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolM
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
     FIND_TOOLS_NAME,
+    _CATALOG_SIGIL,
     _DisclosureState,
     _truncate_description,
 )
@@ -408,7 +409,8 @@ def _expected_projection(
                 expected.append(
                     {
                         "name": spec["name"],
-                        "description": _truncate_description(spec["description"], catalog_tokens),
+                        "description": _CATALOG_SIGIL
+                        + _truncate_description(spec["description"], catalog_tokens),
                         "inputSchema": copy.deepcopy(EMPTY_CLOSED_SCHEMA),
                     }
                 )
@@ -426,6 +428,7 @@ def _project_once(
     catalog_tokens: int | None = 20,
     ttl_cycles: int = 5,
     cycle: int = 0,
+    catalog_in_system_prompt: bool = False,
 ) -> tuple[ProgressiveToolDisclosure, Agent, InvokeModelContext, InvokeModelContext]:
     """Run one projection end to end, and hand back everything an assertion may need to look at.
 
@@ -438,6 +441,7 @@ def _project_once(
         catalog_tokens: Catalog budget in tokens, or ``None``.
         ttl_cycles: Cycles an exposure survives after its last use.
         cycle: Cycle counter to run the call at.
+        catalog_in_system_prompt: Place the catalog in the system prompt instead of in ``tool_specs``.
 
     Returns:
         The plugin, the agent, the context received by the handler, and the context it returned.
@@ -447,6 +451,7 @@ def _project_once(
         ttl_cycles=ttl_cycles,
         always_available=tuple(always_available),
         index=_RecordingIndex(),
+        catalog_in_system_prompt=catalog_in_system_prompt,
     )
     agent = _agent(plugin)
     _seed_state(plugin, agent, exposed, cycle)

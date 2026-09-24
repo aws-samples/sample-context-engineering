@@ -27,6 +27,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from strands_progressive_tool_disclosure.plugin import (
+    _CATALOG_SIGIL,
     _catalog_entry,
     _estimate_tokens,
     _truncate_description,
@@ -150,7 +151,10 @@ def test_catalog_entry_is_a_faithful_budgeted_prefix(spec: dict[str, Any], catal
     max_chars = catalog_tokens * CHARS_PER_TOKEN
 
     entry = _catalog_entry(spec, catalog_tokens)
-    result = entry["description"]
+    # The sigil marks the entry as a listing rather than a specification. It is deliberately outside
+    # the budget, so every assertion below is about the body it prefixes.
+    assert entry["description"].startswith(_CATALOG_SIGIL)
+    result = entry["description"][len(_CATALOG_SIGIL) :]
 
     # Requirement 4.5: the name is the call key, copied character by character.
     assert entry["name"] == source["name"]
@@ -221,8 +225,11 @@ def test_catalog_entry_has_the_empty_closed_schema_and_no_extra_fields(
     assert other["inputSchema"] == EMPTY_CLOSED_SCHEMA
 
 
-def test_empty_description_yields_an_empty_description_and_a_verbatim_name() -> None:
-    """Property 7 edge case: a zero-character description survives as zero characters.
+def test_empty_description_yields_only_the_sigil_and_a_verbatim_name() -> None:
+    """Property 7 edge case: a zero-character description survives as zero characters of body.
+
+    The sigil remains, because an entry with nothing to say is still an entry whose parameters are not
+    loaded -- that is exactly when the model most needs to be told to search rather than guess.
 
     Validates: Requirements 4.5, 4.9.
     """
@@ -230,5 +237,5 @@ def test_empty_description_yields_an_empty_description_and_a_verbatim_name() -> 
 
     entry = _catalog_entry(spec, 1)
 
-    assert entry["description"] == ""
+    assert entry["description"] == _CATALOG_SIGIL
     assert entry["name"] == "find_tools"

@@ -208,7 +208,7 @@ def delivery_of(state: _GraphState | None, messages: list[dict[str, Any]]) -> tu
     """A ``Projection`` wired to one agent holding ``state``, plus that agent's per-call context."""
     agent = _Agent(messages)
     states: dict[_Agent, _GraphState] = {} if state is None else {agent: state}
-    return Projection(states, description_tokens=DESCRIPTION_TOKENS), context_over(list(messages), agent)
+    return Projection(states, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")), context_over(list(messages), agent)
 
 
 @given(messages=histories())

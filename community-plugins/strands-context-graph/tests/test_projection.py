@@ -132,7 +132,7 @@ def projection(state=None, messages=None, *, description_tokens=DESCRIPTION_TOKE
     states = {}
     if state is not None:
         states[agent] = state
-    return Projection(states, description_tokens=description_tokens), context_over(messages, agent)
+    return Projection(states, description_tokens=description_tokens, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")), context_over(messages, agent)
 
 
 def warnings_of(caplog):
@@ -374,7 +374,7 @@ def test_register_puts_the_delivery_first_on_the_input_phase():
         return context
 
     agent._middleware_registry.add_middleware(InvokeModelStage.Input, other)
-    handler = Projection({}, description_tokens=DESCRIPTION_TOKENS)
+    handler = Projection({}, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context"))
 
     handler.register(agent)
 

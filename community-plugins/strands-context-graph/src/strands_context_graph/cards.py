@@ -57,6 +57,7 @@ __all__ = [
     "derive_card",
     "is_evidence",
     "is_turn_boundary",
+    "link_newly_measurable",
     "partition_turn",
     "rebuild",
     "rebuild_into",
@@ -1014,6 +1015,55 @@ def _previous_title(state: _GraphState, turn: int) -> str | None:
         return None
 
     return max(earlier, key=lambda card: card.turn).title
+
+
+def link_newly_measurable(
+    state: _GraphState,
+    titles: Collection[str],
+    *,
+    link_threshold: float,
+) -> int:
+    """Measure the ``similar`` edges that became measurable now that ``titles`` are in the vector index.
+
+    This is the second half of the promise this module's header makes: the ``MessageAddedEvent`` hook is kept free of
+    network calls, so a Card registered there is measured against an index that cannot yet contain the Card's own
+    Description -- it was written moments earlier. Without this pass that measurement is simply never retried, and the
+    newest side of every pair stays uncached forever, which leaves the ``similar`` edge unable to form at all on the
+    incremental path. The three structural kinds still form, so the absence does not look like a failure anywhere.
+
+    Only pairs touching ``titles`` are measured, which is what keeps this off the critical path as the conversation
+    grows: one new Description per turn costs one row against the graph rather than the whole matrix. A pair that scores
+    below the threshold gets no edge and is not revisited -- both its vectors are cached from here on, so re-measuring it
+    on every later turn would spend the same arithmetic on the same answer.
+
+    Args:
+        state: The graph state. Mutated: the edges are added here.
+        titles: Titles whose Description vector was just cached. A Title with no Card, or with no cached vector, is
+            skipped rather than raising.
+        link_threshold: Similarity at or above which two Cards link.
+
+    Returns:
+        How many directed edges were written, which is twice the number of pairs that cleared the threshold.
+    """
+    measure = _cached_similarity(state)
+    written = 0
+
+    for title in sorted(titles):
+        card = state.cards.get(title)
+        if card is None:
+            continue
+
+        for other_title in sorted(state.cards):
+            if other_title == title:
+                continue
+
+            measured = measure(card, state.cards[other_title])
+            if measured is not None and measured >= link_threshold:
+                _link(state, title, "similar", other_title, measured)
+                _link(state, other_title, "similar", title, measured)
+                written += 2
+
+    return written
 
 
 def _link(state: _GraphState, source: str, kind: LinkKind, target: str, weight: float) -> None:

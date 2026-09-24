@@ -87,7 +87,7 @@ def context(*tracking_ids):
 def collapsed(graph, requested, *retained_ids, description_tokens=DESCRIPTION_TOKENS):
     """Render the block for ``requested`` against a removed list holding ``retained_ids``."""
     return render_final_block(
-        context(*retained_ids), graph, frozenset(requested), description_tokens=description_tokens
+        context(*retained_ids), graph, frozenset(requested), description_tokens=description_tokens, retrieval_tools=("expand_card", "expand_artifact", "find_context")
     )
 
 
@@ -350,7 +350,12 @@ def test_nothing_dropped_returns_none():
 
 def test_an_empty_graph_returns_none():
     """The shape a fresh agent has: no Card, no block."""
-    assert render_final_block(context(), _GraphState(), frozenset(), description_tokens=DESCRIPTION_TOKENS) is None
+    assert (
+        render_final_block(
+            context(), _GraphState(), frozenset(), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context")
+        )
+        is None
+    )
 
 
 def test_a_request_wholly_preserved_by_the_guards_returns_none():
@@ -527,7 +532,7 @@ def test_nothing_is_mutated():
     cards_before = copy.deepcopy(graph.cards)
     requested = frozenset({"d0", "e0"})
 
-    render_final_block(injection_context, graph, requested, description_tokens=DESCRIPTION_TOKENS)
+    render_final_block(injection_context, graph, requested, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context"))
 
     assert injection_context.messages == messages_before
     assert graph.cards == cards_before
@@ -564,5 +569,5 @@ def test_a_retained_message_without_a_durable_identity_is_ignored():
     )
 
     assert "balance: 1200" in render_final_block(
-        injection_context, graph, frozenset({"d0"}), description_tokens=DESCRIPTION_TOKENS
+        injection_context, graph, frozenset({"d0"}), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context")
     )

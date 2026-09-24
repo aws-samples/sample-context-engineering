@@ -352,7 +352,7 @@ COLLAPSE_SCRIPT = (
     text_response(MIGRATION_ANSWER),
     tool_response("ledger_lookup", "use-ledger", month="march"),
     text_response("three entries are still open"),
-    tool_response("expand_card", "use-expand", title=MIGRATION_ASK),
+    tool_response("expand_card", "use-expand", titles=[MIGRATION_ASK]),
     text_response("the migration cost is in the turn you just gave me back"),
 )
 """Six provider calls over four turns: turn three's tool loop takes two, turn four's takes two."""

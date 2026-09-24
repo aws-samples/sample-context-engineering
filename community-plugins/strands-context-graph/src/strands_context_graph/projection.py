@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -125,12 +126,23 @@ class Projection:
     Args:
         states: The plugin's per-agent state map. Read only, never written to from here.
         description_tokens: Token ceiling of one Card's entry in the final block.
+        retrieval_tools: Callable returning the names of the retrieval tools currently registered. A callable rather
+            than a set because the plugin's tool list can be edited after this object is built -- installing the
+            relevance filter alongside means de-registering the artifact tool -- and guidance that names a tool the
+            agent no longer has sends the model after something it cannot call.
     """
 
-    def __init__(self, states: _GraphStates, *, description_tokens: int) -> None:
+    def __init__(
+        self,
+        states: _GraphStates,
+        *,
+        description_tokens: int,
+        retrieval_tools: Callable[[], Collection[str]],
+    ) -> None:
         """Build the fold once, so the primitive's trigger is fixed for the lifetime of the instance."""
         self._states = states
         self._description_tokens = description_tokens
+        self._retrieval_tools = retrieval_tools
         # Called from inside ``deliver`` rather than registered on the stage: the removal must have happened before the
         # render runs, and one handler is what makes the pair atomic.
         self._fold = _create_injection_middleware(self._render, trigger="everyTurn")
@@ -243,6 +255,7 @@ class Projection:
                 state,
                 in_flight.requested,
                 description_tokens=self._description_tokens,
+                retrieval_tools=self._retrieval_tools(),
             )
         except Exception as error:
             # Handed back to ``deliver``, which degrades atomically. Raising here would leave the removal in place.

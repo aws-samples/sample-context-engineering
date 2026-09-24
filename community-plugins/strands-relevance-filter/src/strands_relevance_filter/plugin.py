@@ -158,7 +158,10 @@ class RelevanceFilter(Plugin):
         config: Preview tuning (reranker, threshold, chunk and preview budgets). Every key is
             optional; see :class:`RelevanceConfig` for the defaults.
         include_retrieval_tool: Whether to register the ``retrieve_context`` tool so the model can
-            read the raw content back. Defaults to True.
+            read the raw content back. Defaults to False: the filter's job ends at the tool result,
+            and a retrieval cycle's own result becomes a conversation message that rides along on
+            every later call, so reading a cut chunk back is paid for repeatedly. Off, no raw
+            sub-block is stored and no reference token is emitted -- nothing could resolve one.
         should_filter: Callback deciding whether a specific oversized result is filtered. Called only
             once the result is over threshold. Defaults to None (every oversized result is filtered).
 
@@ -181,7 +184,7 @@ class RelevanceFilter(Plugin):
         store: Store | None = None,
         max_result_tokens: int = _DEFAULT_MAX_RESULT_TOKENS,
         config: RelevanceConfig | None = None,
-        include_retrieval_tool: bool = True,
+        include_retrieval_tool: bool = False,
         should_filter: ShouldFilter | None = None,
     ) -> None:
         """Initialize the plugin without building any scoring or network dependency.
@@ -192,7 +195,9 @@ class RelevanceFilter(Plugin):
             max_result_tokens: Filter only results above this estimated token count.
             config: Preview tuning; read key by key with the documented defaults at use time, so a
                 partial config is as valid as a full one.
-            include_retrieval_tool: Register the ``retrieve_context`` tool. Defaults to True.
+            include_retrieval_tool: Register the ``retrieve_context`` tool. Defaults to False, which
+                also suppresses the store write and the reference token: with no tool to resolve it,
+                a reference would be a promise nothing can keep.
             should_filter: Callback ``(tool_name, token_count, **kwargs) -> bool``, sync or async.
 
         Raises:
@@ -481,7 +486,9 @@ class RelevanceFilter(Plugin):
 
         The store write comes first, before anything is rewritten: the reference tokens the model is
         handed are only useful if the content they name is already there, and a write that fails must
-        leave the original result standing rather than a preview pointing at nothing.
+        leave the original result standing rather than a preview pointing at nothing. With
+        ``include_retrieval_tool`` off there is no reader, so nothing is stored and no reference token
+        is appended -- the preview is the whole of what survives.
 
         Args:
             event: The completed tool call whose ``result`` is rewritten in place.
@@ -496,24 +503,28 @@ class RelevanceFilter(Plugin):
             return
 
         references: list[str] = []
-        try:
-            for index, block in enumerate(content):
-                # Only the scorable sub-blocks are stored: they are the ones the preview replaces,
-                # so they are the only ones the model can still need to read back.
-                if block.get("text"):
-                    raw, content_type = block["text"].encode("utf-8"), "text/plain"
-                elif "json" in block:
-                    raw, content_type = json.dumps(block["json"], indent=2).encode("utf-8"), "application/json"
-                else:
-                    continue
-                references.append(await store.store(f"{tool_use_id}_{index}", raw, content_type))
-        except Exception:
-            logger.warning(
-                "tool_use_id=<%s> | failed to store tool result, keeping original",
-                tool_use_id,
-                exc_info=True,
-            )
-            return
+        # Storing is only worth its memory when something can read it back. With the retrieval tool
+        # off the flow is tool -> filtered result -> model and ends there, so the raw sub-blocks have
+        # no reader and the loop below is skipped entirely.
+        if self._include_retrieval_tool:
+            try:
+                for index, block in enumerate(content):
+                    # Only the scorable sub-blocks are stored: they are the ones the preview replaces,
+                    # so they are the only ones the model can still need to read back.
+                    if block.get("text"):
+                        raw, content_type = block["text"].encode("utf-8"), "text/plain"
+                    elif "json" in block:
+                        raw, content_type = json.dumps(block["json"], indent=2).encode("utf-8"), "application/json"
+                    else:
+                        continue
+                    references.append(await store.store(f"{tool_use_id}_{index}", raw, content_type))
+            except Exception:
+                logger.warning(
+                    "tool_use_id=<%s> | failed to store tool result, keeping original",
+                    tool_use_id,
+                    exc_info=True,
+                )
+                return
 
         query = self._build_query(event)
         try:

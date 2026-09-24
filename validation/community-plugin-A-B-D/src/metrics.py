@@ -233,6 +233,16 @@ class TurnRecord:
     tool_calls: list[str] = field(default_factory=list)
     live_message_count: int = 0
     error: str | None = None
+    answer_truncated: bool = False
+    """Whether this turn's answer was cut short at the model's output cap and recovered from history.
+
+    Separate from ``error`` because the two are different verdicts and were being conflated. A turn
+    that overflowed the context window did not answer; a turn cut off at ``max_tokens`` answered and
+    was interrupted, and scoring its silence as a wrong answer penalised exactly the configurations
+    that fold context -- folding is what makes a model restate figures verbatim, and restating is what
+    runs an answer past the cap. A reader who wants the stricter reading can subtract these turns;
+    a reader who cannot tell them apart cannot.
+    """
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -245,6 +255,7 @@ class TurnRecord:
             "tool_calls": self.tool_calls,
             "live_message_count": self.live_message_count,
             "error": self.error,
+            "answer_truncated": self.answer_truncated,
         }
 
 

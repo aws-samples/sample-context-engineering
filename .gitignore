@@ -1,0 +1,17 @@
+# Python build and cache artefacts. Absent until now, which is why a routine `git add -A` over the
+# plugin packages staged 59 compiled files.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments, wherever a reader creates one.
+.venv/
+venv/
+
+# Scratch. `tmp/` holds throwaway probe scripts, run logs and reference checkers -- work in progress,
+# not artefacts a reader of this repository needs. `.kiro/` is a local agent configuration directory.
+tmp/
+.kiro/
