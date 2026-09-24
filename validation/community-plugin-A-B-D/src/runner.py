@@ -17,14 +17,11 @@ one metered reranker covered everything. Here ``RelevanceFilter`` owns a ``Reran
 *public* class -- ``BedrockReranker`` and ``EmbeddingSimilarityMatcher`` -- rather than the SDK's
 private ones.
 
-**The referenced-source bridge is ours to build.** ``ProgressiveToolDisclosure`` accepts a
-``referenced_source`` publicly, but the community ``ContextGraph`` publishes no accessor for the
-tools a stepped-down Card still mentions (``_GraphState.referenced`` is declared and never
-written). Without the bridge, a Card dropping to its Description takes its tools' ``inputSchema``
-out of the call while still describing them, and the model calls a tool it no longer knows the
-shape of -- recovered by the disclosure plugin's premature-call guard at the cost of one cycle.
-:func:`_graph_referenced_source` closes that gap from the Cards themselves, and
-``premature_cancellations`` is reported so the cost of the gap stays visible.
+**No referenced-source bridge.** ``ProgressiveToolDisclosure`` releases a loaded tool once it has
+returned and no longer keeps the tools the history references, so a Card that steps down has no
+schema to keep resident: its tools are catalog names like any other, loaded again with
+``get_tool_details`` when the model needs them. ``premature_cancellations`` is reported so a call
+made off the catalog without loading stays visible.
 
 Every configuration runs with ``NullConversationManager``. For the graph that is a documented
 precondition -- any other manager edits the live message list before the call is assembled, so it
@@ -238,9 +235,6 @@ class _MeteredMatcher(EmbeddingSimilarityMatcher):
         return super()._invoke(texts, purpose)  # type: ignore[arg-type]
 
 
-_FULL = "full"
-"""The resolution name meaning a Card's part entered the call whole."""
-
 _GRAPH_ARTIFACT_TOOL = "expand_artifact"
 """The graph's artifact-retrieval tool. Registered in every arm since the filter lost its own.
 
@@ -266,63 +260,6 @@ no store, so ``expand_artifact`` is the only artifact path there is and dropping
 The graph's two other tools -- ``expand_card`` and ``find_context`` -- were never part of this:
 they reach back into the conversation's own turns, a different job the relevance filter does not do.
 """
-
-
-def _graph_referenced_source(graph: ContextGraph) -> Any:
-    """Return a ``referenced_source`` callable naming the tools of every stepped-down Card.
-
-    The gap this closes is a real one and belongs to the community packaging, not to the design:
-    ``ProgressiveToolDisclosure`` takes a ``referenced_source`` publicly, and ``ContextGraph``
-    publishes nothing to feed it -- ``_GraphState.referenced`` is declared in the dataclass and
-    never written by any code path in the package.
-
-    Without it, a Card that drops to its Description keeps *describing* its tools while their
-    ``inputSchema`` leaves the call, because the disclosure plugin's own referenced block is
-    computed from the ``toolUse`` blocks of the projected messages, and the graph has already
-    removed those. The model then calls a tool whose shape it cannot see. That is recoverable --
-    the premature-call guard cancels the call, exposes the schema and asks for a retry -- but it
-    costs a cycle every time, and the cycle is the model's, not the harness's.
-
-    Reads the plugin's per-agent state, which is private. That is the same coupling
-    :func:`_collect_plugin_counters` already accepts, and it degrades the same way: any failure
-    returns no names, which is exactly the behaviour without the bridge.
-
-    Args:
-        graph: The graph plugin instance wired to the agents this source will serve.
-
-    Returns:
-        A callable taking the agent of the call and returning tool names.
-    """
-
-    def source(agent: Agent) -> tuple[str, ...]:
-        try:
-            state = graph._states.get(agent)
-            if state is None:
-                return ()
-
-            choice = state.choice
-            if choice.full_pass:
-                # Every Card is whole, so every toolUse is still in the call and the disclosure
-                # plugin's own referenced block already covers them.
-                return ()
-
-            selected = choice.selected
-            names: set[str] = set()
-            for title, card in state.cards.items():
-                addressed = selected is None or title in selected
-                card_choice = choice.by_title.get(title)
-                stepped_down = not addressed or (
-                    card_choice is not None
-                    and (card_choice.dialogue != _FULL or card_choice.evidence != _FULL)
-                )
-                if stepped_down:
-                    names.update(card.tool_names)
-            return tuple(sorted(names))
-        except Exception:  # noqa: BLE001 - a bridge failure must cost names, never the run
-            logger.debug("graph referenced-source bridge failed | composing from history alone", exc_info=True)
-            return ()
-
-    return source
 
 
 def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
@@ -434,7 +371,6 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                     *(graph.retrieval_tool_names if graph is not None else ()),
                     "list_accounts",
                 ],
-                referenced_source=_graph_referenced_source(graph) if graph is not None else None,
             )
         )
 
