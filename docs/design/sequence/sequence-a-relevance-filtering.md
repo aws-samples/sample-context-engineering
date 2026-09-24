@@ -5,7 +5,7 @@ All line references are into
 (`plugin.py`, `preview.py`, `reranker.py`, `store.py`, `search.py`), except §8, which is into
 `validation/community-plugin-A-B-D/src/runner.py`.
 
-> **Default mode changed.** `include_retrieval_tool` now defaults to **`False`** (`plugin.py:187`).
+> **Default mode.** `include_retrieval_tool` defaults to **`False`** (`plugin.py:187`).
 > In the default configuration the plugin is **terminal**: `llm -> tool -> filtered result -> llm`.
 > There is no retrieval tool, **no store write**, and **no `[ref: ...]` token** — nothing could
 > resolve a reference, so none is promised. The retrieval path (§4) is an opt-in behind
@@ -423,7 +423,7 @@ is enabled, via `retrieve_context` return values (§6c–6e). In default mode §
 | `store` | `None` → created during agent bind as an `InMemoryStore` | `plugin.py:230` | Backend for the raw sub-blocks. **Constructed even in default mode, but never written to** — see `include_retrieval_tool` (`plugin.py:509`). |
 | `max_result_tokens` | `8_000` — `_DEFAULT_MAX_RESULT_TOKENS` | `plugin.py:49` | Token threshold above which a textual result is filtered; also caps retrieval response chars (`×4`). Must be `> 0` or `ValueError` (`plugin.py:207`). |
 | `config` | `None` → `{}`, typed by `RelevanceConfig` | `plugin.py:93` | Preview-tuning dict (below); read key-by-key with `dict.get`. |
-| `include_retrieval_tool` | changed today from `True` to **`False`** | `plugin.py:187` | Registers `retrieve_context`. `False` (default) drops the tool at bind time — `_include_retrieval_tool` (`plugin.py:233`) — skips the store write (`plugin.py:509`), and suppresses the reference token (`plugin.py:539`). |
+| `include_retrieval_tool` | **`False`** | `plugin.py:187` | Registers `retrieve_context`. `False` (default) drops the tool at bind time — `_include_retrieval_tool` (`plugin.py:233`) — skips the store write (`plugin.py:509`), and suppresses the reference token (`plugin.py:539`). |
 | `should_filter` | `None` | `plugin.py:188` | Callback `(tool_name, token_count, **kwargs) -> bool`, sync or async; consulted only for over-threshold results (`plugin.py:454`); raising fails **open** (filters anyway). |
 
 `name = "strands-community:relevance-filter"` (`plugin.py:177`) — the plugin name, overridable on a

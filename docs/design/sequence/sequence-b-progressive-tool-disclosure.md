@@ -17,7 +17,7 @@ the tools the retained message history still **references** — and reducing eve
 **catalog** (`_compose_projection` `plugin.py:692`, `_project` `plugin.py:799`, `_projection_handler`
 `plugin.py:1010`).
 
-**Since today there are two placements for that catalog**, selected by the constructor parameter
+**There are two placements for that catalog**, selected by the constructor parameter
 `catalog_in_system_prompt` (`plugin.py:924`, default `False`):
 
 - **Mode A — catalog in the tool schema (default).** Every remaining tool stays in `tool_specs` as a
@@ -54,7 +54,7 @@ only path on which this plugin writes `system_prompt` at all.
 Supporting SDK type imports (not attachment points, but the surface used): `BeforeToolCallEvent`,
 `Plugin`, `hook`, `tool`, `Messages`, `SystemPrompt`, `ToolContext`, `ToolSpec` (`plugin.py:30`);
 `InvokeModelStage` / `InvokeModelContext` via `_compat` — `InvokeModelContext` (`_compat.py:9`). `SystemPrompt` is a new
-import today — it is the type of the field mode B writes.
+import — it is the type of the field mode B writes.
 
 Per-agent state is held in a `WeakKeyDictionary` keyed by agent (`_DisclosureStates` `plugin.py:474`,
 `_new_disclosure_states` `plugin.py:479`), so one plugin instance serves many agents without keeping
@@ -578,7 +578,7 @@ Constructor: `ProgressiveToolDisclosure.__init__` (`plugin.py:915`). All keyword
 | `index` | `None` → `LexicalToolIndex()` (`plugin.py:921`; instantiated `plugin.py:982`) | **Yes** | Search implementation. `None` means the default term-frequency `LexicalToolIndex` (`index.py:168`), which needs no network. `_validate_index` (`plugin.py:410`) — `None`, or an object with callable `build` and `search`. |
 | `top_k` | `_DEFAULT_TOP_K = 3` (`plugin.py:52`; ctor `plugin.py:922`) | No | How many tools one search exposes. `_validate_positive_int` (`plugin.py:347`) — int ≥ 1. |
 | `referenced_source` | `None` (`plugin.py:923`) | **Yes** | Callable `(Agent) -> Iterable[str]` returning extra names to carry full specs this call, on top of history-referenced ones (`ReferencedSource` `plugin.py:82`). `None` composes referenced names from retained history alone. `_validate_referenced_source` (`plugin.py:430`) — `None` or callable. |
-| `catalog_in_system_prompt` | `False` (`plugin.py:924`) | No | **New today.** `True` moves the catalog out of `tool_specs` and into a system-prompt block; `tool_specs` then carries only the callable tools. Validated inline (`plugin.py:970`) with `"catalog_in_system_prompt=<{!r}> | must be True or False"` — a non-`bool` is rejected, not coerced, and `_catalog_in_system_prompt` is stored (`plugin.py:984`). **Ignored when `catalog_tokens is None`** (`plugin.py:848`), which already means there is no catalog to place. Default is `False` because every published figure was measured with the catalog in the tool schema (ctor docstring, `plugin.py:915`). |
+| `catalog_in_system_prompt` | `False` (`plugin.py:924`) | No | `True` moves the catalog out of `tool_specs` and into a system-prompt block; `tool_specs` then carries only the callable tools. Validated inline (`plugin.py:970`) with `"catalog_in_system_prompt=<{!r}> | must be True or False"` — a non-`bool` is rejected, not coerced, and `_catalog_in_system_prompt` is stored (`plugin.py:984`). **Ignored when `catalog_tokens is None`** (`plugin.py:848`), which already means there is no catalog to place. Default is `False` because every published figure was measured with the catalog in the tool schema (ctor docstring, `plugin.py:915`). |
 
 No parameter is positional; there is no `find_tools_name` constructor knob — the search-tool name is
 the module constant `FIND_TOOLS_NAME = "find_tools"` (`plugin.py:43`), threaded as a defaulted
