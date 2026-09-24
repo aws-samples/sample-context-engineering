@@ -206,7 +206,9 @@ async def test_should_filter_that_raises_fails_open_and_filters() -> None:
 async def test_happy_path_rewrites_result_and_stores_content() -> None:
     reranker = FakeReranker()
     store = InMemoryStore()
-    plugin = RelevanceFilter(store=store, max_result_tokens=10, config=_config(reranker))
+    plugin = RelevanceFilter(
+        store=store, max_result_tokens=10, config=_config(reranker), include_retrieval_tool=True
+    )
     agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
     body = "alpha line\nbeta line\ngamma line\n" * 40
     result = _result([{"text": body}], tool_use_id="tool-9")
@@ -251,7 +253,9 @@ async def test_happy_path_preserves_nontextual_subblocks_verbatim_after_marker()
 @pytest.mark.asyncio
 async def test_happy_path_multiple_text_blocks_use_plural_refs_token() -> None:
     reranker = FakeReranker()
-    plugin = RelevanceFilter(store=InMemoryStore(), max_result_tokens=10, config=_config(reranker))
+    plugin = RelevanceFilter(
+        store=InMemoryStore(), max_result_tokens=10, config=_config(reranker), include_retrieval_tool=True
+    )
     agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
     result = _result([{"text": "first block\n" * 30}, {"text": "second block\n" * 30}])
     event = make_after_tool_call_event(tool_use=_tool_use(), result=result, agent=agent)
@@ -259,6 +263,27 @@ async def test_happy_path_multiple_text_blocks_use_plural_refs_token() -> None:
     await plugin._on_after_tool_call(event)
 
     assert "[refs: " in event.result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_default_mode_emits_no_reference_token_and_stores_nothing() -> None:
+    """With the retrieval tool off, nothing could resolve a reference, so none is promised."""
+    reranker = FakeReranker()
+    store = InMemoryStore()
+    plugin = RelevanceFilter(store=store, max_result_tokens=10, config=_config(reranker))
+    agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
+    result = _result([{"text": "alpha line\nbeta line\n" * 40}], tool_use_id="tool-7")
+    event = make_after_tool_call_event(tool_use=_tool_use(tool_use_id="tool-7"), result=result, agent=agent)
+
+    await plugin._on_after_tool_call(event)
+
+    marker_text = event.result["content"][0]["text"]
+    # The result is still filtered -- only the reference token is gone.
+    assert marker_text.startswith("[Relevance: tool result, ~100,000 tokens]")
+    assert "[ref: " not in marker_text
+    assert "[refs: " not in marker_text
+    with pytest.raises(Exception):
+        await store.retrieve("tool-7_0")
 
 
 # --------------------------------------------------------------------------------------------------
@@ -348,8 +373,17 @@ async def test_include_retrieval_tool_false_drops_tool_but_keeps_hook() -> None:
 
 
 @pytest.mark.asyncio
-async def test_include_retrieval_tool_true_keeps_tool_by_default() -> None:
+async def test_include_retrieval_tool_default_drops_tool() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
+    await _init(plugin, FakeAgent())
+
+    retrieval_name = plugin.retrieve_context.tool_name
+    assert all(t.tool_name != retrieval_name for t in plugin.tools)
+
+
+@pytest.mark.asyncio
+async def test_include_retrieval_tool_true_keeps_tool() -> None:
+    plugin = RelevanceFilter(store=InMemoryStore(), include_retrieval_tool=True)
     await _init(plugin, FakeAgent())
 
     retrieval_name = plugin.retrieve_context.tool_name

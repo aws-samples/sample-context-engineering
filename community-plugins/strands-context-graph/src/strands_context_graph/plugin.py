@@ -99,6 +99,19 @@ _DEFAULT_DESCRIPTION_TOKENS = 100
 _DEFAULT_TAGS_PER_CARD = 5
 """How many identifiers define a Card."""
 
+_DEFAULT_NEIGHBORS_PER_CANDIDATE = 3
+"""How many ``similar`` neighbours ``find_context`` lists under each candidate.
+
+Three rather than zero because the edge already exists and nothing read it: the measurement was paid for
+on the write path and the relation it holds -- two turns discussing related things -- is precisely what
+the candidate ranking cannot see, since that ranking compares each Description to the question and never
+to another Description.
+
+Three rather than more because a neighbour is a hint, not evidence. Each one costs a title and a score,
+and a list long enough to need reading would be a second ranking the model has to arbitrate against the
+first. The five candidates stay the answer; the neighbours say where else to look.
+"""
+
 _DEFAULT_BODY_BUDGET: int | None = None
 """Token ceiling across Cards in Full Content. ``None`` means no ceiling, as explicit configuration."""
 
@@ -451,6 +464,19 @@ class ContextGraph(Plugin):
             ``expand_threshold``.
         description_tokens: Token ceiling of a Description. Defaults to ``100``.
         tags_per_card: How many identifiers define a Card. Defaults to ``5``.
+        neighbors_per_candidate: How many ``similar`` neighbours ``find_context`` lists under each
+            candidate it returns. Defaults to ``3``.
+
+            This is the only reader of the ``similar`` edge. The edge is measured on the write path and
+            stored with its similarity as the weight, but it propagates no Note by design
+            (``_STRUCTURAL_WEIGHTS`` omits it) and no retrieval path traversed it, so it was paid for and
+            read by nothing at all.
+
+            It answers a question the ranking cannot: ``find_context`` scores each Description against
+            the QUESTION and never against another Description, so two turns that discuss the same thing
+            in different words are invisible to each other there. The edge already holds exactly that
+            relation. A neighbour costs one title and is what ``expand_card`` takes as its argument, so
+            the model can follow one without spending another search. ``0`` lists none.
         body_budget: Token ceiling across Cards in Full Content, or ``None`` for no ceiling. Defaults to ``None``.
         min_cards: Below this many Cards the choice is skipped entirely. Defaults to ``3``.
         link_threshold: Similarity at or above which two Cards link. Defaults to ``0.50``.
@@ -495,6 +521,7 @@ class ContextGraph(Plugin):
         collapse_floor: float = _DEFAULT_COLLAPSE_FLOOR,
         description_tokens: int = _DEFAULT_DESCRIPTION_TOKENS,
         tags_per_card: int = _DEFAULT_TAGS_PER_CARD,
+        neighbors_per_candidate: int = _DEFAULT_NEIGHBORS_PER_CANDIDATE,
         body_budget: int | None = _DEFAULT_BODY_BUDGET,
         min_cards: int = _DEFAULT_MIN_CARDS,
         link_threshold: float = _DEFAULT_LINK_THRESHOLD,
@@ -524,6 +551,14 @@ class ContextGraph(Plugin):
             )
         _validate_count(description_tokens, "description_tokens")
         _validate_count(tags_per_card, "tags_per_card")
+        if (
+            isinstance(neighbors_per_candidate, bool)
+            or not isinstance(neighbors_per_candidate, int)
+            or neighbors_per_candidate < 0
+        ):
+            raise ValueError(
+                f"neighbors_per_candidate=<{neighbors_per_candidate!r}> | must be an integer greater than or equal to 0"
+            )
         _validate_count(min_cards, "min_cards")
         _validate_body_budget(body_budget)
         _validate_reuse_ttl_cycles(reuse_ttl_cycles)
@@ -540,6 +575,7 @@ class ContextGraph(Plugin):
         self._collapse_floor = float(collapse_floor)
         self._description_tokens = description_tokens
         self._tags_per_card = tags_per_card
+        self._neighbors_per_candidate = neighbors_per_candidate
         self._body_budget = body_budget
         self._min_cards = min_cards
         self._link_threshold = float(link_threshold)
@@ -1131,4 +1167,5 @@ class ContextGraph(Plugin):
             cycle=_cycle_of(agent),
             reuse_ttl_cycles=self._reuse_ttl_cycles,
             max_retrieval_cycles=self._max_retrieval_cycles,
+            neighbors_per_candidate=self._neighbors_per_candidate,
         )

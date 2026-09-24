@@ -28,7 +28,7 @@ targeted read and the prose of every miss, so this module decides *what* was ask
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Container, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -336,6 +336,7 @@ def find_context(
     cycle: int,
     reuse_ttl_cycles: int,
     max_retrieval_cycles: int | None = None,
+    neighbors_per_candidate: int = 0,
 ) -> str:
     """Score every candidate Card's Description against ``need`` and answer with the best five.
 
@@ -355,6 +356,8 @@ def find_context(
         cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
         max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
+        neighbors_per_candidate: Most ``similar`` neighbours to list under each candidate. ``0`` lists
+            none, which is the answer shape this tool had before the edge had any reader at all.
 
     Returns:
         At most five candidates with their Title, Tags and Description (Requirement 12.9), or an empty result naming the
@@ -389,7 +392,7 @@ def find_context(
     for title in chosen:
         record_reuse(state, title, cycle, reuse_ttl_cycles=reuse_ttl_cycles)
 
-    return _render_candidates(state, need, chosen)
+    return _render_candidates(state, need, chosen, neighbors_per_candidate)
 
 
 def _similarities(
@@ -448,21 +451,68 @@ def _nothing_found(need: str, tag: str | None) -> str:
     )
 
 
-def _render_candidates(state: _GraphState, need: str, chosen: list[str]) -> str:
+def _similar_neighbors(state: _GraphState, title: str, exclude: Container[str], limit: int) -> list[tuple[str, float]]:
+    """The ``similar`` neighbours of ``title``, strongest first, excluding anything in ``exclude``.
+
+    This is the only reader of the ``similar`` edge in the whole plugin. The edge is measured on the
+    write path and stored with its similarity as the weight, but ``_STRUCTURAL_WEIGHTS`` omits it, so it
+    propagates no Note, and until now nothing traversed it either: it was paid for and read by nothing.
+    ``scoring``'s own docstring describes it as "an edge a manual search traverses" -- this is that
+    traversal, which had no implementation.
+
+    Ordered by weight and then by title, never by turn: a neighbour is offered because it is *related*
+    to a candidate, and recency is already what the candidate ordering carries.
+
+    Args:
+        state: The graph state. Read only.
+        title: Card whose neighbourhood to read. A Title with no edges yields an empty list.
+        exclude: Titles already being rendered, which must not be offered twice.
+        limit: Most neighbours to return. ``0`` returns none, which is how the feature is turned off.
+
+    Returns:
+        ``(title, weight)`` pairs, strongest first, for Cards the graph still holds.
+    """
+    if limit <= 0:
+        return []
+
+    neighbors = [
+        (link.target, link.weight)
+        for link in state.links.get(title, ())
+        if link.kind == "similar" and link.target not in exclude and link.target in state.cards
+    ]
+    # A dangling target is a stale edge rather than corrupt state -- the membership test above drops it,
+    # matching how ``_propagate`` skips a Link pointing at a Title the graph no longer holds.
+    neighbors.sort(key=lambda pair: (-pair[1], pair[0]))
+    return neighbors[:limit]
+
+
+def _render_candidates(state: _GraphState, need: str, chosen: list[str], neighbors_per_candidate: int = 0) -> str:
     """Render the chosen candidates: Title, Tags and Description each (Requirement 12.9).
 
     The Description is rendered in full rather than trimmed, being already bounded by ``description_tokens`` at
     derivation.
 
+    With ``neighbors_per_candidate`` above zero, each candidate also carries the titles of its strongest
+    ``similar`` neighbours. Those are not extra candidates and are not scored against the need: they are
+    the graph's own statement that two turns discuss related things, which the similarity ranking alone
+    cannot see, since it compares each Description to the QUESTION and never to another Description. A
+    title costs a handful of tokens and is the argument ``expand_card`` takes, so the model can follow one
+    without another search.
+
     Args:
         state: The graph state. Read only.
         need: The need as received, quoted back so the answer stands on its own.
         chosen: Titles to render, already ordered and already capped.
+        neighbors_per_candidate: Most ``similar`` neighbours to list per candidate. ``0`` lists none,
+            which reproduces the answer exactly as it was before neighbours existed.
 
     Returns:
         The rendered answer.
     """
     lines = [f"find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
+    # Every chosen title is excluded from every neighbourhood: a candidate is already being rendered in
+    # full, so offering it again as somebody's neighbour would spend tokens to say nothing.
+    already = set(chosen)
     for title in chosen:
         card = state.cards[title]
         lines.append(f"- title: {title}")
@@ -471,5 +521,9 @@ def _render_candidates(state: _GraphState, need: str, chosen: list[str]) -> str:
         for fragment in card.description.splitlines():
             if fragment.strip():
                 lines.append(f"  {fragment}")
+        neighbors = _similar_neighbors(state, title, already, neighbors_per_candidate)
+        if neighbors:
+            rendered = ", ".join(f"{neighbor} ({weight:.2f})" for neighbor, weight in neighbors)
+            lines.append(f"  related turns: {rendered}")
     lines.append("call expand_card with one of these titles to bring that turn back in full")
     return "\n".join(lines)
