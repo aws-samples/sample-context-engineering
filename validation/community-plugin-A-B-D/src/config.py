@@ -395,8 +395,8 @@ class Thresholds:
     """
 
     # -- progressive tool disclosure ----------------------------------------------
-    catalog_tokens: int = 20
-    """Description budget per unexposed tool in the disclosure catalog."""
+    catalog_chars: int = 80
+    """Character limit of one catalog line's summary in the disclosure catalog (system prompt)."""
 
     ttl_cycles: int = 5
     """Cycles a disclosed tool schema stays resident after its last use."""
@@ -411,38 +411,16 @@ class Thresholds:
     min_cards: int = 3
     """Below this many Cards the whole choice is skipped: the only decision is 'send it all'."""
 
-    catalog_in_system_prompt: bool = False
-    """Place the disclosure catalog in the system prompt instead of in the tool schema.
-
-    With this on, ``toolConfig`` carries only the tools that are callable on the call -- the search tool,
-    the always-available ones, the exposed ones and the referenced ones -- and every other name arrives
-    as a prose listing under a header stating the rule.
-
-    Two defects motivate it, both located by reading the projection rather than by a run. A catalog entry
-    in ``toolConfig`` declares ``{"type": "object", "properties": {}}``, which a model reads as a tool
-    that takes no arguments, and the statement that the entry is incomplete lives in the SEARCH tool's
-    description -- a different place from the entry being read at the moment of the decision. Measured on
-    Opus 4.8 over 60 turns, the combined arm made 22 searches AND 19 premature cancellations: the model
-    follows the instruction and guesses at the same time, and each guess is a round trip of about 31,000
-    tokens carrying no information.
-
-    Unmeasured. It is off by default because every published figure was measured with the catalog in the
-    tool schema, and because a name outside ``toolConfig`` is a name the provider does not know: a model
-    that calls one anyway may be refused by the provider before the plugin's guard is reached, which is a
-    harder failure than the cancellation it replaces.
-    """
-
 
 THRESHOLDS = Thresholds(
     max_result_tokens=_env_int("VALIDATION_MAX_RESULT_TOKENS", 4_000),
     preview_tokens=_env_int("VALIDATION_PREVIEW_TOKENS", BUDGETS.preview_tokens),
     chunk_tokens=_env_int("VALIDATION_CHUNK_TOKENS", 500),
     relevance_threshold=_env_float("VALIDATION_RELEVANCE_THRESHOLD", 0.02),
-    catalog_tokens=_env_int("VALIDATION_CATALOG_TOKENS", 20),
+    catalog_chars=_env_int("VALIDATION_CATALOG_CHARS", 80),
     ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 5),
     top_k=_env_int("VALIDATION_TOP_K", 4),
     min_cards=_env_int("VALIDATION_MIN_CARDS", 3),
-    catalog_in_system_prompt=_env_bool("VALIDATION_CATALOG_IN_SYSTEM_PROMPT", False),
 )
 
 

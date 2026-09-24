@@ -189,7 +189,12 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
     search_units = offloader_units + graph_units
 
     agent_tokens = agent_input + agent_output
-    aux_tokens = embed_tokens
+    # The disclosure catalog is summarized by the agent's own model, outside the agent's `usage`, so
+    # it is billed here at the agent's rates rather than silently left out of the arm that spent it.
+    catalog_usage = counters.get("disclosure", {}).get("summary_usage", {}) or {}
+    summary_input = float(catalog_usage.get("inputTokens", 0) or 0)
+    summary_output = float(catalog_usage.get("outputTokens", 0) or 0)
+    aux_tokens = embed_tokens + summary_input + summary_output
 
     cache_cost, cache_bounded = _cache_cost(tokens)
 
@@ -211,8 +216,8 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
         wall_seconds=float(summary.get("wall_seconds", 0.0) or 0.0),
         turn_seconds_mean=float(timing.get("turn_seconds_mean", 0.0) or 0.0),
         turn_seconds_spread_pct=float(timing.get("turn_seconds_mean_spread_pct", 0.0) or 0.0),
-        agent_cost=_cost(agent_input, PRICING.agent_input_per_mtok)
-        + _cost(agent_output, PRICING.agent_output_per_mtok)
+        agent_cost=_cost(agent_input + summary_input, PRICING.agent_input_per_mtok)
+        + _cost(agent_output + summary_output, PRICING.agent_output_per_mtok)
         + cache_cost,
         cache_read=float(tokens.get("cache_read_total", 0) or 0),
         cache_write=float(tokens.get("cache_write_total", 0) or 0),
