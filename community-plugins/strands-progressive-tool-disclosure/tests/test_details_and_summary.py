@@ -859,3 +859,39 @@ def test_the_exchange_in_flight_is_kept_and_mixed_calls_keep_their_callable_part
         {"text": "The tool send_wire was called and failed with: limit"},
         mixed[2]["content"][1],
     ]
+
+
+def _reasoning(text: str) -> dict[str, Any]:
+    """A signed reasoning block, as a thinking model returns it."""
+    return {"reasoningContent": {"reasoningText": {"text": text, "signature": "sig"}}}
+
+
+def test_the_turn_in_flight_reaches_a_reasoning_model_as_the_same_objects():
+    """A thinking model rejects a modified latest assistant message, so the current turn is never folded."""
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"text": "q1"}]},
+        {
+            "role": "assistant",
+            "content": [_reasoning("r1"), {"toolUse": {"toolUseId": "t1", "name": "send_wire", "input": {}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "ok"}]}}]},
+        {"role": "assistant", "content": [_reasoning("r2"), {"text": "Sent."}]},
+        {"role": "user", "content": [{"text": "q2"}]},
+        {
+            "role": "assistant",
+            "content": [_reasoning("r3"), {"toolUse": {"toolUseId": "t2", "name": "send_wire", "input": {}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t2", "content": [{"text": "ok"}]}}]},
+    ]
+
+    folded = _fold_tool_exchanges(messages, _CALLABLE)
+
+    # The turn in flight -- q2 and its tool loop -- is passed through by identity, released tool or not.
+    assert folded[-3:] == messages[-3:]
+    assert all(a is b for a, b in zip(folded[-3:], messages[-3:], strict=True))
+    # The closed turn is folded: the rewritten assistant message lost its reasoning and, emptied, left.
+    assert folded[:2] == [
+        {"role": "user", "content": [{"text": "q1"}, {"text": "The tool send_wire was called and the result was: ok"}]},
+        messages[3],
+    ]
+    assert folded[1] is messages[3]

@@ -720,11 +720,6 @@ def _record_premature_cancellation(state: _DisclosureState, name: str) -> None:
     )
 
 
-_RECENT_MESSAGES_KEPT = 2
-"""Trailing messages never touched by :func:`_fold_tool_exchanges`: the exchange in flight, which the
-model has not acted on yet."""
-
-
 def _fold_note(name: str, result: Mapping[str, Any]) -> str:
     """Render a tool result as the one sentence that replaces its call in the history.
 
@@ -745,21 +740,53 @@ def _fold_note(name: str, result: Mapping[str, Any]) -> str:
     return f"The tool {name} was called and {outcome}: {' '.join(parts)}"
 
 
+def _current_turn_start(messages: Messages) -> int:
+    """Return the index of the user message that opened the turn in flight.
+
+    That is the last user message carrying no ``toolResult``: everything from it on is the agent's
+    current work, including the tool loop and its latest assistant message. Providers that return
+    reasoning (``reasoningContent``) require the latest assistant message to arrive unmodified, so the
+    whole turn in flight is off limits to the fold.
+
+    Args:
+        messages: Messages of the call.
+
+    Returns:
+        The index, or ``0`` when there is none.
+    """
+    for position in range(len(messages) - 1, -1, -1):
+        message = messages[position]
+        if message.get("role") == "user" and not any("toolResult" in b for b in message.get("content") or ()):
+            return position
+    return 0
+
+
+def _without_reasoning(content: Sequence[Any]) -> list[Any]:
+    """Drop ``reasoningContent`` blocks: a rewritten message can no longer carry a valid signature.
+
+    Only ever applied to messages of CLOSED turns, whose reasoning providers accept being omitted.
+    """
+    return [block for block in content if "reasoningContent" not in block]
+
+
 def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> Messages:
     """Return the call's messages with every exchange the model cannot repeat folded out of tool form.
 
     A ``toolUse`` with its arguments is a template: seen next to a success, the model repeats it, and if
     the tool is no longer in ``tool_specs`` that repeat is a call to a tool it cannot see. So for every
-    closed exchange of a tool NOT callable on this call, the ``toolUse`` block goes and its ``toolResult``
+    exchange of a tool NOT callable on this call, the ``toolUse`` block goes and its ``toolResult``
     becomes a plain sentence -- ``The tool X was called and the result was: Y`` -- which keeps the
     evidence and drops the call shape. Image or document parts of the result are kept as they are.
 
     The plugin's own ``find_tools`` and ``get_tool_details`` exchanges go entirely, with no sentence: they
     matter on the call right after them and are dead weight past it.
 
-    Emptied messages are dropped and consecutive messages of the same role are merged, so the roles keep
-    alternating and every remaining ``toolResult`` still follows its ``toolUse``. The first message and the
-    last :data:`_RECENT_MESSAGES_KEPT` are never rewritten; the agent's own history is never touched.
+    Only closed turns are folded. The first message and the turn in flight (:func:`_current_turn_start`)
+    are returned as the very same objects, which is what keeps a reasoning model's latest assistant
+    message intact. Inside the folded span, emptied messages are dropped and same-role neighbours are
+    merged, so the roles keep alternating and every remaining ``toolResult`` still follows its
+    ``toolUse``; an assistant message that is rewritten or merged loses its ``reasoningContent``. The
+    agent's own history is never touched.
 
     Args:
         messages: Messages of the call, ``context.messages``. Read only.
@@ -768,13 +795,13 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
     Returns:
         ``messages`` itself when nothing is folded; otherwise a new list.
     """
-    last = len(messages) - _RECENT_MESSAGES_KEPT
-    if last <= 1:
+    boundary = _current_turn_start(messages)
+    if boundary <= 1:
         return messages
 
     uses: dict[str, str] = {}
     results: set[str] = set()
-    for message in messages[1:last]:
+    for message in messages[1:boundary]:
         for block in message.get("content") or ():
             if (use := block.get("toolUse")) and (use_id := use.get("toolUseId")):
                 name = use.get("name") or ""
@@ -782,13 +809,12 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
                     uses[use_id] = name
             elif (result := block.get("toolResult")) and (result_id := result.get("toolUseId")):
                 results.add(result_id)
-    # Only closed pairs: a call whose result is still in the kept tail stays in tool form.
     fold = {use_id: name for use_id, name in uses.items() if use_id in results}
     if not fold:
         return messages
 
     rebuilt: Messages = [messages[0]]
-    for message in messages[1:last]:
+    for message in messages[1:boundary]:
         content: list[Any] = []
         changed = False
         for block in message.get("content") or ():
@@ -805,18 +831,33 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
             content.append(block)
         if not changed:
             rebuilt.append(message)
-        elif content:
+            continue
+        if message.get("role") == "assistant":
+            content = _without_reasoning(content)
+        if content:
             rebuilt.append({**message, "content": content})
-    rebuilt.extend(messages[last:])
 
     merged: Messages = []
     for message in rebuilt:
         if merged and merged[-1].get("role") == message.get("role"):
             previous = merged[-1]
-            merged[-1] = {**previous, "content": [*(previous.get("content") or ()), *(message.get("content") or ())]}
+            combined = [*(previous.get("content") or ()), *(message.get("content") or ())]
+            if message.get("role") == "assistant":
+                combined = _without_reasoning(combined)
+            merged[-1] = {**previous, "content": combined}
         else:
             merged.append(message)
-    return merged
+
+    # The turn in flight opens with a user message. If the folded span now ends with one too, its
+    # content goes in front of the opening message instead, never into the turn's assistant messages.
+    current = messages[boundary:]
+    if merged[-1].get("role") == current[0].get("role"):
+        tail = merged.pop()
+        current = [
+            {**current[0], "content": [*(tail.get("content") or ()), *(current[0].get("content") or ())]},
+            *current[1:],
+        ]
+    return [*merged, *current]
 
 
 def _should_passthrough(
