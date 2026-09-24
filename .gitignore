@@ -10,3 +10,8 @@ __pycache__/
 # Virtual environments, wherever a reader creates one.
 .venv/
 venv/
+
+# Scratch. `tmp/` holds throwaway probe scripts, run logs and reference checkers -- work in progress,
+# not artefacts a reader of this repository needs. `.kiro/` is a local agent configuration directory.
+tmp/
+.kiro/

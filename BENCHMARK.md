@@ -475,9 +475,10 @@ charging a round trip for each invented-argument call it now refuses.
 
 And it bought nothing: 28 of 30 both times. On a window this size there was no starvation to fix.
 
-**So these two budgets are regime-dependent, exactly as the graph's own thresholds already are — and
-the harness now treats them that way.** The file carries `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE`
-because one set of graph knobs is wrong; `LARGE_WINDOW` and `TIGHT_WINDOW` in
+**So these two budgets are regime-dependent, exactly as the graph's own thresholds were — and
+the harness now treats them that way.** The file carried `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE`
+because one set of graph knobs looked wrong for both cases (that split has since been removed — see
+finding 12); `LARGE_WINDOW` and `TIGHT_WINDOW` in
 [`src/config.py`](validation/community-plugin-A-B-D/src/config.py) are the same construction for the
 three budgets that differ across window classes:
 
@@ -499,6 +500,119 @@ regime: 92 overflows on the bare agent, and the graph-alone arm peaking at 131% 
 determinant is not the window but the window against the payload mass in front of it, for which the
 window is only a proxy; the ceiling carries headroom because the errors are asymmetric. Tight budgets on
 a large window cost tokens (+50.2%, buying nothing). Large budgets on a tight window cost answers.
+
+### 12. The redesigned stack on six models — and one coupling that had become a bug
+
+Six changes went in after finding 11, all of them removals of something that existed without a
+consumer, or of a consumer that had disappeared without anyone turning the thing off:
+
+| Change | What it was | What it is |
+|---|---|---|
+| `RelevanceFilter.include_retrieval_tool` | `True` — the filter shipped its own `retrieve_context` | **`False`** — the filter ends at the preview, mints no reference, writes no store |
+| graph tuning split | `GRAPH_ALONE` / `GRAPH_WITH_RELEVANCE`, picked by whether the filter was installed | **one `GRAPH_TUNING`** — the filter acts on a payload before it enters the history, the graph on a history that already exists, so neither has business reading the other |
+| graph `body_budget` with relevance | `None` — the step-down had no trigger, so every Card above the threshold travelled whole | **40,000** — the ceiling binds and a Card that does not fit drops one rung |
+| `find_context` neighbours | the `similar` edge was measured, stored, and read by nothing | **`neighbors_per_candidate=3`** — the edge finally has a reader |
+| disclosure catalog | always in `toolConfig` | `catalog_in_system_prompt` available (default `False`; every published figure was measured with it in the schema) |
+| harness `include_artifact_tool` | `not config.relevance` — the graph lost `expand_artifact` *because* the filter was installed | **`True` always** |
+
+That last row was a real defect by the time it was found, and it is the clearest example of the
+pattern. The drop existed to leave exactly one artifact-retrieval tool when there were two; once the
+filter stopped registering one, the same line left the combined arm with **none** — the graph kept
+storing artifacts and nothing could read them back. Measured: with the drop still in place the Opus
+`all` arm was 23/30, and `A5-statement` (one row of a statement payload) failed. With it removed,
+26/30.
+
+The full six-model replay of the corrected code, 60 turns, five arms each, caching off, one replay per
+cell. **Refused** counts calls Bedrock rejected with `ContextWindowOverflow`:
+
+| Model | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Refused | Cost | Δ cost |
+|---|---|---:|---:|---:|:--:|---:|---:|---:|---:|
+| **Claude Opus 4.8** (1,000,000) | Baseline (no plugin) | 13,647,898 | — | 97.6% | 28/30 | 192,662 | 0 | $68.89 | — |
+|  | Progressive Tool Disclosure only | 9,381,497 | −31.3% | 97.6% | 29/30 | 139,961 | 0 | $47.74 | −30.7% |
+|  | Relevance Filtering only | 13,447,761 | −1.5% | 89.8% | 27/30 | 189,714 | 0 | $67.96 | −1.4% |
+|  | Context Graph only | 10,254,016 | −24.9% | 85.0% | 21/30 | 149,010 | 0 | $51.84 | −24.7% |
+|  | **All three combined** | **3,348,835** | **−75.5%** | 91.3% | 26/30 | **59,405** | 0 | **$17.47** | −74.6% |
+| **Claude Haiku 4.5** (200,000) | Baseline (no plugin) | 12,703,571 | — | 95.3% | 27/30 | 196,722 | 0 | $12.77 | — |
+|  | Progressive Tool Disclosure only | 10,296,950 | −18.9% | 88.2% | 22/30 | 160,920 | 0 | $10.37 | −18.8% |
+|  | Relevance Filtering only | 12,036,064 | −5.3% | 86.6% | 21/30 | 166,779 | 0 | $12.15 | −4.9% |
+|  | Context Graph only | 7,883,137 | −37.9% | 76.4% | 17/30 | 114,003 | 0 | $7.95 | −37.7% |
+|  | **All three combined** | **3,224,286** | **−74.6%** | 84.2% | 20/30 | **60,393** | 0 | **$3.32** | −74.0% |
+| **GLM 5** (200,000) | Baseline (no plugin) | 6,150,161 ✝ | — | 65.3% ✝ | 14/30 ✝ | 193,207 | 84 | $6.17 | — |
+|  | Progressive Tool Disclosure only | 9,170,600 ✝ | +49.1% | 66.1% ✝ | 16/30 ✝ | 193,113 | 64 | $9.22 | +49.5% |
+|  | Relevance Filtering only | 14,739,065 ✝ | +139.7% | 80.3% ✝ | 24/30 ✝ | 198,011 | 10 | $14.80 | +140.1% |
+|  | Context Graph only | 7,175,940 | +16.7% | **96.1%** | **28/30** | 102,645 | 0 | $7.21 | +16.9% |
+|  | **All three combined** | **2,908,717** | **−52.7%** | 81.1% | 21/30 | **41,553** | 0 | **$2.96** | −52.0% |
+| **GLM 4.7 Flash** (202,752) | Baseline (no plugin) | 5,398,019 ✝ | — | 52.8% ✝ | 8/30 ✝ | 198,536 | 82 | $0.38 | — |
+|  | Progressive Tool Disclosure only | 27,403,577 ✝ | +407.7% | 58.3% ✝ | 11/30 ✝ | 198,654 | 40 | $1.93 | +405.2% |
+|  | Relevance Filtering only | 17,181,923 | +218.3% | 75.6% | 17/30 | 187,849 | 0 | $1.22 | +219.9% |
+|  | Context Graph only | 18,123,481 ✝ | +235.7% | 74.8% ✝ | 18/30 ✝ | 198,646 | 8 | $1.28 | +235.5% |
+|  | **All three combined** | **4,010,248** | **−25.7%** | 55.1% | 10/30 | **53,355** | 0 | **$0.30** | −21.5% |
+| **Qwen3 Next 80B** (256,000) | Baseline (no plugin) | 8,591,570 ✝ | — | 54.3% ✝ | 9/30 ✝ | 248,552 | 94 | $1.21 | — |
+|  | Progressive Tool Disclosure only | 5,033,909 ✝ | −41.4% | 60.6% ✝ | 11/30 ✝ | 252,395 | 94 | $0.71 | −41.3% |
+|  | Relevance Filtering only | 33,149,405 ✝ | +285.8% | 79.5% ✝ | 22/30 ✝ | 256,310 | 10 | $4.71 | +289.9% |
+|  | Context Graph only | 9,727,355 | +13.2% | 81.1% | 20/30 | 136,350 | 0 | $1.38 | +14.4% |
+|  | **All three combined** | **4,395,046** | **−48.8%** | 74.0% | 17/30 | **38,496** | 0 | **$0.68** | −43.4% |
+| **Nemotron Nano 9B** (128,000) | Baseline (no plugin) | 1,596,017 ✝ | — | 48.8% ✝ | 6/30 ✝ | 111,016 | 102 | $0.10 | — |
+|  | Progressive Tool Disclosure only | 2,298,800 ✝ | +44.0% | 59.1% ✝ | 9/30 ✝ | 118,522 | 92 | $0.14 | +46.0% |
+|  | Relevance Filtering only | 5,073,784 ✝ | +217.9% | 66.9% ✝ | 14/30 ✝ | 125,719 | 64 | $0.33 | +233.8% |
+|  | Context Graph only | 10,868,671 ✝ | +581.0% | 59.8% ✝ | 11/30 ✝ | 124,762 | 34 | $0.67 | +584.3% |
+|  | **All three combined** | 6,431,158 | +303.0% | **68.5%** | **12/30** | 73,358 | **0** | $0.44 | +347.8% |
+
+✝ *This arm had calls refused. Its token total is understated — a refused call is not billed — and its
+accuracy is bounded by truncation rather than by the strategy. Read the Refused column before any
+percentage in the row.*
+
+Four statements survive the noise band established in finding 13, because each holds on every model:
+
+- **Peak input per call.** The full stack is the lowest in 6 of 6, between 38K and 73K against the bare
+  agent's 111K–258K. This is the truncation-immune quantity: it is measured on calls that went out.
+- **Refused calls.** The full stack is at **zero in 6 of 6**, and on Nemotron Nano 9B (128K) it is the
+  only arm that is — the bare agent lost 102 calls there, and relevance filtering alone still lost 64.
+- **Cost.** The full stack is the cheapest arm on 5 of 6. The exception is Nemotron, where the bare
+  agent looks cheaper only because a third of its calls never went out.
+- **On a large window the saving is unchanged by any of the six changes**: −75.5% tokens and $17.47
+  against $68.89 on Opus 4.8, in line with the −82.1% published earlier under a different parameter set.
+
+**One regression is attributable, and it is the price of removing the filter's retrieval tool.** On
+Opus the two turns the `all` arm gets wrong that the graph-only arm gets right are `A5-statement` and
+`R2-cross-reference` — both asking for a redemption figure that lives inside a statement payload. The
+relevance-only arm fails exactly the same two. With the preview cutting the passage and no
+`retrieve_context` to ask for it back, that content is unreachable; the graph's `expand_artifact` does
+not resolve a reference the filter never minted. Restoring the tool costs what finding 9 measured — 
+every retrieval result becomes a conversation message and rides along on every later call — so the
+trade is explicit rather than free, and `include_retrieval_tool=True` is the way back.
+
+### 13. One replay per cell cannot resolve anything smaller than ±6 turns
+
+This is the limit to read every table in this document against, and it is measured rather than
+asserted. Between the run that carried the `include_artifact_tool` drop and the run that removed it,
+**four Opus arms were running byte-identical code** — the drop only ever applied where the relevance
+filter was installed, so the baseline, graph-only, relevance-only and disclosure-only arms could not
+have been touched. All eight of those runs refused zero calls, so nothing is truncated either:
+
+| Opus 4.8 arm, identical code | Correct, run A → run B | Δ tokens |
+|---|:--:|---:|
+| Baseline (no plugin) | 24/30 → 28/30 | −16.2% |
+| Context Graph only | 27/30 → 21/30 | +1.8% |
+| Relevance Filtering only | 25/30 → 27/30 | +1.7% |
+| Progressive Tool Disclosure only | 27/30 → 29/30 | −5.4% |
+
+Six materially-correct turns moved on the graph arm with no code change at all, and the bare agent —
+which no plugin can reach — moved four turns and 16% of its tokens. Across the whole battery the same
+comparison on Qwen3 Next's relevance arm moved **+79.2%** in tokens for the same 22/30.
+
+The cause is the one named in trap 2: the agent chooses its own tool path, and a single extra call early
+in a 60-turn conversation is re-sent in every later call. Nothing here is a measurement error.
+
+What follows for reading this document: a difference of **1–2 turns, or under roughly 20% of tokens, is
+not evidence of anything** at n=1, whichever direction it points. The figures that decide something are
+the ones that clear that band by a wide margin — −75% tokens, 102 refused calls against 0, a peak call
+of 38K against 248K — and they are the ones stated as conclusions above. The per-arm accuracy ranking
+within a single model is not one of them.
+
+Resolving the finer comparisons needs replicas, which the harness supports with `--repeats`. That has
+not been run on this battery: at Opus list prices one 5-arm replay is ~$254, so three replicas of the
+six models is a four-figure measurement and it is a deliberate omission, not an oversight.
 
 ## Prices and what they are based on
 
