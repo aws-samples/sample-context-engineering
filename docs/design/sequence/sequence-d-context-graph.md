@@ -106,7 +106,7 @@ sequenceDiagram
         C->>C: derive_card (cards.py:298): partition_turn (181), tool_pairs_of (208), references, numeric_lines
         C->>D: compose_description(card, description_tokens) (describe.py:189)
         C->>D: tag_candidates (describe.py:241) + select_tags (describe.py:277)
-        C->>C: register_card (cards.py:367): tool (414) / artifact (417) / follows (420) links; similar (427) only if vectors cached
+        C->>C: register_card (cards.py:367): tool (414) / artifact (417) / follows (420) links · similar (427) only if vectors cached
         C->>C: retag(state, messages) (cards.py:629)  %% rarity recount over the graph
     end
 
@@ -119,7 +119,7 @@ sequenceDiagram
     C->>C: writes ONLY 'similar' edges (cards.py:1062-1063)
     BI->>S: distribute(notes, state, thresholds, body_budget) (scoring.py:319)
     S-->>BI: TurnChoice.by_title → rung per Card (full / description / title)
-    BI->>BI: state.choice = choice (plugin.py:943); state.turn += 1 (947); state.retrieval_cycles = 0 (949)
+    BI->>BI: state.choice = choice (plugin.py:943) · state.turn += 1 (947) · state.retrieval_cycles = 0 (949)
 ```
 
 Key sequencing facts: link construction for `similar` cannot complete on the `MessageAddedEvent` hook (it is network-free), so the Card's own vector is embedded only on the *next* `BeforeInvocationEvent`, and `link_newly_measurable` closes the gap there (`plugin.py:1042` computes `newly_measurable`, `plugin.py:1046` spends it). `link_newly_measurable` writes `similar` edges only (§3). The rung per Card is produced by `distribute` (`scoring.py:319`), not by the write hook.
@@ -150,12 +150,12 @@ sequenceDiagram
     BI->>CC: _compute_choice(state, event) (plugin.py:943)
     CC->>S: warm_up_choice (scoring.py:154) — skip below min_cards (plugin.py:966)
     CC->>S: compute_notes(state, question, matcher) (scoring.py:194) — ONE embedding round
-    Note over S: Pass 1 similarity + fed-back Note (reuse); Pass 2 propagate 1 jump (follows/artifact edges + tool hubs)
+    Note over S: Pass 1 similarity + fed-back Note (reuse) · Pass 2 propagate 1 jump (follows/artifact edges + tool hubs)
     CC->>S: distribute(notes, expand_threshold, collapse_floor, body_budget) (scoring.py:319)
-    Note over S: dialogue rung: >= expand_threshold → full if it fits the budget (scoring.py:382)<br/>else ONE rung down to description, never title (scoring.py:386);<br/>>= collapse_floor → description (388); else title (391). Artifact never 'full' (380).<br/>evidence rung: consumed pairs → description, unconsumed → full (395), by MESSAGE ORDER alone
+    Note over S: dialogue rung: >= expand_threshold → full if it fits the budget (scoring.py:382)<br/>else ONE rung down to description, never title (scoring.py:386) ·<br/>>= collapse_floor → description (388) · else title (391). Artifact never 'full' (380).<br/>evidence rung: consumed pairs → description, unconsumed → full (395), by MESSAGE ORDER alone
     S-->>CC: TurnChoice
     CC-->>BI: choice
-    BI->>BI: state.choice = choice; state.turn += 1
+    BI->>BI: state.choice = choice · state.turn += 1
 
     SDK->>DEL: InvokeModelStage.Input (context.messages)
     alt state None or choice.full_pass
@@ -168,9 +168,9 @@ sequenceDiagram
         else
             DEL->>FOLD: await _fold(replace(context, messages=removed)) (projection.py:217)
             FOLD->>RB: render(injection_context) (projection.py:_render:231)
-            RB->>RB: dropped = requested - retained (compaction.py:132); per-Card entry by rung (_entry, compaction.py:199)
+            RB->>RB: dropped = requested - retained (compaction.py:132) · per-Card entry by rung (_entry, compaction.py:199)
             RB-->>FOLD: "<collapsed_turns>…</collapsed_turns>\n\n<guidance>" or None
-            FOLD-->>DEL: folded context (appended to last user msg; dynamic_trailing_blocks++)
+            FOLD-->>DEL: folded context (appended to last user msg, dynamic_trailing_blocks++)
             DEL-->>SDK: new context (removal + fold, atomic) (projection.py:226)
         end
     end
@@ -230,7 +230,7 @@ sequenceDiagram
     Note over EC,FC: every tool first checks _exhausted (tools.py:67) then state.retrieval_cycles += 1
 
     Model->>EC: expand_card(titles)
-    EC->>STATE: look up each title in state.cards; kind must be 'subject' (tools.py:144)
+    EC->>STATE: look up each title in state.cards · kind must be 'subject' (tools.py:144)
     EC->>STATE: rewrite state.choice → CardChoice(dialogue='full', evidence='full') for found (tools.py:150)
     EC->>SC: record_reuse per found title (tools.py:159)
     EC-->>Model: confirmation naming turns raised (tools.py:167) or error naming misses (tools.py:162)

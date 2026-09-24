@@ -245,7 +245,7 @@ sequenceDiagram
 
     Note over Graph: BeforeInvocationEvent — freeze TurnChoice<br/>graph plugin.py line 924
     Graph->>Disc: per-call input (InvokeModelStage.Input), graph FIRST at index 0
-    Note over Graph: deliver() folds messages to Titles/Descriptions/Full<br/>projection.py:175 forces index 0; replace() keeps system_prompt
+    Note over Graph: deliver() folds messages to Titles/Descriptions/Full<br/>projection.py:175 forces index 0 · replace() keeps system_prompt
     Note over Disc: _projection_handler rewrites tool_specs -> catalog + find_tools<br/>disclosure plugin.py line 1008 / 1010
     Disc->>Model: model call (folded history + projected toolConfig)
 

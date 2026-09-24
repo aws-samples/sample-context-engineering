@@ -144,18 +144,18 @@ sequenceDiagram
     Stage->>Project: context (tool_specs = 90 full specs, system_prompt = operator's)
     Project->>Project: _union_referenced(referenced, source, agent) [plugin.py:846]
     Project->>Compose: (incoming, exposed, referenced, always_available, catalog_tokens=None) [plugin.py:862,867]
-    Compose->>Compose: blocks 1-4 only; catalog block SKIPPED (catalog_tokens is None) [plugin.py:742]
+    Compose->>Compose: blocks 1-4 only · catalog block SKIPPED (catalog_tokens is None) [plugin.py:742]
     Compose-->>Project: list[ToolSpec] — ONLY find_tools + always_available + exposed + referenced
     Project->>Block: (incoming, full_spec_names={names of projected}, catalog_tokens, find_tools) [plugin.py:870]
     Block->>Block: "- {name}: {truncated desc}" for every name NOT carrying a full spec [plugin.py:206,208]
     Note right of Block: no "[+] " sigil — nothing here sits in tool_specs [docstring plugin.py:178]
     Block-->>Project: _CATALOG_PROMPT_HEADER.format(find_tools=...) + "\n".join(lines) [plugin.py:213]
     Project->>Append: (context.system_prompt, block) [plugin.py:879]
-    Note right of Append: str → f"{prompt}\n\n{block}"; list → [*prompt, {"text": block}]; None → block [plugin.py:236-240]
+    Note right of Append: str → f"{prompt}\n\n{block}" · list → [*prompt, {"text": block}] · None → block [plugin.py:236-240]
     Append-->>Project: extended SystemPrompt, in the shape it arrived in
     Project-->>Stage: replace(context, tool_specs=projected, system_prompt=extended) [plugin.py:876,879]
     Note over Provider: toolConfig = ONLY callable tools
-    Note over Provider: system = operator's prompt + "# Tools available on request" + name listing
+    Note over Provider: system = operator's prompt + the 'Tools available on request' heading + name listing
 ```
 
 `_catalog_prompt_block` returns `""` when every incoming tool is already carrying a full
@@ -351,7 +351,7 @@ TTL parameter: `ttl_cycles`, default `_DEFAULT_TTL_CYCLES = 5` (`plugin.py:49`; 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Catalog: registered; listed as a catalog entry or a prompt line [plugin.py:742,121,178]
+    [*] --> Catalog: registered · listed as a catalog entry or a prompt line [plugin.py:742,121,178]
     Catalog --> ExposedBySearch: find_tools match → _renew [plugin.py:1151,532]
     Catalog --> ExposedByCancellation: premature call → _renew before cancel [plugin.py:1213,532]
     ExposedBySearch --> Renewed: tool called → _on_before_tool_call _renew [plugin.py:1213]

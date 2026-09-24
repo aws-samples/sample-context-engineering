@@ -174,14 +174,14 @@ sequenceDiagram
 
         alt no pattern AND no line_range AND no context_lines
             RF->>RF: _decode_full_content(bytes, type, reference)  plugin.py:357 / :384
-            Note right of RF: text/* -> str; application/json -> {json};<br/>image/* -> {image}; application/* -> {document};<br/>else lossy utf-8 decode
+            Note right of RF: text/* -> str · application/json -> {json} ·<br/>image/* -> {image} · application/* -> {document} ·<br/>else lossy utf-8 decode
             RF-->>Model: full original content (re-injects every removed token)
         else search requested
             RF->>RF: _is_searchable_content(content_type)?  plugin.py:359
             alt binary content
                 RF-->>Model: ValueError "cannot search binary content (...)"  plugin.py:360
             else searchable
-                RF->>RF: ctx_lines = context_lines or 5  plugin.py:366; max_chars = max_result_tokens*4  plugin.py:369
+                RF->>RF: ctx_lines = context_lines or 5  plugin.py:366 · max_chars = max_result_tokens*4  plugin.py:369
                 Note right of RF: line_range wins over pattern -> pattern=None  plugin.py:372-376<br/>context_lines alone -> span=(1, ctx_lines)  plugin.py:379
                 RF->>Search: _search_content(text, pattern, span, ctx_lines, max_chars)  plugin.py:381
                 Search->>Search: line_range -> _search_by_line_range  search.py:89 / :157
