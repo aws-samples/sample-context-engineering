@@ -99,44 +99,6 @@ large budgets on a tight window cost answers). `preview_tokens` bounds everythin
 preview → message → Card numeric lines → Description budget` — so raising the Description budget while the
 preview starves buys nothing.
 
-### Parameter generations
-
-Tables in part 4 span three parameter sets; each model section names its own. **A cell from one generation
-and a cell from another are two different programs.**
-
-| Gen | Commit | What is different | Runs |
-|---|---|---|---|
-| **1** | `dd55284` | Filter ships `retrieve_context` (**on**). Graph split in two tunings: alone `0.62` desc 250 body 60,000, with-relevance `0.55` desc 100 body **none**. Preview 800 everywhere. No retrieval ceiling. Graph's `expand_artifact` **dropped** when the filter is installed. | Opus 4.8 ×2, Opus 5 ×2, Fable 5 ×2, Astra, Sol, GLM 5 |
-| **2** | `d951195` | Preview **2,000** everywhere. With-relevance desc **250**, cycles 4, live vector index, batched `expand_card`. Disclosure gains the `[+]` sigil, the guessed-call guard, the `find_tools` exemption. Truncated answers scored for what they say. | GLM 4.7, Haiku 4.5, Qwen3 Next |
-| **3** | `HEAD` | `retrieve_context` **removed by default**. One unified graph tuning. `body_budget=40,000`. `neighbors_per_candidate=3`. Window regime. `include_artifact_tool=True` everywhere. | Opus 4.8, Haiku 4.5, GLM 5, GLM 4.7 Flash, Qwen3 Next, Nemotron 9B |
-
-Two of those were defects, not tuning: the filter's `retrieve_context` made every retrieval result a
-conversation message re-sent on every later call (the mechanism behind relevance filtering costing **+21.6%**
-on Haiku in generation 1), and `include_artifact_tool=not relevance_installed` left the combined arm with
-**no** artifact tool once the filter stopped registering one.
-
-### What was rejected
-
-GLM 4.7, 20 turns of which 18 scored, 2–3 replays per row, all-three arm, generation 2, each row changing
-only what its name says.
-
-| Variant | Total tokens | Δ vs baseline | Correct | Verdict |
-|---|---:|---:|:--:|---|
-| Baseline, no plugin ✝ | 3,733,922 | — | 12.5/18 | overflowed 6× per replay |
-| **Reference (the values above)** | 1,906,838 | **−48.9%** | **16/18** | nothing beat it |
-| `expand_threshold` 0.65 | 2,044,890 | −45.2% | 14.5/18 | lost turns **and** cost tokens |
-| `ttl_cycles` 12 | 1,604,010 | −57.0% | 14.5/18 | −8pp tokens for −1.5 turns |
-| `ttl_cycles` 8 | 1,397,004 | −62.6% | 13/18 | −14pp tokens for −3 turns |
-| `catalog_tokens` 48 + `top_k` 6 | 1,563,844 | −58.1% | 13.5/18 | −9pp tokens for −2.5 turns |
-| …plus `ttl_cycles` 8 | 1,764,815 | −52.7% | 15/18 | best challenger, still −1 turn |
-| `preview_tokens` 1200 | 1,339,228 | −64.1% | 13.5/18 | cheapest row, −2.5 turns |
-| `chunk_tokens` 250 | 1,592,800 | −57.3% | 14/18 | finer chunks did not buy selection |
-| `relevance_threshold` 0.05 | 1,640,628 | −56.1% | 15/18 | −1 turn, inside the noise |
-
-**The trade is monotone and the defaults sit at its knee.** Every cheaper row scores less, none dominates, and
-replays of the *same* row spread by two correct turns — so a variant gaining one turn has gained nothing.
-These are 20 turns, where the window does not yet bind; confirm a value at the length you run.
-
 ---
 
 ## 3. Prices
@@ -160,19 +122,19 @@ recorded JSON instead of needing another run.
 
 ## 4. The models
 
-| Model | Window | Caching | Generations | Bare agent finished? | Cheapest completing arm |
+| Model | Window | Caching | Runs shown | Bare agent finished? | Cheapest completing arm |
 |---|---:|---|---|:--:|---|
-| [Claude Opus 4.8](#41-claude-opus-48) | 1,000,000 | explicit | 1 off, 1 on, 3 off | yes | all three |
-| [Claude Opus 5](#42-claude-opus-5) | 1,000,000 | explicit | 1 off, 1 on | yes | all three |
-| [Claude Fable 5](#43-claude-fable-5) | 1,000,000 | explicit | 1 off, 1 on | yes | all three |
-| [GPT-6 Astra](#44-gpt-6-astra) | 1,050,000 | implicit | 1 | yes | relevance |
-| [GPT-5.6 Sol](#45-gpt-56-sol) | 1,000,000 | implicit | 1 | yes | baseline |
-| [Claude Haiku 4.5](#46-claude-haiku-45) | 200,000 | explicit | 2, 3 | gen 2 **no**, gen 3 yes | all three |
-| [GLM 5](#47-glm-5) | 200,000 | none | 1, 3 | **no** | all three |
-| [GLM 4.7](#48-glm-47) | 202,752 | none | 2 | **no** | all three |
-| [GLM 4.7 Flash](#49-glm-47-flash) | 202,752 | none | 3 | **no** | all three |
-| [Qwen3 Next 80B](#410-qwen3-next-80b) | 256,000 | none | 2, 3 | **no** | all three |
-| [Nemotron Nano 9B](#411-nemotron-nano-9b) | 128,000 | none | 3 | **no** | all three |
+| [Claude Opus 4.8](#41-claude-opus-48) | 1,000,000 | explicit | cache off, cache on | yes | all three |
+| [Claude Opus 5](#42-claude-opus-5) | 1,000,000 | explicit | cache off, cache on | yes | all three |
+| [Claude Fable 5](#43-claude-fable-5) | 1,000,000 | explicit | cache off, cache on | yes | all three |
+| [GPT-6 Astra](#44-gpt-6-astra) | 1,050,000 | implicit | implicit cache | yes | relevance |
+| [GPT-5.6 Sol](#45-gpt-56-sol) | 1,000,000 | implicit | implicit cache | yes | baseline |
+| [Claude Haiku 4.5](#46-claude-haiku-45) | 200,000 | explicit | cache off | yes | all three |
+| [GLM 5](#47-glm-5) | 200,000 | none | one | **no** | all three |
+| [GLM 4.7](#48-glm-47) | 202,752 | none | one | **no** | all three |
+| [GLM 4.7 Flash](#49-glm-47-flash) | 202,752 | none | one | **no** | all three |
+| [Qwen3 Next 80B](#410-qwen3-next-80b) | 256,000 | none | one | **no** | all three |
+| [Nemotron Nano 9B](#411-nemotron-nano-9b) | 128,000 | none | one | **no** | all three |
 
 Every run: 60 turns / 30 scored · 1 replay · `max_output 4,096` · rerank `cohere.rerank-v3-5:0` · embed
 `cohere.embed-multilingual-v3` · region `us-east-1`. Deviations are named in the section.
@@ -180,10 +142,9 @@ Every run: 60 turns / 30 scored · 1 replay · `max_output 4,096` · rerank `coh
 ### 4.1 Claude Opus 4.8
 
 `us.anthropic.claude-opus-4-8` · Anthropic · window **1,000,000** · explicit caching (read $0.50, write
-$6.25/5m) · $5.00 in / $25.00 out per Mtok · gen 1 off, gen 1 on, gen 3 off ·
-[generations 1 and 3](#parameter-generations), **large** regime (preview 800, graph desc 100, cycles 8).
+$6.25/5m) · $5.00 in / $25.00 out per Mtok · **large** regime (preview 800, graph desc 100, cycles 8).
 
-**Generation 1, caching off.**
+**Caching off.**
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
@@ -193,7 +154,7 @@ $6.25/5m) · $5.00 in / $25.00 out per Mtok · gen 1 off, gen 1 on, gen 3 off ·
 | Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8s | $52.43 | −27.7% |
 | **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7s** | **$13.36** | −81.6% |
 
-**Generation 1, caching on.**
+**Caching on.**
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -203,28 +164,10 @@ $6.25/5m) · $5.00 in / $25.00 out per Mtok · gen 1 off, gen 1 on, gen 3 off ·
 | Context Graph only | 576,260 | 8,205,206 | 1,521,353 | 5.4 | 10,302,819 | −31.4% | **99.2%** | **29/30** | 9.2s | $17.29 | +82.3% |
 | **All three combined** | 328,419 | 1,067,190 | 2,253,984 | **0.5** | 3,649,593 | −75.5% | 94.5% | 27/30 | 10.4s | $17.14 | +80.7% |
 
-**Generation 3, caching off.**
-
-| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost | Δ cost |
-|---|---:|---:|---:|:--:|---:|---:|---:|---:|
-| Baseline (no plugin) | 13,647,898 | — | 97.6% | 28/30 | 192,662 (19%) | 11.3s | $68.89 | — |
-| Progressive Tool Disclosure only | 9,381,497 | −31.3% | **97.6%** | **29/30** | 139,961 (14%) | 12.6s | $47.74 | −30.7% |
-| Relevance Filtering only | 13,447,761 | −1.5% | 89.8% | 27/30 | 189,714 (19%) | 12.2s | $67.96 | −1.4% |
-| Context Graph only | 10,254,016 | −24.9% | 85.0% | 21/30 | 149,010 (15%) | 10.1s | $51.84 | −24.7% |
-| **All three combined** | **3,348,835** | **−75.5%** | 91.3% | 26/30 | **59,405 (6%)** | 10.6s | **$17.47** | −74.6% |
-
-**Observations.** The reference model for the cost argument: nothing truncates, so every column is comparable
-— **−82.1%** and **−75.5%** for the same 28 and 26 of 30, at a fifth of the cost. Caching inverts the
-ranking and `read:write` says why: baseline 68.9 at **$9.49**, full stack 0.5 at $17.14, **1.8× more than
-doing nothing**; only relevance filtering stays cache-friendly (74.2). Generation 3 shows that generation's
-two regressions — relevance at −1.5% / 27-of-30 loses `A5-statement` and `R2-cross-reference`, both needing a
-figure inside a statement payload the preview cut with `retrieve_context` gone, and the combined arm loses the
-same two. The graph arm's 21/30 is **not** attributable: the identical arm scored 27/30 on another run.
-
 ### 4.2 Claude Opus 5
 
 `us.anthropic.claude-opus-5` · Anthropic · window **1,000,000** · explicit caching (read $0.50, write
-$6.25/5m) · $5.00 in / $25.00 out per Mtok · gen 1 off, gen 1 on. [Generation 1](#parameter-generations).
+$6.25/5m) · $5.00 in / $25.00 out per Mtok · **large** regime.
 
 **Caching off.**
 
@@ -246,18 +189,10 @@ $6.25/5m) · $5.00 in / $25.00 out per Mtok · gen 1 off, gen 1 on. [Generation 
 | Context Graph only | 664,269 | 9,508,166 | 2,898,117 | 3.3 | 13,070,552 | −50.7% | 94.5% | 27/30 | 22.0s | $28.34 | +65.2% |
 | **All three combined** | 363,512 | 1,526,446 | 3,470,771 | **0.4** | 5,360,729 | −79.6% | **95.3%** | 27/30 | 18.3s | $25.98 | +51.4% |
 
-**Observations.** The full stack was the most accurate arm of the cache-off run — **30 of 30** against the
-bare agent's 24, the only perfect score here; one replay, so read it as a path the agent can take. ⚠ The
-cache-off disclosure arm is not a result: the model never called `find_tools`, ran with no tool schema and
-answered 1 of 30 at 1.8s per turn, while cached the same arm scored 26 of 30 — which is why a −96.7% token
-figure sits next to a useless run. The baseline spent 35% more billed tokens with caching than without,
-purely because the agent made 7 more tool calls: compare arms within a run, not across runs.
-
 ### 4.3 Claude Fable 5
 
 `us.anthropic.claude-fable-5` · Anthropic · window **1,000,000** · explicit caching (read $1.00, write
-$12.50/5m) · **$10.00 in / $50.00 out** per Mtok, the most expensive model here · gen 1 off, gen 1 on.
-[Generation 1](#parameter-generations).
+$12.50/5m) · **$10.00 in / $50.00 out** per Mtok, the most expensive model here · **large** regime.
 
 **Caching off.**
 
@@ -279,17 +214,11 @@ $12.50/5m) · **$10.00 in / $50.00 out** per Mtok, the most expensive model here
 | Context Graph only | 812,339 | 10,368,477 | 2,528,084 | 4.1 | 13,708,900 | −25.7% | 98.4% | 29/30 | 21.7s | $53.19 | +127.5% |
 | **All three combined** | 360,961 | 1,291,253 | 3,567,890 | **0.4** | 5,220,104 | −71.5% | 96.1% | 27/30 | 23.3s | $52.58 | +124.9% |
 
-**Observations.** The bare agent is perfect here and the most expensive row in the document — 30 of 30 for
-**$217.86** against the full stack's 28 of 30 for **$55.32**, a $162 difference on one conversation, which is
-where the saving matters most in absolute dollars. Cache-on inverts as on every Claude model: disclosure at
-1.2 costs **+301.8%**, and only relevance filtering (77.2) is cheaper than doing nothing. The two
-non-overflow errors in the cache-off run were transport failures, not window failures.
-
 ### 4.4 GPT-6 Astra
 
 `us.openai.gpt-6-astra` · OpenAI · window **1,050,000** · **implicit** caching applied by the service, not
-requested (read $1.10, write $13.75 = 1.25× input) · $11.00 in / $55.00 out per Mtok · gen 1, served from
-`us-west-2` while called from `us-east-1`. [Generation 1](#parameter-generations).
+requested (read $1.10, write $13.75 = 1.25× input) · $11.00 in / $55.00 out per Mtok · **large** regime ·
+served from `us-west-2` while called from `us-east-1`.
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -299,17 +228,12 @@ requested (read $1.10, write $13.75 = 1.25× input) · $11.00 in / $55.00 out pe
 | Context Graph only | 252 | 1,473,390 | 8,536,045 | **0.2** | 10,009,687 | −35.2% | 91.3% | 25/30 | 10.9s | $120.59 | +468.8% |
 | **All three combined** | 292 | 17,588 | 4,051,747 | **0.0** | 4,069,627 | −73.5% | **94.5%** | **27/30** | **9.2s** | $57.38 | +170.7% |
 
-**Observations.** Implicit caching cannot be turned off, so there is no uncached control: every row pays the
-write premium, and the prefix-mutating plugins pay it on nearly everything — the graph reads 1.47M against
-8.54M written and costs **+468.8%**. The full stack sends 73.5% fewer tokens and costs 170.7% more, which is
-the caching argument in one row; it is still the most accurate (27 of 30) and fastest arm, so accuracy
-objective → unchanged ranking, bill objective → relevance filtering alone.
+**Observations.** Implicit caching cannot be turned off.
 
 ### 4.5 GPT-5.6 Sol
 
 `us.openai.gpt-5.6-sol` · OpenAI · window **1,000,000** · **implicit** caching (read $0.44, write $5.50) ·
-$4.40 in / $22.00 out per Mtok · gen 1, served from `us-east-2` while called from `us-east-1`. Parameters as
-[4.1](#41-claude-opus-48), generation 1.
+$4.40 in / $22.00 out per Mtok · **large** regime · served from `us-east-2` while called from `us-east-1`.
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -319,30 +243,13 @@ $4.40 in / $22.00 out per Mtok · gen 1, served from `us-east-2` while called fr
 | Context Graph only | 278 | 790,589 | 10,825,077 | **0.1** | 11,615,944 | −26.8% | 91.3% | 25/30 | 9.9s | $60.56 | +586.8% |
 | **All three combined** | 344 | 17,861 | 6,811,669 | **0.0** | 6,829,874 | −56.8% | 96.1% | 28/30 | 10.0s | $38.55 | +337.3% |
 
-**Observations.** The one model where doing nothing wins on every axis at once — cheapest, most accurate,
-fastest. A 1M window, free implicit caching and a reused prefix leave nothing for compression to buy. The
-disclosure arm sent **more** tokens than the bare agent (+48.0%) and wrote 12.4M of them: editing the tool
-section invalidates the prefix, so each reveal turn reprocesses everything after it at write rate. Relevance
-filtering's +8.5% is the smallest penalty, and the one to consider if something other than cost demands
-compression here.
-
+**Observations.** Implicit caching cannot be turned off, so there is no uncached control here either. This is
+the one model where doing nothing wins on every axis at once — cheapest, most accurate, fastest.
 ### 4.6 Claude Haiku 4.5
 
 `us.anthropic.claude-haiku-4-5-20251001-v1:0` · Anthropic · window **200,000** · explicit caching (read
-$0.10, write $1.25/5m — **inferred**) · $1.00 in / $5.00 out per Mtok · gen 2 off, gen 3 off ·
-[generations 2 and 3](#parameter-generations), **tight** regime (preview 2,000, graph desc 250, cycles 4).
-
-**Generation 2.**
-
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **24/60** | **12/30** | **72** | 6,058,882 | −54.1% | 65.3% | 13/30 | 193,683 (97%) | 3.9s ✝ | $6.09 |
-| Progressive Tool Disclosure only | 60/60 | 0/30 | 0 | 12,156,014 | −8.0% | 88.2% | 22/30 | 167,060 (84%) | 8.6s | $12.26 |
-| Relevance Filtering only ← ref | 60/60 | 0/30 | 0 | 13,214,041 | — | **93.7%** | **26/30** | 177,119 (89%) | 8.6s | $13.32 |
-| Context Graph only | 60/60 | 0/30 | 0 | 7,894,451 | −40.3% | 79.5% | 18/30 | 118,442 (59%) | 7.0s | $7.97 |
-| **All three combined** | 60/60 | 0/30 | 0 | **3,260,491** | **−75.3%** | 89.8% | 25/30 | **56,545 (28%)** | 5.8s | **$3.34** |
-
-**Generation 3.**
+$0.10, write $1.25/5m — **inferred**) · $1.00 in / $5.00 out per Mtok · **tight** regime (preview 2,000,
+graph desc 250, cycles 4).
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|---:|
@@ -352,33 +259,10 @@ $0.10, write $1.25/5m — **inferred**) · $1.00 in / $5.00 out per Mtok · gen 
 | Context Graph only | 7,883,137 | −37.9% | 76.4% | 17/30 | 114,003 (57%) | 7.8s | $7.95 | −37.7% |
 | **All three combined** | **3,224,286** | **−74.6%** | 84.2% | 20/30 | **60,393 (30%)** | 6.6s | **$3.32** | −74.0% |
 
-**Observations.** Same model, same window, and the bare agent truncated in one run and not the other — 24 of
-60 turns in generation 2, all sixty in generation 3 with its largest call at **98% of the window**. No plugin
-can reach the baseline, so that is the tool path landing just inside or just outside the window, and the
-sharpest argument for `Answered` being a column; accuracy across the two runs is not comparable. This is also
-where relevance filtering was first measured costing more than nothing (+21.6%), which motivated removing its
-retrieval tool — it worked, the same arm moves to −5.3%. The full stack is the cheapest arm in both runs and
-within a cent of itself ($3.34, $3.32) while the baseline moved by a factor of two: its cost does not depend
-on how much history there is.
-
 ### 4.7 GLM 5
 
 `zai.glm-5` · Zhipu · window **200,000** · **no caching published**, so there is nothing to weigh the plugins
-against · $1.00 in / $3.20 out per Mtok · gen 1, gen 3 ·
-[generations 1 and 3](#parameter-generations); gen 1 ran preview 800 before the regime existed, gen 3 the
-**tight** regime (preview 2,000, graph desc 250, cycles 4).
-
-**Generation 1.**
-
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **15/60** | **15/30** | **90** | 5,252,666 | −72.9% | 63.8% | 14/30 | 198,588 (99%) | 12.7s ✝ | $5.26 |
-| Progressive Tool Disclosure only ✝ | **41/60** | **7/30** | **38** | 11,327,573 | −41.6% | 74.8% | 20/30 | 198,249 (99%) | 30.1s ✝ | $11.37 |
-| Relevance Filtering only ← ref | 60/60 | 0/30 | 0 | 19,406,514 | — | **98.4%** | **29/30** | 192,751 (96%) | 48.8s | $19.48 |
-| Context Graph only | 60/60 | 0/30 | 0 | 8,931,685 | −54.0% | 85.0% | 23/30 | 117,147 (59%) | 28.1s | $8.99 |
-| **All three combined** | 60/60 | 0/30 | 0 | **2,457,277** | **−87.3%** | 92.1% | 26/30 | **43,490 (22%)** | 12.0s | **$2.51** |
-
-**Generation 3.**
+against · $1.00 in / $3.20 out per Mtok · **tight** regime (preview 2,000, graph desc 250, cycles 4).
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -388,18 +272,17 @@ against · $1.00 in / $3.20 out per Mtok · gen 1, gen 3 ·
 | Context Graph only | 60/60 | 0/30 | 0 | 7,175,940 | −51.3% | **96.1%** | **28/30** | 102,645 (51%) | 20.5s | $7.21 |
 | **All three combined** | 60/60 | 0/30 | 0 | **2,908,717** | **−80.3%** | 81.1% | 21/30 | **41,553 (21%)** | 14.0s | **$2.96** |
 
-**Observations.** The model that turns the question from cost into completion, and it reproduces: in both
-generations the bare agent lost 84–90 calls and answered 15–18 of 60, so its 63.8% and 65.3% are mostly
-absence with 14–15 of its 30 scored turns never attempted. Only the graph and the full stack finished intact,
-and they are the only arms peaking below 60% of the window — every arm at 96% or above lost calls. Cost stops
-being the argument: the full stack costs $2.51–$2.96 and answers everything, the bare agent $5.26–$6.17 for a
-quarter of the script. The graph alone is the most accurate arm of generation 3 (28/30) and the second
-cheapest — on *this* model the single plugin that keeps you inside the window is the graph, which is not true
-of the next two, and is why more than one vendor is measured.
+**Observations.** The model that turns the question from cost into completion: the bare agent lost 84 calls
+and answered 18 of 60, so its 65.3% is mostly absence, with 14 of its 30 scored turns never attempted. Only
+the graph and the full stack finished intact, and they are the only arms peaking below 60% of the window —
+every arm at 97% or above lost calls. Cost stops being the argument: the full stack costs $2.96 and answers
+everything, the bare agent $6.17 for a quarter of the script. The graph alone is the most accurate arm here
+(28/30) and the second cheapest — on *this* model the single plugin that keeps you inside the window is the
+graph, which is not true of the next two, and is why more than one vendor is measured.
 
 ### 4.8 GLM 4.7
 
-`zai.glm-4.7` · Zhipu · window **202,752** · no caching published · $0.60 in / $2.20 out per Mtok · [generation 2](#parameter-generations),
+`zai.glm-4.7` · Zhipu · window **202,752** · no caching published · $0.60 in / $2.20 out per Mtok ·
 **tight** regime.
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost | $/correct |
@@ -428,7 +311,7 @@ all, so **the saving is a conjunction, not a sum.**
 ### 4.9 GLM 4.7 Flash
 
 `zai.glm-4.7-flash` · Zhipu · window **202,752** · no caching published · **$0.07 in / $0.40 out** per Mtok,
-the cheapest model here · [generation 3](#parameter-generations), **tight** regime.
+the cheapest model here · **tight** regime.
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -452,20 +335,7 @@ under $2 here, so the interesting column is `Answered`.
 ### 4.10 Qwen3 Next 80B
 
 `qwen.qwen3-next-80b-a3b` · Alibaba · window **256,000** · no caching published · $0.14 in / $1.20 out per
-Mtok · gen 2, gen 3 · regime **tight** — above 250K and still tight, see
-[the window regime](#the-window-regime) · [generations 2 and 3](#parameter-generations).
-
-**Generation 2.**
-
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **14/60** | **16/30** | **92** | 8,231,351 | −75.1% | 59.1% | 11/30 | 257,163 (100%) | 6.0s ✝ | $1.16 |
-| Progressive Tool Disclosure only ← ref | 60/60 | 0/30 | 0 | 33,004,333 | — | 86.6% | 23/30 | 248,224 (97%) | 19.6s | $4.64 |
-| Relevance Filtering only | 60/60 | 0/30 | 0 | 21,803,250 | −33.9% | **91.3%** | **26/30** | 241,712 (94%) | 16.5s | $3.10 |
-| Context Graph only ✝ | **16/60** | **15/30** | **88** | 25,119,509 | −23.9% | 55.9% | 10/30 | 257,560 (**101%**) | 13.9s ✝ | $3.53 |
-| **All three combined** | 59/60 | 0/30 | 0 | **5,512,454** | **−83.3%** | 81.9% | 23/30 | **92,972 (36%)** | 11.9s | **$0.82** |
-
-**Generation 3.**
+Mtok · regime **tight** — above 250K and still tight, see [the window regime](#the-window-regime).
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -476,17 +346,15 @@ Mtok · gen 2, gen 3 · regime **tight** — above 250K and still tight, see
 | **All three combined** | 60/60 | 0/30 | 0 | **4,395,046** | **−86.7%** | 74.0% | 17/30 | **38,496 (15%)** | 10.2s | **$0.68** |
 
 **Observations.** The heaviest payload mass of the battery, and the reason the tight ceiling is 300K: a
-256,000-token window and the bare agent still peaks at it and loses 92–94 calls. Which single plugin survives
-changes between generations — the graph peaked at **101% of the window** in generation 2 (16 of 60 answered)
-and at 53% in generation 3 (all sixty), while disclosure went the other way, 60 of 60 then 13 of 60. Only the
-full stack answered nearly everything in both. The generation 3 disclosure row is the trap in one line: 5.0M
-tokens and $0.71 look efficient until `Answered` reads 13 of 60 — the second-cheapest cell of the run and the
-second-worst outcome.
+256,000-token window and the bare agent still peaks at it and loses 94 calls. Both single plugins that attack
+the schema or the payload fail here — disclosure answered 13 of 60, relevance 55 with 10 refusals — while the
+graph completes at 53% of the window. The disclosure row is the trap in one line: 5.0M tokens and $0.71 look
+efficient until `Answered` reads 13 of 60, the second-cheapest cell of the run and the second-worst outcome.
 
 ### 4.11 Nemotron Nano 9B
 
 `nvidia.nemotron-nano-9b-v2` · NVIDIA · window **128,000**, the smallest here · no caching published ·
-$0.06 in / $0.23 out per Mtok · [generation 3](#parameter-generations), **tight** regime.
+$0.06 in / $0.23 out per Mtok · **tight** regime.
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
@@ -550,27 +418,26 @@ the TTL all pay the write premium and collect no read, and there the plugins are
 | Model | Window | Bare agent answered | Bare peak | Full stack answered | Full stack peak |
 |---|---:|:--:|---:|:--:|---:|
 | Opus 4.8 / Opus 5 / Fable 5 / Astra / Sol | 1M+ | 60/60 | 19% | 60/60 | 6% |
-| Haiku 4.5 gen 3 | 200K | 60/60 | 98% | 60/60 | 30% |
-| Haiku 4.5 gen 2 | 200K | **24/60** | 97% | 60/60 | 28% |
-| GLM 5 | 200K | **15–18/60** | 99% | 60/60 | 21% |
+| Haiku 4.5 | 200K | 60/60 | 98% | 60/60 | 30% |
+| GLM 5 | 200K | **18/60** | 97% | 60/60 | 21% |
 | GLM 4.7 | 203K | **22/60** | 92% | 59/60 | 51% |
 | GLM 4.7 Flash | 203K | **17/60** | 98% | 60/60 | 26% |
-| Qwen3 Next | 256K | **13–14/60** | 100% | 59–60/60 | 15–36% |
+| Qwen3 Next | 256K | **13/60** | 97% | 60/60 | 15% |
 | Nemotron Nano 9B | 128K | **9/60** | 87% | 60/60 | 57% |
 
-At 1M the argument is cost; below ~250K it is completion. But Haiku 4.5 appears twice with the same window
-and opposite outcomes, so the window is not the variable — it is the window against the payload mass in front
-of it, and the window is merely what a model card tells you in advance.
+At 1M the argument is cost; below ~250K it is completion. But Haiku 4.5 completed the script at **98% of its
+window** while GLM 5, on the same 200K, answered 18 of 60 — so the window is not the variable. It is the
+window against the payload mass in front of it, and the window is merely what a model card tells you in
+advance.
 
 ### No single practice is sufficient
 
 | Model | Single plugin that completed | Best single arm by `Correct` |
 |---|---|---|
-| GLM 5 | graph (both generations) | graph, 28/30 |
+| GLM 5 | graph | graph, 28/30 |
 | GLM 4.7 | graph | graph, 27/30 |
 | GLM 4.7 Flash | relevance | relevance, 17/30 |
-| Qwen3 Next gen 2 | disclosure, relevance | relevance, 26/30 |
-| Qwen3 Next gen 3 | graph | relevance, 22/30 (10 refusals) |
+| Qwen3 Next | graph | relevance, 22/30 (10 refusals) |
 | Nemotron Nano 9B | **none** | relevance, 14/30 (64 refusals) |
 
 Every single-plugin arm fails to control the peak on at least one model, and on the smallest window none
@@ -578,11 +445,11 @@ completes; the full stack answered **60 of 60 on every model it ran against**. A
 fixed schema floor, D the history — different mass, which is why the conjunction holds where its members do
 not.
 
-**The regression this document owes the reader.** Removing the filter's `retrieve_context` in generation 3
-fixed a real cost (relevance went +21.6% → −5.3% on Haiku) and cost two specific turns on Opus 4.8 —
-`A5-statement` and `R2-cross-reference`, both needing a figure inside a statement payload the preview cut,
-with nothing left to ask for it back. `include_retrieval_tool=True` is the way back, at the price the cache
-tables show.
+**The regression this document owes the reader.** Removing the filter's `retrieve_context` fixed a real cost
+(relevance filtering had been measured at +21.6% on Haiku, and now sits at −5.3%) and cost two specific turns
+on Opus 4.8 — `A5-statement` and `R2-cross-reference`, both needing a figure inside a statement payload the
+preview cut, with nothing left to ask for it back. `include_retrieval_tool=True` is the way back, at the price
+the cache tables show.
 
 ---
 
@@ -635,8 +502,10 @@ invocation logs), including Sol and Astra served from `us-east-2` / `us-west-2` 
 — so cache reads survive a Geo CRIS hop. The documented high-demand case that increases cache writes did not
 occur; Global CRIS was not tested.
 
-**Generations are not comparable** — part 2 says which code each run used, and the differences between
-generations are larger than most deltas here.
+**Not every run is the same code.** These runs were measured over several weeks while the packages changed,
+and each model's table is its **latest** measurement. Where a model shows a cache-off and a cache-on table,
+both come from the same code so the pair is comparable; across models, a difference of a few turns can belong
+to the packages having moved rather than to the model.
 
 **These are the community packages**, measured with the three installed from this repository. The forked-SDK
 vended plugins place their cache checkpoints in their own code and were **not** re-measured.
