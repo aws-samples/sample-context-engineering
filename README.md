@@ -174,10 +174,13 @@ Three conditions decide how much of the saving above you actually see.
 **The context window.** The saving is a cost argument on a 1M-token model and a *completion* argument
 on a small one. Replayed on GLM 5, whose card gives a
 [200K-token window](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5.html),
-the bare agent lost **90 calls** to `ContextWindowOverflowException` and finished 14 of 30 turns; the
-full stack lost none and finished 26 of 30, with its peak call at 43,490 tokens against the baseline's
-198,588. Below roughly 250K tokens these practices stop being an optimisation and become the thing
-that lets the conversation finish at all.
+the bare agent lost **90 calls** to `ContextWindowOverflowException` and answered only **15 of the 60
+turns** — 15 of the 30 scored ones were never attempted, which is why it scored 14 of 30. The full
+stack answered all sixty, lost no calls and scored 26 of 30, with its peak call at 43,490 tokens
+against the baseline's 198,588. Below roughly 250K tokens these practices stop being an optimisation
+and become the thing that lets the conversation finish at all. A smaller window sharpens it: on
+Nemotron Nano 9B (128K) the bare agent answered **9 of 60** and the full stack was the only arm of five
+that answered every turn — see [`BENCHMARK.md`](BENCHMARK.md) finding 12 for the per-model accounting.
 
 **Whether the model caches, and whether you want it to.** Prompt caching attacks the same redundancy
 these practices do, and only one of the two can bill it. On a model with a large window *and* caching

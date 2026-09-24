@@ -135,10 +135,36 @@ column spans 48x.
 |  |  | Graph | 8,884,923 | 0 | 0 | — | 8,884,923 | $8.99 | 85.0% | 23/30 | 28.1 | $0.39 |
 |  |  | 🏆 All three | 2,432,543 | 0 | 0 | — | 2,432,543 | $2.49 | 92.1% | 26/30 | 12.0 | $0.10 |
 
-**\* GLM 5 — the two marked cells are truncated, not cheap.** Against a 200K window the bare agent lost
-**90 calls** to `ContextWindowOverflowException` and disclosure lost **38**; their token and cost
-figures are low because the run stopped answering. Only `relevance`, `graph` and `all` completed the 60
-turns, and the comparison is valid between those three.
+#### Observations — GLM 5 is the only model in this table whose window binds
+
+`Correct` counts turns that scored; it does not say whether the turn was *attempted*. On GLM 5 two arms
+stopped answering partway through, so their low token and cost figures are the cost of an abandoned
+conversation rather than of an efficient one. **Answered** is how many of the 60 turns produced an answer
+at all, and **Scored lost** how many of the 30 scored turns were never answered — those score zero for a
+reason that is not the strategy's:
+
+| GLM 5 arm | Answered | Scored lost | Refused calls | Peak call | % of window | Billed tokens | Δ vs heaviest arm |
+|---|:--:|:--:|---:|---:|---:|---:|---:|
+| Baseline \* | **15/60** | **15/30** | **90** | 198,588 | **99%** | 5,247,478 | −72.9% |
+| Relevance ← reference | 60/60 | 0 | 0 | 192,751 | 96% | 19,383,574 | — |
+| Disclosure \* | **41/60** | **7/30** | **38** | 198,249 | **99%** | 11,309,551 | −41.7% |
+| Graph | 60/60 | 0 | 0 | 117,147 | 59% | 8,884,923 | −54.2% |
+| 🏆 All three | 60/60 | 0 | 0 | **43,490** | **22%** | 2,432,543 | **−87.4%** |
+
+- **The delta is taken against `relevance`, not against the baseline.** The baseline answered 15 of 60
+  turns, so its 5.2M tokens are not a measurement of the work — they are what it managed to send before
+  it stopped. A percentage against it makes every completing arm look like a regression, which is how
+  the same data reads in the main table above. The honest reference is the arm that consumed the **most**
+  tokens while completing, because that is the closest thing this run has to the full workload
+  uncompressed. On that basis the full stack sends **87.4% less** than the heaviest completing arm, for
+  26 of 30 against that arm's 29 of 30.
+- **Peak call, not total, is what decides completion here.** The two truncated arms peak at 99% of the
+  window on the calls that went out, and lost 90 and 38 more that never did; the two that complete peak at
+  59% and 22%. Peak is also the only quantity truncation cannot contaminate, because it is measured on
+  calls the provider accepted.
+- **The baseline's 63.8% accuracy is not a quality reading.** Fifteen of its thirty scored turns were
+  never answered. Its accuracy over the turns it *did* answer is not comparable to an arm that answered
+  all sixty, which is why `$/correct` is marked *invalid* for it rather than printed.
 
 **⚠ Opus 5 / disclosure, cache off — not a result.** The model never called `find_tools`, so it ran
 with no tool schema and answered almost nothing (1 of 30, 1.8s per turn). The same arm with caching on
@@ -208,9 +234,10 @@ its mutations are append-only or confined to the end of the prompt.
 ### 4. On a small window, the practices stop being an optimisation
 
 GLM 5 is the only model here under 1M tokens, and it reverses the question. Peak input on a single call:
-baseline 198,588 against a 200K window, all three combined 43,490. The bare agent lost 90 calls and 16
-scored turns to overflow; the full stack lost none. Cost stops being the argument — the argument is that
-the conversation finishes.
+baseline 198,588 against a 200K window, all three combined 43,490. The bare agent answered **15 of the 60
+turns**, losing 90 calls to overflow and 15 of the 30 scored turns outright; the full stack answered all
+sixty and lost nothing. Cost stops being the argument — the argument is that the conversation finishes.
+The per-arm accounting is in the observations under the table above.
 
 This is also the regime where caching does not compete: GLM 5's card publishes no caching of either
 type, so there is nothing to weigh the plugins against.
@@ -255,7 +282,8 @@ caching at all, so there is nothing to turn on.
 One column is new, and it is the one that decides how to read the rest. **Peak input** is the largest
 single call the arm sent, as a percentage of that model's window — the one quantity in this study that
 truncation cannot contaminate, because it is measured on the calls that *did* go out. **Completed** is
-how many of the 60 turns produced an answer at all. The twelve columns of the table above describe what
+how many of the 60 turns produced an answer at all, and **Scored lost** how many of the 30 scored turns
+were never answered. The twelve columns of the table above describe what
 a run spent and scored; neither of them says whether the conversation survived, and in this class that
 is the question.
 
@@ -263,27 +291,48 @@ A cell marked `*` is truncated in the sense of trap 1 — it spent less and scor
 working. **In this study the truncated cells are not confined to the baseline**, which is what makes the
 accuracy column dangerous here: on GLM 4.7 three of the five arms overflowed.
 
-| Model | Configuration | Peak input | Total tokens | Δ tokens | Accuracy | Correct | Completed | Cost | $/correct |
-|---|---|---:|---:|---:|---:|:--:|:--:|---:|---:|
-| **GLM 4.7** | Baseline * | 85% | 5,814,709 | — | 65.3% | 14/30 | 22/60 | $3.52 | *$0.25* |
-| | Relevance * | 83% | 11,140,007 | +91.6% | 66.1% | 17/30 | 27/60 | $6.75 | *$0.40* |
-| | Disclosure * | 85% | 14,153,824 | +143.4% | 73.2% | 20/30 | 40/60 | $8.56 | *$0.43* |
-| | Graph | 70% | 13,191,178 | +126.9% | **95.3%** | **27/30** | 60/60 | $7.96 | $0.29 |
-| | 🏆 All three | **37%** | 5,916,862 | +1.8% | 83.5% | 22/30 | 59/60 † | $3.60 | $0.16 |
-| **Haiku 4.5** | Baseline * | 80% | 6,058,882 | — | 65.3% | 13/30 | 24/60 | $6.09 | *$0.47* |
-| | Relevance | 75% | 13,214,041 | +118.1% | **93.7%** | **26/30** | 60/60 | $13.32 | $0.51 |
-| | Disclosure | 65% | 12,156,014 | +100.6% | 88.2% | 22/30 | 60/60 | $12.26 | $0.56 |
-| | Graph | 50% | 7,894,451 | +30.3% | 79.5% | 18/30 | 60/60 | $7.97 | $0.44 |
-| | 🏆 All three | **22%** | 3,260,491 | **−46.2%** | 89.8% | 25/30 | 60/60 | $3.34 | $0.13 |
-| **Qwen3 Next** | Baseline * | 117% | 8,231,351 | — | 59.1% | 11/30 | 14/60 | $1.16 | *$0.11* |
-| | Relevance | 70% | 21,803,250 | +164.9% | **91.3%** | **26/30** | 60/60 | $3.10 | $0.12 |
-| | Disclosure | 83% | 33,004,333 | +301.0% | 86.6% | 23/30 | 60/60 | $4.64 | $0.20 |
-| | Graph * | **131%** | 25,119,509 | +205.2% | 55.9% | 10/30 | 16/60 | $3.53 | *$0.35* |
-| | 🏆 All three | **25%** | 5,512,454 | **−33.0%** | 81.9% | 23/30 | 59/60 | $0.82 | $0.04 |
+**Δ tokens is measured against the heaviest arm of each model, not against the baseline**, and the
+`← ref` marker names it. Every baseline here is truncated, so a delta against it is arithmetic on a
+number that stopped growing when the run stopped answering — it prints +301.0% for an arm that completed
+the whole script and reads as a regression. The heaviest *completing* arm is the closest thing each run
+has to the full workload uncompressed, so that is the reference.
 
-Peak input is the estimated prompt of the largest call, which is why it can exceed 100%: that is a call
-the provider refused. † GLM 4.7's all-three lost its one turn to a `ReadTimeoutError`, a network failure,
-not to the window — that arm overflowed zero times.
+| Model | Configuration | Peak input | Completed | Scored lost | Total tokens | Δ vs heaviest | Accuracy | Correct | Cost | $/correct |
+|---|---|---:|:--:|:--:|---:|---:|---:|:--:|---:|---:|
+| **GLM 4.7** | Baseline * | 85% | 22/60 | **12/30** | 5,814,709 | −58.9% | 65.3% | 14/30 | $3.52 | *$0.25* |
+| | Relevance * | 83% | 27/60 | **11/30** | 11,140,007 | −21.3% | 66.1% | 17/30 | $6.75 | *$0.40* |
+| | Disclosure * ← ref | 85% | 40/60 | **6/30** | 14,153,824 | — | 73.2% | 20/30 | $8.56 | *$0.43* |
+| | Graph | 70% | 60/60 | 0 | 13,191,178 | −6.8% | **95.3%** | **27/30** | $7.96 | $0.29 |
+| | 🏆 All three | **37%** | 59/60 † | 0 | 5,916,862 | **−58.2%** | 83.5% | 22/30 | $3.60 | $0.16 |
+| **Haiku 4.5** | Baseline * | 80% | 24/60 | **12/30** | 6,058,882 | −54.1% | 65.3% | 13/30 | $6.09 | *$0.47* |
+| | Relevance ← ref | 75% | 60/60 | 0 | 13,214,041 | — | **93.7%** | **26/30** | $13.32 | $0.51 |
+| | Disclosure | 65% | 60/60 | 0 | 12,156,014 | −8.0% | 88.2% | 22/30 | $12.26 | $0.56 |
+| | Graph | 50% | 60/60 | 0 | 7,894,451 | −40.3% | 79.5% | 18/30 | $7.97 | $0.44 |
+| | 🏆 All three | **22%** | 60/60 | 0 | 3,260,491 | **−75.3%** | 89.8% | 25/30 | $3.34 | $0.13 |
+| **Qwen3 Next** | Baseline * | 117% | 14/60 | **16/30** | 8,231,351 | −75.1% | 59.1% | 11/30 | $1.16 | *$0.11* |
+| | Relevance | 70% | 60/60 | 0 | 21,803,250 | −33.9% | **91.3%** | **26/30** | $3.10 | $0.12 |
+| | Disclosure ← ref | 83% | 60/60 | 0 | 33,004,333 | — | 86.6% | 23/30 | $4.64 | $0.20 |
+| | Graph * | **131%** | 16/60 | **15/30** | 25,119,509 | −23.9% | 55.9% | 10/30 | $3.53 | *$0.35* |
+| | 🏆 All three | **25%** | 59/60 | 0 | 5,512,454 | **−83.3%** | 81.9% | 23/30 | $0.82 | $0.04 |
+
+#### Observations
+- **Read `Completed` and `Scored lost` before anything else in a starred row.** A starred arm did not
+  answer the script. GLM 4.7's bare agent answered 22 of 60 turns and never answered **12 of the 30**
+  scored ones, so most of its missing points are absence rather than error. The same holds for Qwen3
+  Next's *graph-only* arm — 16 turns answered, 15 scored turns lost — which is why its 55.9% must not be
+  read as the graph scoring badly.
+- **The full stack is the only arm that is both cheapest and complete.** Against the heaviest arm of each
+  model it sends **58.2%, 75.3% and 83.3%** fewer tokens while answering 59, 60 and 59 turns. Every other
+  low-token cell in this table is low because the arm stopped working.
+- **Peak input predicts completion without exception here**: every arm at 80% of its window or above lost
+  calls, every arm at 75% or below completed. The full stack sits at 37%, 22% and 25%.
+- **A completing arm can still be the most expensive one.** Relevance filtering on Haiku and disclosure on
+  Qwen3 Next are the heaviest arms of their models *and* they finish: the window problem and the token
+  problem are not the same problem, and only the full stack addresses both.
+- Peak input is the estimated prompt of the largest call, which is why it can exceed 100%: that is a call
+  the provider refused, and it is how a truncated arm advertises itself.
+- † GLM 4.7's all-three lost its one turn to a `ReadTimeoutError`, a network failure, not to the window —
+  that arm overflowed zero times.
 
 One replay per cell, so trap 3 applies in full: differences of two or three turns between two arms that
 both completed are inside the noise floor. Measured separately on this class, the same arm replayed three
@@ -523,55 +572,136 @@ storing artifacts and nothing could read them back. Measured: with the drop stil
 26/30.
 
 The full six-model replay of the corrected code, 60 turns, five arms each, caching off, one replay per
-cell. **Refused** counts calls Bedrock rejected with `ContextWindowOverflow`:
+cell. One table per model, because the columns that matter differ by class — and on a model whose window
+binds, three of them must be read before anything else:
 
-| Model | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Refused | Cost | Δ cost |
-|---|---|---:|---:|---:|:--:|---:|---:|---:|---:|
-| **Claude Opus 4.8** (1,000,000) | Baseline (no plugin) | 13,647,898 | — | 97.6% | 28/30 | 192,662 | 0 | $68.89 | — |
-|  | Progressive Tool Disclosure only | 9,381,497 | −31.3% | 97.6% | 29/30 | 139,961 | 0 | $47.74 | −30.7% |
-|  | Relevance Filtering only | 13,447,761 | −1.5% | 89.8% | 27/30 | 189,714 | 0 | $67.96 | −1.4% |
-|  | Context Graph only | 10,254,016 | −24.9% | 85.0% | 21/30 | 149,010 | 0 | $51.84 | −24.7% |
-|  | **All three combined** | **3,348,835** | **−75.5%** | 91.3% | 26/30 | **59,405** | 0 | **$17.47** | −74.6% |
-| **Claude Haiku 4.5** (200,000) | Baseline (no plugin) | 12,703,571 | — | 95.3% | 27/30 | 196,722 | 0 | $12.77 | — |
-|  | Progressive Tool Disclosure only | 10,296,950 | −18.9% | 88.2% | 22/30 | 160,920 | 0 | $10.37 | −18.8% |
-|  | Relevance Filtering only | 12,036,064 | −5.3% | 86.6% | 21/30 | 166,779 | 0 | $12.15 | −4.9% |
-|  | Context Graph only | 7,883,137 | −37.9% | 76.4% | 17/30 | 114,003 | 0 | $7.95 | −37.7% |
-|  | **All three combined** | **3,224,286** | **−74.6%** | 84.2% | 20/30 | **60,393** | 0 | **$3.32** | −74.0% |
-| **GLM 5** (200,000) | Baseline (no plugin) | 6,150,161 ✝ | — | 65.3% ✝ | 14/30 ✝ | 193,207 | 84 | $6.17 | — |
-|  | Progressive Tool Disclosure only | 9,170,600 ✝ | +49.1% | 66.1% ✝ | 16/30 ✝ | 193,113 | 64 | $9.22 | +49.5% |
-|  | Relevance Filtering only | 14,739,065 ✝ | +139.7% | 80.3% ✝ | 24/30 ✝ | 198,011 | 10 | $14.80 | +140.1% |
-|  | Context Graph only | 7,175,940 | +16.7% | **96.1%** | **28/30** | 102,645 | 0 | $7.21 | +16.9% |
-|  | **All three combined** | **2,908,717** | **−52.7%** | 81.1% | 21/30 | **41,553** | 0 | **$2.96** | −52.0% |
-| **GLM 4.7 Flash** (202,752) | Baseline (no plugin) | 5,398,019 ✝ | — | 52.8% ✝ | 8/30 ✝ | 198,536 | 82 | $0.38 | — |
-|  | Progressive Tool Disclosure only | 27,403,577 ✝ | +407.7% | 58.3% ✝ | 11/30 ✝ | 198,654 | 40 | $1.93 | +405.2% |
-|  | Relevance Filtering only | 17,181,923 | +218.3% | 75.6% | 17/30 | 187,849 | 0 | $1.22 | +219.9% |
-|  | Context Graph only | 18,123,481 ✝ | +235.7% | 74.8% ✝ | 18/30 ✝ | 198,646 | 8 | $1.28 | +235.5% |
-|  | **All three combined** | **4,010,248** | **−25.7%** | 55.1% | 10/30 | **53,355** | 0 | **$0.30** | −21.5% |
-| **Qwen3 Next 80B** (256,000) | Baseline (no plugin) | 8,591,570 ✝ | — | 54.3% ✝ | 9/30 ✝ | 248,552 | 94 | $1.21 | — |
-|  | Progressive Tool Disclosure only | 5,033,909 ✝ | −41.4% | 60.6% ✝ | 11/30 ✝ | 252,395 | 94 | $0.71 | −41.3% |
-|  | Relevance Filtering only | 33,149,405 ✝ | +285.8% | 79.5% ✝ | 22/30 ✝ | 256,310 | 10 | $4.71 | +289.9% |
-|  | Context Graph only | 9,727,355 | +13.2% | 81.1% | 20/30 | 136,350 | 0 | $1.38 | +14.4% |
-|  | **All three combined** | **4,395,046** | **−48.8%** | 74.0% | 17/30 | **38,496** | 0 | **$0.68** | −43.4% |
-| **Nemotron Nano 9B** (128,000) | Baseline (no plugin) | 1,596,017 ✝ | — | 48.8% ✝ | 6/30 ✝ | 111,016 | 102 | $0.10 | — |
-|  | Progressive Tool Disclosure only | 2,298,800 ✝ | +44.0% | 59.1% ✝ | 9/30 ✝ | 118,522 | 92 | $0.14 | +46.0% |
-|  | Relevance Filtering only | 5,073,784 ✝ | +217.9% | 66.9% ✝ | 14/30 ✝ | 125,719 | 64 | $0.33 | +233.8% |
-|  | Context Graph only | 10,868,671 ✝ | +581.0% | 59.8% ✝ | 11/30 ✝ | 124,762 | 34 | $0.67 | +584.3% |
-|  | **All three combined** | 6,431,158 | +303.0% | **68.5%** | **12/30** | 73,358 | **0** | $0.44 | +347.8% |
+- **Answered** — how many of the 60 turns produced an answer at all. `Correct` counts turns that scored;
+  it does not say whether the turn was attempted.
+- **Scored lost** — how many of the 30 scored turns were never answered. Those score zero for a reason
+  that is not the strategy's, and they are what pulls a truncated arm's accuracy down.
+- **Refused** — calls Bedrock rejected with `ContextWindowOverflow`. A refused call is not billed, so an
+  arm with refusals has an **understated** token total.
 
-✝ *This arm had calls refused. Its token total is understated — a refused call is not billed — and its
-accuracy is bounded by truncation rather than by the strategy. Read the Refused column before any
-percentage in the row.*
+On the four models where the bare agent truncated, **Δ tokens is measured against the arm that consumed
+the most tokens** (`← ref`), not against the baseline. A baseline that answered 9 of 60 turns stopped
+accumulating tokens when it stopped answering, so a delta against it prints as a regression for the arms
+that completed the script. The heaviest arm is the closest thing each run has to the full workload
+uncompressed.
+
+#### Claude Opus 4.8 — window 1,000,000
+
+| Configuration | Answered | Refused | Total tokens | Δ vs baseline | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) | 60/60 | 0 | 13,647,898 | — | 192,662 (19%) | 97.6% | 28/30 | $68.89 |
+| Progressive Tool Disclosure only | 60/60 | 0 | 9,381,497 | −31.3% | 139,961 (14%) | **97.6%** | **29/30** | $47.74 |
+| Relevance Filtering only | 60/60 | 0 | 13,447,761 | −1.5% | 189,714 (19%) | 89.8% | 27/30 | $67.96 |
+| Context Graph only | 60/60 | 0 | 10,254,016 | −24.9% | 149,010 (15%) | 85.0% | 21/30 | $51.84 |
+| **All three combined** | 60/60 | 0 | **3,348,835** | **−75.5%** | **59,405 (6%)** | 91.3% | 26/30 | **$17.47** |
+
+**Observations.** Nothing truncates here, so every column is comparable and the baseline is the right
+reference. The window is not the constraint — the bare agent's largest call uses 19% of it — so this row
+set is a pure cost argument: **−75.5% for $17.47 against $68.89**, in line with the −82.1% published
+earlier under a different parameter set. The accuracy spread across the five arms (21/30 to 29/30) sits
+inside the variance measured in finding 13 and must not be read as a ranking.
+
+#### Claude Haiku 4.5 — window 200,000
+
+| Configuration | Answered | Refused | Total tokens | Δ vs baseline | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) | 60/60 | 0 | 12,703,571 | — | 196,722 (**98%**) | **95.3%** | **27/30** | $12.77 |
+| Progressive Tool Disclosure only | 60/60 | 0 | 10,296,950 | −18.9% | 160,920 (80%) | 88.2% | 22/30 | $10.37 |
+| Relevance Filtering only | 60/60 | 0 | 12,036,064 | −5.3% | 166,779 (83%) | 86.6% | 21/30 | $12.15 |
+| Context Graph only | 60/60 | 0 | 7,883,137 | −37.9% | 114,003 (57%) | 76.4% | 17/30 | $7.95 |
+| **All three combined** | 60/60 | 0 | **3,224,286** | **−74.6%** | **60,393 (30%)** | 84.2% | 20/30 | **$3.32** |
+
+**Observations.** This run shows how narrow the margin is on a 200K window: the bare agent completed
+everything, and its largest call used **98% of the window**. It did not overflow — it simply did not need
+one more paragraph of history. Nothing in the token column says that; only the peak does. Compare GLM 5
+below, the same 200K window with a heavier tool path, where the bare agent lost 84 calls. The full stack's
+peak sits at 30%, and that margin is the result here, not the saving.
+
+#### GLM 5 — window 200,000
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) ✝ | **18/60** | **14/30** | **84** | 6,150,161 | −58.3% | 193,207 (97%) | 65.3% | 14/30 | $6.17 |
+| Progressive Tool Disclosure only ✝ | **25/60** | **11/30** | **64** | 9,170,600 | −37.8% | 193,113 (97%) | 66.1% | 16/30 | $9.22 |
+| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 14,739,065 | — | 198,011 (99%) | 80.3% | 24/30 | $14.80 |
+| Context Graph only | 60/60 | 0 | 0 | 7,175,940 | −51.3% | 102,645 (51%) | **96.1%** | **28/30** | $7.21 |
+| **All three combined** | 60/60 | 0 | 0 | **2,908,717** | **−80.3%** | **41,553 (21%)** | 81.1% | 21/30 | **$2.96** |
+
+**Observations.** Three of five arms truncated, and the bare agent answered **18 of 60 turns** — its 65.3%
+is mostly absence, with 14 of its 30 scored turns never attempted. Only the graph and the full stack
+finished intact, and they are the only two whose peak stays below half the window. Relevance filtering
+nearly finishes (55 of 60) and is the heaviest arm of the run, which is why it is the reference rather than
+the baseline; against it the full stack sends **80.3% less** while answering every turn.
+
+#### GLM 4.7 Flash — window 202,752
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) ✝ | **17/60** | **15/30** | **82** | 5,398,019 | −80.3% | 198,536 (98%) | 52.8% | 8/30 | $0.38 |
+| Progressive Tool Disclosure only ✝ ← ref | **36/60** | **7/30** | **40** | 27,403,577 | — | 198,654 (98%) | 58.3% | 11/30 | $1.93 |
+| Relevance Filtering only | 60/60 | 0 | 0 | 17,181,923 | −37.3% | 187,849 (93%) | **75.6%** | 17/30 | $1.22 |
+| Context Graph only ✝ | **52/60** | **2/30** | **8** | 18,123,481 | −33.9% | 198,646 (98%) | 74.8% | 18/30 ✝ | $1.28 |
+| **All three combined** | 60/60 | 0 | 0 | **4,010,248** | **−85.4%** | **53,355 (26%)** | 55.1% | 10/30 | **$0.30** |
+
+**Observations.** The one model whose reference arm is itself truncated: disclosure spent 27.4M tokens over
+237 calls and still answered only 36 of 60 turns, which is what an erratic tool path costs when every retry
+carries the whole history. Relevance filtering is the arm to use here — it completes, and among the
+completing arms it scores highest. The full stack completes and is by far the cheapest, but scores
+**10/30**, its worst result on any model. That is a genuine weakness rather than truncation, since the arm
+answered all sixty turns: it is the evidence-selection loss described in finding 8, at its sharpest.
+
+#### Qwen3 Next 80B — window 256,000
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) ✝ | **13/60** | **17/30** | **94** | 8,591,570 | −74.1% | 248,552 (97%) | 54.3% | 9/30 | $1.21 |
+| Progressive Tool Disclosure only ✝ | **13/60** | **17/30** | **94** | 5,033,909 | −84.8% | 252,395 (99%) | 60.6% | 11/30 | $0.71 |
+| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 33,149,405 | — | 256,310 (100%) | 79.5% | **22/30** | $4.71 |
+| Context Graph only | 60/60 | 0 | 0 | 9,727,355 | −70.7% | 136,350 (53%) | **81.1%** | 20/30 | $1.38 |
+| **All three combined** | 60/60 | 0 | 0 | **4,395,046** | **−86.7%** | **38,496 (15%)** | 74.0% | 17/30 | **$0.68** |
+
+**Observations.** Disclosure alone is exactly the trap these columns exist to prevent: 5.0M tokens and
+$0.71 look like the efficient arm until `Answered` says **13 of 60** and `Refused` says 94. It is the
+second-cheapest cell of the run and the second-worst outcome. A 256K window does not save this model —
+it carries the heaviest payloads of the battery, which is why 250K is the wrong ceiling for the window
+regime in finding 11. The full stack's largest call is **15% of the window**, against a bare agent that
+could not fit its own consolidation turns.
+
+#### Nemotron Nano 9B — window 128,000
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
+| Baseline (no plugin) ✝ | **9/60** | **21/30** | **102** | 1,596,017 | −85.3% | 111,016 (87%) | 48.8% | 6/30 | $0.10 |
+| Progressive Tool Disclosure only ✝ | **14/60** | **16/30** | **92** | 2,298,800 | −78.8% | 118,522 (93%) | 59.1% | 9/30 | $0.14 |
+| Relevance Filtering only ✝ | **28/60** | **11/30** | **64** | 5,073,784 | −53.3% | 125,719 (98%) | 66.9% | **14/30** ✝ | $0.33 |
+| Context Graph only ✝ ← ref | **43/60** | **7/30** | **34** | 10,868,671 | — | 124,762 (97%) | 59.8% | 11/30 | $0.67 |
+| **All three combined** | **60/60** | **0** | **0** | 6,431,158 | −40.8% | **73,358 (57%)** | **68.5%** | 12/30 | $0.44 |
+
+**Observations.** The smallest window in the battery, and the clearest table: **four of the five arms could
+not finish**, and the one column that orders cleanly is `Refused` — 102, 92, 64, 34, **0**. The bare agent
+answered nine turns; its $0.10 is not a price for this workload, it is what nine turns cost. The full stack
+is the only arm that answered all sixty, and against the heaviest arm that *tried* it still sends 40.8%
+fewer tokens. At this window the practices are not an optimisation but the difference between a
+conversation and a truncated log — finding 4, reproduced at half the window.
+
+✝ *This arm had calls refused. Its token total is understated — a refused call is not billed — its accuracy
+is bounded by truncation rather than by the strategy, and every percentage in the row is arithmetic on a run
+that stopped working. Read `Answered` and `Scored lost` first.*
 
 Four statements survive the noise band established in finding 13, because each holds on every model:
 
-- **Peak input per call.** The full stack is the lowest in 6 of 6, between 38K and 73K against the bare
-  agent's 111K–258K. This is the truncation-immune quantity: it is measured on calls that went out.
-- **Refused calls.** The full stack is at **zero in 6 of 6**, and on Nemotron Nano 9B (128K) it is the
-  only arm that is — the bare agent lost 102 calls there, and relevance filtering alone still lost 64.
-- **Cost.** The full stack is the cheapest arm on 5 of 6. The exception is Nemotron, where the bare
-  agent looks cheaper only because a third of its calls never went out.
-- **On a large window the saving is unchanged by any of the six changes**: −75.5% tokens and $17.47
-  against $68.89 on Opus 4.8, in line with the −82.1% published earlier under a different parameter set.
+- **Peak input per call.** The full stack is the lowest in 6 of 6 — 6% to 57% of the window against a bare
+  agent's 19% to 98%. This is the truncation-immune quantity: it is measured on calls that went out.
+- **Turns answered.** The full stack answered **60 of 60 on all six models**. No other arm did: relevance
+  filtering answered everything on one of the four tight-window models, the graph on two, disclosure on
+  none.
+- **Refused calls.** The full stack is at **zero in 6 of 6**, and on Nemotron Nano 9B it is the only arm
+  that is — the bare agent lost 102 calls there, and relevance filtering alone still lost 64.
+- **Cost.** The full stack is the cheapest *completing* arm on 6 of 6. Cheaper cells exist, and every one
+  of them belongs to an arm that stopped answering.
 
 **One regression is attributable, and it is the price of removing the filter's retrieval tool.** On
 Opus the two turns the `all` arm gets wrong that the graph-only arm gets right are `A5-statement` and
