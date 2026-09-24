@@ -286,6 +286,22 @@ async def test_default_mode_emits_no_reference_token_and_stores_nothing() -> Non
         await store.retrieve("tool-7_0")
 
 
+@pytest.mark.asyncio
+async def test_filtering_runs_with_no_store_at_all() -> None:
+    """Storage is optional: with no store and the tool off, chunking + rerank + rewrite still run."""
+    reranker = FakeReranker()
+    plugin = RelevanceFilter(max_result_tokens=10, config=_config(reranker))
+    agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
+    result = _result([{"text": "alpha line\nbeta line\n" * 40}])
+    event = make_after_tool_call_event(tool_use=_tool_use(), result=result, agent=agent)
+
+    await plugin._on_after_tool_call(event)
+
+    assert plugin._store is None  # no default store is built when nothing can read it back
+    assert reranker.calls  # scored
+    assert event.result["content"][0]["text"].startswith("[Relevance: tool result, ~100,000 tokens]")
+
+
 # --------------------------------------------------------------------------------------------------
 # retrieve_context read modes.
 # --------------------------------------------------------------------------------------------------

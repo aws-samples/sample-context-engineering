@@ -151,8 +151,9 @@ class RelevanceFilter(Plugin):
     no AWS credentials or region merely to be declared.
 
     Args:
-        store: Backend for the raw sub-blocks of a filtered result. Defaults to a per-agent
-            ``InMemoryStore`` created during initialization.
+        store: Optional backend for the raw sub-blocks, used only by the retrieval tool. Filtering
+            never depends on it. When None and ``include_retrieval_tool`` is True, a per-agent
+            ``InMemoryStore`` is created during initialization; otherwise no store exists.
         max_result_tokens: Filter only results whose estimated token count exceeds this threshold.
             Defaults to ``8_000``.
         config: Preview tuning (reranker, threshold, chunk and preview budgets). Every key is
@@ -190,8 +191,8 @@ class RelevanceFilter(Plugin):
         """Initialize the plugin without building any scoring or network dependency.
 
         Args:
-            store: Backend for the raw sub-blocks. When None, an ``InMemoryStore`` is created per
-                agent during initialization.
+            store: Optional backend for the raw sub-blocks. When None, an ``InMemoryStore`` is
+                created per agent during initialization only if the retrieval tool is enabled.
             max_result_tokens: Filter only results above this estimated token count.
             config: Preview tuning; read key by key with the documented defaults at use time, so a
                 partial config is as valid as a full one.
@@ -226,7 +227,9 @@ class RelevanceFilter(Plugin):
         Args:
             agent: The agent this plugin instance is being attached to.
         """
-        if self._store is None:
+        # The store is optional: it exists only to serve the retrieval tool. Filtering never needs it,
+        # so a default store is built only when something can read it back.
+        if self._store is None and self._include_retrieval_tool:
             self._store = InMemoryStore()
         if isinstance(self._store, InMemoryStore):
             self._store._bind(id(agent))
@@ -345,7 +348,7 @@ class RelevanceFilter(Plugin):
                 everything from ``start`` onwards.
         """
         store = self._store
-        if store is None:  # pragma: no cover - init_agent always resolves a store first.
+        if store is None:  # No store configured: nothing was ever stored, so nothing resolves.
             raise ValueError(f"reference not found: {reference}")
 
         try:
@@ -419,7 +422,7 @@ class RelevanceFilter(Plugin):
 
         Six guards run in order, each an early return that leaves ``event.result`` untouched, so a
         result that is cancelled, self-produced, delegated, small, vetoed, or non-textual is never
-        scored. Only past all six is the result stored and rewritten.
+        scored. Only past all six is the result filtered and rewritten (and, if enabled, stored).
 
         Args:
             event: The completed tool call. Only ``result`` is ever written.
@@ -476,19 +479,54 @@ class RelevanceFilter(Plugin):
         if not full_text:
             return
 
-        await self._store_and_rewrite(event, token_count, full_text)
+        await self._filter_and_rewrite(event, token_count, full_text)
 
-    async def _store_and_rewrite(self, event: AfterToolCallEvent, token_count: int, full_text: str) -> None:
-        """Store the raw sub-blocks and rewrite ``event.result`` into marker, preview, and references.
+    async def _store_raw(self, event: AfterToolCallEvent) -> list[str] | None:
+        """Optionally store the raw scorable sub-blocks so ``retrieve_context`` can read them back.
+
+        This is an add-on to filtering, never a precondition of it. With the retrieval tool off, or
+        no store configured, nothing is stored and an empty list is returned.
+
+        Args:
+            event: The completed tool call whose raw sub-blocks are stored.
+
+        Returns:
+            The references issued (empty when storage is off), or None if a write failed -- the caller
+            then keeps the original result rather than hand out a reference that names nothing.
+        """
+        store = self._store
+        if not self._include_retrieval_tool or store is None:
+            return []
+
+        tool_use_id = event.tool_use["toolUseId"]
+        references: list[str] = []
+        try:
+            for index, block in enumerate(event.result["content"]):
+                # Only the scorable sub-blocks are stored: they are the ones the preview replaces,
+                # so they are the only ones the model can still need to read back.
+                if block.get("text"):
+                    raw, content_type = block["text"].encode("utf-8"), "text/plain"
+                elif "json" in block:
+                    raw, content_type = json.dumps(block["json"], indent=2).encode("utf-8"), "application/json"
+                else:
+                    continue
+                references.append(await store.store(f"{tool_use_id}_{index}", raw, content_type))
+        except Exception:
+            logger.warning(
+                "tool_use_id=<%s> | failed to store tool result, keeping original",
+                tool_use_id,
+                exc_info=True,
+            )
+            return None
+        return references
+
+    async def _filter_and_rewrite(self, event: AfterToolCallEvent, token_count: int, full_text: str) -> None:
+        """Score the result against the question and rewrite ``event.result`` into marker + preview.
 
         Reached only past every guard in :meth:`_on_after_tool_call`, with a result that is oversized
-        and carries scorable text.
-
-        The store write comes first, before anything is rewritten: the reference tokens the model is
-        handed are only useful if the content they name is already there, and a write that fails must
-        leave the original result standing rather than a preview pointing at nothing. With
-        ``include_retrieval_tool`` off there is no reader, so nothing is stored and no reference token
-        is appended -- the preview is the whole of what survives.
+        and carries scorable text. Filtering (chunk, rerank, select, assemble) does not depend on the
+        store. Storage is an optional step, run first only when enabled, so a reference token is never
+        handed out for content that is not already there.
 
         Args:
             event: The completed tool call whose ``result`` is rewritten in place.
@@ -498,33 +536,10 @@ class RelevanceFilter(Plugin):
         result = event.result
         content = result["content"]
         tool_use_id = event.tool_use["toolUseId"]
-        store = self._store
-        if store is None:  # pragma: no cover - init_agent always resolves a store first.
-            return
 
-        references: list[str] = []
-        # Storing is only worth its memory when something can read it back. With the retrieval tool
-        # off the flow is tool -> filtered result -> model and ends there, so the raw sub-blocks have
-        # no reader and the loop below is skipped entirely.
-        if self._include_retrieval_tool:
-            try:
-                for index, block in enumerate(content):
-                    # Only the scorable sub-blocks are stored: they are the ones the preview replaces,
-                    # so they are the only ones the model can still need to read back.
-                    if block.get("text"):
-                        raw, content_type = block["text"].encode("utf-8"), "text/plain"
-                    elif "json" in block:
-                        raw, content_type = json.dumps(block["json"], indent=2).encode("utf-8"), "application/json"
-                    else:
-                        continue
-                    references.append(await store.store(f"{tool_use_id}_{index}", raw, content_type))
-            except Exception:
-                logger.warning(
-                    "tool_use_id=<%s> | failed to store tool result, keeping original",
-                    tool_use_id,
-                    exc_info=True,
-                )
-                return
+        references = await self._store_raw(event)
+        if references is None:
+            return
 
         query = self._build_query(event)
         try:
