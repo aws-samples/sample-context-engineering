@@ -261,8 +261,8 @@ metadata:
 ```
 
 That is text, therefore it is embeddable, therefore it is searchable by the same index (§8.1). It is
-the same move B makes when indexing the tool description instead of the `inputSchema`: you index
-what describes, not what costs.
+the same move B makes when it indexes a tool's name, description **and** the parameter descriptions of
+its `inputSchema` rather than the schema's machinery: you index what describes, not what costs.
 
 The `content_type` in that box is read off the placeholder — a `[image: png, …]` becomes
 `image/png`, a `[document: pdf, …]` becomes `application/pdf`. One asymmetry to know about: the
@@ -559,13 +559,14 @@ where its position in the cycle pays for it.
 
 The automatic pass uses the user message as the question. That is not always enough, and B already
 solved the same problem: 94 truncated titles do not let the model decide which tool serves, and that
-is why B exposes a `find_tools(need)` beyond the catalog.
+is why B exposes a `find_tools(need)` beyond the catalog, with `get_tool_details(names)` to load what it
+finds.
 
 The STM has the identical problem. "That R$ 1.200 card entry" is not resolved by looking at fifteen
 titles.
 
 ```
-  B   catalog (pre-spec, always present)  +  find_tools(need)     ──▶  full spec
+  B   catalog (pre-spec, always present)  +  find_tools(need)     ──▶  get_tool_details  ──▶  full spec
   D   title (always present)              +  find_context(need)   ──▶  literal full content
 ```
 
@@ -874,7 +875,7 @@ plugins=[
     ContextGraph(
         expand_threshold=0.55,      # above: full content
         collapse_floor=0.15,        # between the two: description; below: title only
-        description_tokens=100,     # description ceiling, in the mold of B's catalog_tokens
+        description_tokens=100,     # description ceiling, in the mold of B's catalog_chars
         tags_per_card=5,            # how many identifiers define the card, see §7.1
         body_budget=...,            # ceiling of tokens in full cards
         min_cards=3,                # below this the choice is skipped, see §9
@@ -947,38 +948,39 @@ Two are D's:
 
 ### 13.1 Pre-specification and specification are distinct things
 
-B already operates on two levels, and `_project_specs` separates them into five blocks:
+B already operates on two levels, and `_compose_projection` separates them into four blocks plus the
+catalog:
 
 ```
-  block 1  the search tool          ─┐
+  block 1  the two plugin tools     ─┐
   block 2  always_available          │   FULL specification
   block 3  exposed                   │   (with inputSchema)
   block 4  referenced               ─┘
-  block 5  everything else          ──▶  pre-specification
-                                         literal name + truncated description
-                                         + EMPTY inputSchema
+  catalog  everything else          ──▶  pre-specification
+                                         NOT in tool_specs at all
+                                         one system-prompt line: name + summary
 ```
 
 Two readings D needs to respect:
 
-**The pre-specification is never missing.** Block 5 emits a catalog entry for everything that did not
-pass in the first four. There is no absent tool, so there is nothing for D to "bring".
+**The pre-specification is never missing.** Every tool that did not pass in the four blocks gets a
+catalog line. There is no absent tool, so there is nothing for D to "bring".
 
 **Block 4 is already the subject → tool link.** `referenced` is the names of the `toolUse` of the
 **retained history**. B already reads the projected history.
 
 The real problem is what happens when D lowers a card's resolution. Its `toolUse` leave the retained
-history, the name drops off `referenced`, and the tool falls from block 4 to block 5 — it loses the
-`inputSchema`. But the description **keeps naming the tool**
-(`tools used: list_investment_positions ×3`). The model reads about a tool it no longer knows how to
-call.
+history, the name drops off `referenced`, and the tool falls out of the projection into the catalog — it
+loses the `inputSchema`. But the description **keeps naming the tool**
+(`tools used: list_investment_positions ×3`). The model reads about a tool it can no longer call without
+loading it first.
 
 That is a defect **D introduces**, not one D fixes. The guard exists so as not to introduce it:
 
 ```
   card in full content  ──▶  tool names enter the referenced  ──▶  full spec
   card in description   ──▶  tool names enter the referenced  ──▶  full spec
-  card in title         ──▶  they do not enter                ──▶  pre-specification
+  card in title         ──▶  they do not enter                ──▶  catalog line only
 ```
 
 A description is history at a lower resolution, and `referenced` means "the history mentions this" —
@@ -991,12 +993,12 @@ The two scales become aligned, and neither has an "absent" level:
 |---|---|
 | full content | full specification |
 | description | full specification |
-| title | pre-specification |
+| title | catalog line (pre-specification) |
 
-Consequence for the budget: D does **not** compete with B's `catalog_tokens` and cannot overflow the
-schema budget, because it emits no spec at all. What D moves is the boundary between block 4 and
-block 5, and the cost of that boundary is the `inputSchema` of the tools of the cards above title —
-measurable, and limited by the number of cards, not by the number of tools.
+Consequence for the budget: D does **not** compete with B's `catalog_chars` and cannot overflow the
+schema budget, because it emits no spec at all. What D moves is the boundary between the `referenced`
+block and the catalog, and the cost of that boundary is the `inputSchema` of the tools of the cards above
+title — measurable, and limited by the number of cards, not by the number of tools.
 
 ## 14. What D serves of the measured numbers
 
@@ -1079,8 +1081,9 @@ D exposes two recovery routes, and they answer different questions:
 
 A tool stays out of both, and §13.1 explains why: raising a tool from pre-specification to full
 specification is B's decision, taken from `referenced`. D already influences that by publishing the
-names of the cards above title, and the model already has B's `find_tools` for the case of wanting a
-tool no card mentions. A third route to the same thing would be ambiguity, not convenience.
+names of the cards above title, and the model already has B's `find_tools` plus `get_tool_details` for
+the case of wanting a tool no card mentions. A third route to the same thing would be ambiguity, not
+convenience.
 
 Honest caveat about `expand`: subject and artifact have different parameters — line range and pattern
 only exist for an artifact. Either the signature carries fields that only apply to half the cases, or
@@ -1096,11 +1099,14 @@ what the table above fixes.
 - Rate of `expand` requested by the model. It is the direct measure of the automatic choice's error,
   and a high number at the start is good: it means the way back exists and the model finds it.
 - Premature calls, against **B alone** and not against zero. The 15 to 17 that the
-  `progressive_tool_disclosure` counter measures come from tools never used yet — the inherent cost of
-  the catalog, which no graph solves. D's prediction is *not to make it worse*: if it names a tool in
-  the description without preserving the spec, the number goes up, and that is how the defect of
-  §13.1 shows up in the measurement.
-- How many tools D promoted from block 5 to block 4, and how many `inputSchema` tokens that cost. It
+  `progressive_tool_disclosure` counter measured came from tools never used yet, on the **previous**
+  design, where an undisclosed tool still sat in `tool_specs` as a reduced entry with an empty
+  `inputSchema`. With the catalog in the system prompt the counter should sit near zero, so the baseline
+  to compare against is whatever B alone records on the current code. D's prediction is unchanged —
+  *not to make it worse*: if it names a tool in the description without preserving the spec, the number
+  goes up, and that is how the defect of §13.1 shows up in the measurement.
+- How many tools D promoted from the catalog into the `referenced` block, and how many `inputSchema`
+  tokens that cost. It
   is the direct price of the §13.1 guard, and it needs to stay below what the description saved on the
   same call.
 - **Curve of recovery cycles per turn** — `expand` plus `find_context`, across the session. It is the

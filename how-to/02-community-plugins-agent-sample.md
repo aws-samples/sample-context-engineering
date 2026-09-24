@@ -207,11 +207,12 @@ same preview budget on the chunks that answer the question.
 
 ## B — Progressive tool disclosure
 
-Projects the call's tool list down to the `find_tools` search tool, the `always_available` tools, the
-schemas already exposed and still live by TTL, the tools the history references, and a ~20-token
-catalog entry for everything else. A full schema enters the call when the model searches for it, and
-leaves again after `ttl_cycles` idle cycles. Every tool stays callable throughout — only what the call
-is *told about* changes.
+Projects the call's tool list down to what is callable on it: the two plugin tools `find_tools` and
+`get_tool_details`, the `always_available` tools, the schemas already loaded and still live by TTL, and
+the tools the history references. Every other tool is **one line in the system prompt** — its name and
+a summary of its description, at most `catalog_chars` characters. A full schema enters the call when the
+model loads it by name, and leaves again after `ttl_cycles` idle cycles. Every tool stays callable
+throughout — only what the call is *told about* changes.
 
 ```python
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
@@ -222,9 +223,10 @@ agent = Agent(
     tools=[account_statement],
     plugins=[
         ProgressiveToolDisclosure(
-            catalog_tokens=20,   # description budget per undisclosed tool; None drops the catalog
-            ttl_cycles=5,        # cycles an exposed schema survives after its last use
-            top_k=4,             # tools exposed per find_tools call
+            catalog_chars=80,    # character limit of each catalog line; None drops the catalog
+            summarizer=None,     # None = the agent's own model writes the lines, once per tool
+            ttl_cycles=5,        # cycles a loaded schema survives after its last use
+            top_k=4,             # tools listed per find_tools call
             # A retrieval tool must never need discovery: the model is told to call it in the text
             # that replaced the payload. Name the ones your setup installs.
             always_available=["retrieve_context"],
@@ -233,14 +235,29 @@ agent = Agent(
 )
 ```
 
+The flow is **catalog → `get_tool_details([names])` → call**. The model reads the names in the system
+prompt, asks for the ones it wants — several in one call — and their full parameters arrive in its tool
+list on the next call. `find_tools` is the fallback for a need no listed name fits: it searches and
+reports names plus summaries, and loading is still `get_tool_details`' job, so there is one road to a
+schema rather than two.
+
+A catalog line is a **summary, not a cut**. A description that already fits `catalog_chars` is used
+verbatim and costs nothing; a longer one is summarized once by a model, cached per `(name, description)`
+for the life of the plugin, and falls back to a sentence- or word-boundary truncation if the summarizer
+fails. Pass your own `summarizer` to avoid the calls entirely. What they cost is reported as
+`summary_usage` on the plugin's per-agent state, next to what the catalog saves.
+
 The saving scales with catalog size: with a handful of tools there is little schema to avoid. It pays
 off at the tool counts a real agent reaches — the benchmark runs 93 tools for ~63k tokens of schema
 per call.
 
-Expect the model to **skip the search**. Measured over 60 turns: 5 `find_tools` searches against 14
-premature cancellations. The catalog names a tool, the model calls it straight away with no arguments,
-the plugin's pre-call guard cancels the call and exposes the schema, and the model retries
-successfully. Nothing is lost, but each occurrence costs one model cycle.
+A catalog name is not in `tool_specs` at all, so nothing in the call claims it is callable with no
+arguments. If a model calls one anyway, a pre-call guard cancels that call with "call it again" and the
+schema is already loaded for the retry — a safety net rather than the normal path. The measurements that
+made that path common (5 `find_tools` searches against 14 premature cancellations over 60 turns) were
+taken on the **previous design**, where every undisclosed tool sat in `tool_specs` as a reduced entry
+with an empty `inputSchema` that read as "takes no arguments". Those figures do not describe this one,
+and the benchmark's `searches` / `loads` / `premature_cancellations` counters are what to read instead.
 
 ## D — Context graph
 
@@ -346,15 +363,15 @@ agent = Agent(
         ),
         graph,
         ProgressiveToolDisclosure(
-            catalog_tokens=20,
+            catalog_chars=80,
             ttl_cycles=5,
             top_k=4,
-            # Derived, never hard-coded. A tool disclosure has not exposed is reduced to a catalog
-            # entry with an EMPTY inputSchema, and every retrieval tool here needs arguments -- a
-            # Title, a reference, a search need. So a hidden one is called with nothing, cancelled by
-            # the premature-call guard, and only exposed on the retry: the model pays a round trip to
-            # learn what the folded-context guidance already told it to do. Reading the names off the
-            # plugin keeps this correct when `include_artifact_tool` is false, as it is above.
+            # Derived, never hard-coded. A tool that is only in the catalog is not in `tool_specs` at
+            # all, so the model has to load it with `get_tool_details` before it can be called -- and
+            # every retrieval tool here needs arguments (a Title, a reference, a search need). Making
+            # them always available spends no cycle on loading what the folded-context guidance
+            # already told the model to call. Reading the names off the plugin keeps this correct
+            # when `include_artifact_tool` is false, as it is above.
             always_available=[*graph.retrieval_tool_names, "retrieve_context"],
             referenced_source=graph_referenced_tools,
         ),
@@ -463,7 +480,10 @@ Which puts each plugin in a different position:
   the whole prompt, history included. Measured on Opus 5, 44 of 109 calls came back with `cacheRead = 0`
   and those 44 carried 98.4% of the arm's cache writes. Note the irony: the plugin works (schema down
   from 62,656 tokens to ~5,300), and it is that success that triggers the penalty — a small tool set is
-  one you change often.
+  one you change often. Its catalog now sits in the system prompt, which does not add a second source of
+  invalidation: a line only enters or leaves the catalog when the same load or expiry already changed
+  `toolConfig` ahead of it, and the line's text is cached so it never drifts on its own. Loading several
+  tools in one `get_tool_details` call is therefore cheaper than loading them one at a time.
 - **`ContextGraph` removes messages from the middle of the history.** Everything after the edit is new.
   Its digest block is appended after the cache point and so is billed as ordinary input, which is the
   right design; the removal is what cannot be made cache-friendly, because the removal *is* the plugin.
