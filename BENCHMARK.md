@@ -1,475 +1,215 @@
-# Benchmark — the same agent on six models, with and without prompt caching
+# Benchmark
 
-The figures on the [landing page](README.md) are one model with prompt caching off. This page is the
-whole measurement behind them: **nine runs, five configurations each, 45 cells**, across six models
-from four providers, with the caching-on counterpart of every Claude run — followed by a **second study
-of twelve further cells** on the tight-window class, three models from three different vendors, which
-asks what happens where the window is the binding constraint rather than the bill.
+Eleven models, one scripted conversation, five configurations each. This page is organised **by model**:
+what the model is, what the plugins were set to, what the harness was set to, what came out, and what that
+run does and does not support.
 
-It exists because two of the conclusions flip depending on the model you run, and a reader who only
-sees the headline cannot tell which regime they are in.
+Read part 1 and part 2 first — they define the script and the parameters every table below refers to. Part
+4 is the model list. Part 5 is what survives across models; nothing in a single model's section should be
+generalised on its own.
 
-## What was run
+- [1. What a run is](#1-what-a-run-is)
+- [2. The plugins and their parameters](#2-the-plugins-and-their-parameters)
+- [3. Prices](#3-prices)
+- [4. The models](#4-the-models)
+- [5. What holds across the models](#5-what-holds-across-the-models)
+- [6. Reproducing this](#6-reproducing-this)
+- [7. What is not settled](#7-what-is-not-settled)
 
-The same **60-turn scripted conversation**, replayed once per configuration. 30 of the 60 turns are
-scored against deterministic ground truth; the other 30 are unscored mass, there to grow the history.
-The five configurations are the bare agent, each practice alone, and all three together. At list prices
-the whole battery is the sum of the Cost column below — about **$2,260**, which is what reproducing it
-costs and most of it is the bare-agent arms.
+---
 
-| Model | Model id | Context window | Caching in this benchmark |
+## 1. What a run is
+
+### The script
+
+One scripted conversation of **60 turns**, replayed start to finish for each configuration. The same 60
+prompts in the same order every time, so two configurations differ only in what the agent was allowed to
+send — never in what it was asked.
+
+The scenario is a personal-finance and cloud-operations assistant over **mocked tools**: account listings,
+investment positions, portfolio allocations, statement exports, connector diagnostics, CloudWatch metrics,
+IAM policies, S3 listings and documentation lookups. Several tools return **40,000–120,000 characters** in
+one result, which is what makes the context grow: the payload mass is in the tool results, not in the
+conversation.
+
+**Half the script is scored.** 30 of the 60 turns carry weighted expectations — 18 hand-written plus 12
+generated. The other 30 are unscored mass, present to lengthen the history, and they are *grounded*: each
+makes a real tool call and contributes a real payload.
+
+### How correctness is scored
+
+Deterministically, never by an LLM judge. The tools are mocked, so every factual question has one
+computable answer, and ground truth is derived from the tool implementations rather than written by hand
+(`src/ground_truth.py`). Expectations are strings the answer must contain, may contain, or must **not**
+contain — the last catching the confidently wrong answers a degraded context produces.
+
+| Column | What it means |
+|---|---|
+| **Accuracy** | fraction of expectation *weight* met across the run. Partial credit: a turn that states the right figure but omits a secondary fact scores between 0 and 1. |
+| **Correct** | turns with no *critical* failure — the fact the question was actually asking for. The stricter reading, and why a configuration can gain accuracy while losing a turn. |
+
+Figures must match **as the tools formatted them**. A paraphrased or reformatted number fails even when the
+arithmetic is right: an assistant that restates `42,1%` as `42.1%` has introduced an error class, and this
+harness treats it as one on purpose. See `src/accuracy.py`.
+
+### The five arms
+
+| Arm | What runs |
+|---|---|
+| Baseline (no plugin) | nothing. Every tool payload enters the history whole and stays there. The honest control: it measures the cost of doing nothing. |
+| Progressive Tool Disclosure only | practice B |
+| Relevance Filtering only | practice A |
+| Context Graph only | practice D |
+| **All three combined** | A + B + D |
+
+Three leave-one-out arms (`no-disclosure`, `no-relevance`, `no-graph`) exist and are reachable from
+`--configs`, but are deliberately not in the default set.
+
+### The columns, and the three traps
+
+Column format follows the repository README: **Total tokens · Δ tokens · Accuracy · Correct · Turn · Cost ·
+Δ cost**. Three column groups are added only where the data requires them, and their absence is
+information too:
+
+- **Cache columns** (`Uncached · Cache read · Cache write · read:write · Billed tokens`) appear only for
+  runs that actually served cache reads. In a cached run `inputTokens` stops measuring input, so a
+  single token column would be wrong.
+- **Completion columns** (`Answered · Scored lost · Refused`) appear only where at least one arm had calls
+  refused by the provider. `Answered` is how many of the 60 turns produced an answer at all; `Scored lost`
+  how many of the 30 scored turns were never answered; `Refused` how many calls came back
+  `ContextWindowOverflow`.
+- **Peak/call** appears for every model whose window is ≤ 300K, as an absolute and as a share of the
+  window.
+
+**Trap 1 — a truncated arm looks cheap.** An arm that stopped answering also stopped spending. Its token
+total is understated (a refused call is not billed), its accuracy is bounded by truncation rather than by
+the strategy, and its seconds-per-turn is the pace of an abandoned conversation. Rows like that are marked
+✝ and must be read from `Answered` first.
+
+**Trap 2 — the Δ needs the right reference.** Where the baseline itself truncated, **Δ is measured against
+the arm that consumed the most tokens** (marked `← ref`), not against the baseline. A baseline that
+answered 9 of 60 turns stopped accumulating tokens when it stopped answering, so a delta against it prints
+as a regression for the arms that completed the script. The heaviest arm is the closest thing a run has to
+the full workload uncompressed.
+
+**Trap 3 — one replay per cell.** Unless a table says otherwise, every cell is a single replay. The agent
+chooses its own tool path, so two replays of the same configuration differ on their own. This is measured,
+not assumed — see [the noise floor](#the-noise-floor), where four byte-identical arms moved by up to six
+materially-correct turns. **Nothing under ±6 turns or ±20% of tokens is evidence at n=1.**
+
+**Peak input per call is the truncation-immune quantity.** It is measured on calls that went out, so it
+cannot be flattered by an arm that stopped working. Where it is shown as an *estimated* prompt it can
+exceed 100% of the window — that is a call the provider refused.
+
+---
+
+## 2. The plugins and their parameters
+
+Three practices, three installable packages. Nothing here forks the SDK.
+
+| | Practice | Package | What it does |
+|---|---|---|---|
+| **A** | Relevance filtering | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | Scores a tool result's chunks against the question and keeps only what answers it, replacing the payload with a preview **before it enters the history**. |
+| **B** | Progressive tool disclosure | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | Sends a lean tool catalog and fetches a tool's full spec on demand, then forgets it — attacking the fixed ~63k schema floor. |
+| **D** | Context graph | [`strands-context-graph`](community-plugins/strands-context-graph/) | Reorganises the history as a graph with remove/recover over an immutable log, folding each turn to full content, Description or Title. |
+
+The two act at different moments, which is why they compose: **the filter acts on a tool result before it
+enters the history; the graph acts on a history that already exists.** The filter only makes the graph's
+input smaller.
+
+### Current parameters (generation 3)
+
+These are the values in `src/config.py` today, and what a reproduction run uses. Every one reads an
+override off the environment, and each run records under `meta.sweep_overrides` which ones it read.
+
+| Plugin | Parameter | Value | Env override |
 |---|---|---:|---|
-| Claude Opus 4.8 | `us.anthropic.claude-opus-4-8` | 1M | off **and** on |
-| Claude Opus 5 | `us.anthropic.claude-opus-5` | 1M | off **and** on |
-| Claude Fable 5 | `us.anthropic.claude-fable-5` | 1M | off **and** on |
-| GPT-6 Astra | `us.openai.gpt-6-astra` | 1.05M | implicit, cannot be turned off |
-| GPT-5.6 Sol | `us.openai.gpt-5.6-sol` | 1M | implicit, cannot be turned off |
-| GLM 5 | `zai.glm-5` | 200K | none published |
-
-Context windows and caching support are from each model's Bedrock model card: [Opus
-4.8](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html),
-[Opus 5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html),
-[Fable 5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5.html),
-[Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html),
-[Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html),
-[GLM 5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5.html). The three
-Claude cards list both Implicit and Explicit Prompt Caching on `bedrock-runtime`; GLM 5's card lists
-neither, and also no cross-Region inference profile, which is why it is invoked by its bare model id.
-
-Caching, where it was on, used Bedrock's default **5-minute TTL** with checkpoints placed by the SDK.
-Rates come from `MODEL_PRICING` in
-[`validation/community-plugin-A-B-D/src/config.py`](validation/community-plugin-A-B-D/src/config.py),
-read off the published pricing page and model cards on 2026-09-21. See
-[Prices](#prices-and-what-they-are-based-on) below.
-
-## How to read the table
-
-Twelve columns, and the two that decide everything are the cache pair.
-
-| Column | What it is | What to do with it |
-|---|---|---|
-| **Uncached input** | Input tokens billed at the full input rate | On a cached run this is near zero *by construction*, not because the prompt was small — see the note below |
-| **Cache read** | Input tokens served from the cache, billed at ~0.10x input | High is good: the prefix is being reused |
-| **Cache write** | Input tokens written to the cache, billed at ~1.25x input | This is the expensive band. Written and never re-read = 25% *more* than not caching at all |
-| **read:write** | The ratio of the two | **The single best predictor of cost in this table.** Above ~5 is cheap, below ~2 is expensive, with no exception across the 45 cells |
-| **Billed tokens** | The three input columns summed | Compare *within* a run, never across runs — see trap 2 |
-| **Cost** | Billed units x the declared rates, auxiliary embedding and rerank calls included | The number to decide on |
-| **Accuracy** | Fraction of expectation *weight* met, with partial credit | Read together with the next column, never alone |
-| **Correct** | Turns with no *critical* failure, out of 30 scored | The stricter reading; a config can gain accuracy and lose a turn |
-| **s/turn** | Mean seconds per turn | Relative only: the five configurations ran concurrently |
-| **$/correct** | Cost ÷ correct turns | Puts cost and quality on one axis. A ranking, not a measurement — the denominator is 30 |
-
-🏆 marks the best `$/correct` of that run. `—` in read:write means no cache traffic at all.
-
-**On a cached run, `inputTokens` stops measuring input.** Bedrock reports cached input separately, and
-the documented identity is `total input tokens = inputTokens + cacheReadInputTokens +
-cacheWriteInputTokens` ([Prompt
-caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)). Since the SDK puts
-the cache checkpoint at the end of the prompt, every token falls into read or write and the uncached
-column keeps only structural residue — 174 to 344 tokens for a 60-turn conversation. A report that
-quotes that column alone reports almost nothing; this table sums all three.
-
-### Three traps in this data
-
-**1. A truncated run looks cheap.** An arm that died of window overflow sends fewer tokens because it
-stopped working. Cells marked `*` are truncated, and a percentage taken against them is fiction.
-
-**2. Billed tokens are not comparable between runs.** The agent picks its own tool path, and one extra
-tool call early in a 60-turn conversation rides along in every later call. Opus 5's baseline billed 35%
-*more* tokens with caching on than off for exactly this reason — seven more tool calls, not a caching
-artefact. Within a run all five configurations replay the same script, so the comparison holds; across
-runs, compare cost and ratios rather than token mass.
-
-**3. One replay.** Accuracy differences of two or three turns are inside the noise floor of a single
-replay on a non-deterministic agent. Only the window-regime gap (GLM 5) is large enough to read as a
-quality signal; in the eight large-window runs the accuracy column spans 88.2% to 100% while the cost
-column spans 48x.
-
-## The table
-
-| Model | Cache | Configuration | Uncached input | Cache read | Cache write | read:write | Billed tokens | Cost | Accuracy | Correct | s/turn | $/correct |
-|---|:--:|---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|
-| **Opus 4.8** | off | Baseline | 14,346,683 | 0 | 0 | — | 14,346,683 | $72.50 | 96.9% | 28/30 | 11.7 | $2.59 |
-|  |  | Relevance | 12,735,943 | 0 | 0 | — | 12,735,943 | $64.44 | 96.9% | 29/30 | 11.7 | $2.22 |
-|  |  | Disclosure | 9,427,523 | 0 | 0 | — | 9,427,523 | $48.10 | 94.5% | 27/30 | 12.8 | $1.78 |
-|  |  | Graph | 10,345,220 | 0 | 0 | — | 10,345,220 | $52.43 | 93.7% | 27/30 | 10.8 | $1.94 |
-|  |  | 🏆 All three | 2,538,860 | 0 | 0 | — | 2,538,860 | $13.35 | 96.1% | 28/30 | 8.7 | $0.48 |
-| **Opus 4.8** | **on** | 🏆 Baseline | 174 | 14,842,278 | 215,531 | 68.9 | 15,057,983 | $9.49 | 94.5% | 27/30 | 8.0 | $0.35 |
-|  |  | Relevance | 204 | 15,701,512 | 211,522 | 74.2 | 15,913,238 | $10.08 | 94.5% | 27/30 | 10.2 | $0.37 |
-|  |  | Disclosure | 202 | 5,578,574 | 3,679,071 | 1.5 | 9,257,847 | $26.65 | 94.5% | 27/30 | 10.0 | $0.99 |
-|  |  | Graph | 576,260 | 8,205,206 | 1,521,353 | 5.4 | 10,302,819 | $17.29 | 99.2% | 29/30 | 9.2 | $0.60 |
-|  |  | All three | 328,419 | 1,067,190 | 2,253,984 | 0.5 | 3,649,593 | $17.13 | 94.5% | 27/30 | 10.4 | $0.63 |
-| **Opus 5** | off | Baseline | 19,700,954 | 0 | 0 | — | 19,700,954 | $100.44 | 89.8% | 24/30 | 24.3 | $4.18 |
-|  |  | Relevance | 18,039,650 | 0 | 0 | — | 18,039,650 | $91.88 | 96.9% | 28/30 | 21.4 | $3.28 |
-|  |  | Disclosure ⚠ | 646,854 | 0 | 0 | — | 646,854 | $3.25 | 31.5% | 1/30 | 1.8 | *invalid* |
-|  |  | Graph | 13,416,010 | 0 | 0 | — | 13,416,010 | $69.54 | 93.7% | 25/30 | 26.0 | $2.78 |
-|  |  | 🏆 All three | 5,492,513 | 0 | 0 | — | 5,492,513 | $29.15 | 100.0% | 30/30 | 17.9 | $0.97 |
-| **Opus 5** | **on** | Baseline | 196 | 26,321,602 | 285,328 | 92.3 | 26,607,126 | $17.16 | 92.1% | 24/30 | 23.2 | $0.71 |
-|  |  | 🏆 Relevance | 200 | 17,343,538 | 237,313 | 73.1 | 17,581,051 | $12.05 | 92.9% | 25/30 | 19.7 | $0.48 |
-|  |  | Disclosure | 218 | 10,217,732 | 6,296,888 | 1.6 | 16,514,838 | $46.07 | 92.1% | 26/30 | 18.7 | $1.77 |
-|  |  | Graph | 664,269 | 9,508,166 | 2,898,117 | 3.3 | 13,070,552 | $28.34 | 94.5% | 27/30 | 22.0 | $1.05 |
-|  |  | All three | 363,512 | 1,526,446 | 3,470,771 | 0.4 | 5,360,729 | $25.96 | 95.3% | 27/30 | 18.3 | $0.96 |
-| **Fable 5** | off | Baseline | 21,579,745 | 0 | 0 | — | 21,579,745 | $217.86 | 100.0% | 30/30 | 20.5 | $7.26 |
-|  |  | Relevance | 17,227,288 | 0 | 0 | — | 17,227,288 | $174.07 | 97.6% | 29/30 | 18.1 | $6.00 |
-|  |  | Disclosure | 14,241,315 | 0 | 0 | — | 14,241,315 | $144.58 | 97.6% | 29/30 | 20.5 | $4.99 |
-|  |  | Graph | 12,576,521 | 0 | 0 | — | 12,576,521 | $128.54 | 96.1% | 28/30 | 21.0 | $4.59 |
-|  |  | 🏆 All three | 5,249,763 | 0 | 0 | — | 5,249,763 | $55.31 | 96.9% | 28/30 | 22.1 | $1.98 |
-| **Fable 5** | **on** | Baseline | 190 | 18,254,571 | 250,858 | 72.8 | 18,505,619 | $23.38 | 99.2% | 30/30 | 16.1 | $0.78 |
-|  |  | 🏆 Relevance | 212 | 17,687,881 | 229,005 | 77.2 | 17,917,098 | $22.47 | 98.4% | 29/30 | 15.7 | $0.77 |
-|  |  | Disclosure | 248 | 8,001,876 | 6,708,508 | 1.2 | 14,710,632 | $93.96 | 98.4% | 29/30 | 19.3 | $3.24 |
-|  |  | Graph | 812,339 | 10,368,477 | 2,528,084 | 4.1 | 13,708,900 | $53.19 | 98.4% | 29/30 | 21.7 | $1.83 |
-|  |  | All three | 360,961 | 1,291,253 | 3,567,890 | 0.4 | 5,220,104 | $52.57 | 96.1% | 27/30 | 23.3 | $1.95 |
-| **GPT-6 Astra** | implicit | Baseline | 228 | 15,270,589 | 213,127 | 71.7 | 15,483,944 | $21.20 | 92.9% | 26/30 | 10.4 | $0.82 |
-|  |  | 🏆 Relevance | 222 | 12,069,886 | 185,578 | 65.0 | 12,255,686 | $17.32 | 88.2% | 23/30 | 10.2 | $0.75 |
-|  |  | Disclosure | 252 | 7,810,974 | 5,534,968 | 1.4 | 13,346,194 | $86.18 | 92.9% | 26/30 | 10.3 | $3.31 |
-|  |  | Graph | 252 | 1,473,390 | 8,536,045 | 0.2 | 10,009,687 | $120.58 | 91.3% | 25/30 | 10.9 | $4.82 |
-|  |  | All three | 292 | 17,588 | 4,051,747 | 0.0 | 4,069,627 | $57.37 | 94.5% | 27/30 | 9.2 | $2.12 |
-| **GPT-5.6 Sol** | implicit | 🏆 Baseline | 242 | 15,679,917 | 218,227 | 71.9 | 15,898,386 | $8.82 | 97.6% | 29/30 | 9.0 | $0.30 |
-|  |  | Relevance | 276 | 17,145,788 | 208,099 | 82.4 | 17,354,163 | $9.55 | 97.6% | 29/30 | 10.3 | $0.33 |
-|  |  | Disclosure | 340 | 11,120,494 | 12,432,437 | 0.9 | 23,553,271 | $73.82 | 96.9% | 28/30 | 10.8 | $2.64 |
-|  |  | Graph | 278 | 790,589 | 10,825,077 | 0.1 | 11,615,944 | $60.56 | 91.3% | 25/30 | 9.9 | $2.42 |
-|  |  | All three | 344 | 17,861 | 6,811,669 | 0.0 | 6,829,874 | $38.54 | 96.1% | 28/30 | 10.0 | $1.38 |
-| **GLM 5** | n/a | Baseline \* | 5,247,478 | 0 | 0 | — | 5,247,478 | $5.26 | 63.8% | 14/30 | 12.7 | *invalid* |
-|  |  | Relevance | 19,383,574 | 0 | 0 | — | 19,383,574 | $19.46 | 98.4% | 29/30 | 48.8 | $0.67 |
-|  |  | Disclosure \* | 11,309,551 | 0 | 0 | — | 11,309,551 | $11.37 | 74.8% | 20/30 | 30.1 | *invalid* |
-|  |  | Graph | 8,884,923 | 0 | 0 | — | 8,884,923 | $8.99 | 85.0% | 23/30 | 28.1 | $0.39 |
-|  |  | 🏆 All three | 2,432,543 | 0 | 0 | — | 2,432,543 | $2.49 | 92.1% | 26/30 | 12.0 | $0.10 |
-
-#### Observations — GLM 5 is the only model in this table whose window binds
-
-`Correct` counts turns that scored; it does not say whether the turn was *attempted*. On GLM 5 two arms
-stopped answering partway through, so their low token and cost figures are the cost of an abandoned
-conversation rather than of an efficient one. **Answered** is how many of the 60 turns produced an answer
-at all, and **Scored lost** how many of the 30 scored turns were never answered — those score zero for a
-reason that is not the strategy's:
-
-| GLM 5 arm | Answered | Scored lost | Refused calls | Peak call | % of window | Billed tokens | Δ vs heaviest arm |
-|---|:--:|:--:|---:|---:|---:|---:|---:|
-| Baseline \* | **15/60** | **15/30** | **90** | 198,588 | **99%** | 5,247,478 | −72.9% |
-| Relevance ← reference | 60/60 | 0 | 0 | 192,751 | 96% | 19,383,574 | — |
-| Disclosure \* | **41/60** | **7/30** | **38** | 198,249 | **99%** | 11,309,551 | −41.7% |
-| Graph | 60/60 | 0 | 0 | 117,147 | 59% | 8,884,923 | −54.2% |
-| 🏆 All three | 60/60 | 0 | 0 | **43,490** | **22%** | 2,432,543 | **−87.4%** |
-
-- **The delta is taken against `relevance`, not against the baseline.** The baseline answered 15 of 60
-  turns, so its 5.2M tokens are not a measurement of the work — they are what it managed to send before
-  it stopped. A percentage against it makes every completing arm look like a regression, which is how
-  the same data reads in the main table above. The honest reference is the arm that consumed the **most**
-  tokens while completing, because that is the closest thing this run has to the full workload
-  uncompressed. On that basis the full stack sends **87.4% less** than the heaviest completing arm, for
-  26 of 30 against that arm's 29 of 30.
-- **Peak call, not total, is what decides completion here.** The two truncated arms peak at 99% of the
-  window on the calls that went out, and lost 90 and 38 more that never did; the two that complete peak at
-  59% and 22%. Peak is also the only quantity truncation cannot contaminate, because it is measured on
-  calls the provider accepted.
-- **The baseline's 63.8% accuracy is not a quality reading.** Fifteen of its thirty scored turns were
-  never answered. Its accuracy over the turns it *did* answer is not comparable to an arm that answered
-  all sixty, which is why `$/correct` is marked *invalid* for it rather than printed.
-
-**⚠ Opus 5 / disclosure, cache off — not a result.** The model never called `find_tools`, so it ran
-with no tool schema and answered almost nothing (1 of 30, 1.8s per turn). The same arm with caching on
-scored 26 of 30. This is path variance, not a property of the plugin.
-
-## What the numbers say
-
-### 1. With caching off, the full stack wins on every model that fits
-
-Five models, one ranking: all three combined is the cheapest arm, by 72% to 82%, and its accuracy stays
-within the replay noise of the bare agent — on Opus 5 it was the *best* arm at 30 of 30. This is the
-regime the landing page reports, and the one the practices were designed for.
-
-### 2. With caching on, the ranking inverts — and read:write says why
-
-Cache reads cost about **0.10x** the input rate and cache writes about **1.25x**, a factor of ~12
-between the two bands ([Bedrock pricing](https://aws.amazon.com/bedrock/pricing/); the
-[prompt-caching page](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) states
-that written tokens "can be billed at a rate that is higher than the standard input token rate", for
-implicit and explicit caching alike).
-
-A bare agent only ever *appends* to its prompt, so its prefix is stable and it reads nearly everything
-back: read:write of 69 to 92. The compressing plugins rewrite the prompt, so they write continuously
-and read little: 0.4 to 1.6. That is the whole inversion. On Opus 4.8 the bare agent falls from $72.50
-to $9.49 by switching one flag, while all three combined *rises* from $13.35 to $17.13 — the
-recommended configuration becomes the more expensive one.
-
-Expressed as an effective rate — cost divided by billed prompt tokens, which does not move with the
-agent's path — the same thing reads as a price band per configuration:
-
-| Model | Cache | Baseline | Relevance | Graph | Disclosure | All three | Uncached input rate |
-|---|:--:|---:|---:|---:|---:|---:|---:|
-| Opus 4.8 | off | $5.05 | $5.06 | $5.07 | $5.10 | $5.26 | $5.00 |
-| Opus 4.8 | **on** | **$0.63** | **$0.63** | $1.68 | $2.88 | $4.69 | $5.00 |
-| Opus 5 | **on** | **$0.64** | **$0.69** | $2.17 | $2.79 | $4.84 | $5.00 |
-| Fable 5 | **on** | **$1.26** | **$1.25** | $3.88 | $6.39 | $10.07 | $10.00 |
-| GPT-6 Astra | implicit | **$1.37** | **$1.41** | $12.05 | $6.46 | $14.10 | $11.00 |
-| GPT-5.6 Sol | implicit | **$0.55** | **$0.55** | $5.21 | $3.13 | $5.64 | $4.40 |
-| GLM 5 | n/a | $1.00 | $1.00 | $1.01 | $1.01 | $1.02 | $1.00 |
-
-*Two readings validate the method and one is the finding.* The uncached rows land within 1-5% of the
-published rate, and GLM 5 within 1% — so the accounting is right. The finding is the right-hand cells:
-on Astra and Sol, all three combined pays **28% more per token than not caching at all**, which is
-exactly the 1.25x write multiplier arriving on almost every token sent.
-
-### 3. Relevance filtering is the one practice that is compatible with caching
-
-Its effective rate is indistinguishable from the bare agent's on all five caching models, and it is
-🏆 in four of the nine runs. The reason is mechanical, and the documentation states the rule: cache
-checkpoints are processed `tools` → `system` → `messages`, and "changing content in an earlier section
-invalidates the cache for later sections"
-([Prompt caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)). So:
-
-| Practice | What it changes in the prompt | Effect on the cache |
-|---|---|---|
-| Bare agent | appends to the end only | prefix always matches — cheapest possible reads |
-| **Relevance filtering** | replaces a payload **as it arrives**, then never touches it | still append-only — cache intact |
-| Progressive tool disclosure | edits `toolConfig`, the **first** section | every change invalidates the whole prompt |
-| Context graph | removes messages from the **middle** of the history | everything from that point on is new |
-
-Measured on Opus 5 with caching on: 44 of the disclosure arm's 109 calls came back with `cacheRead = 0`
-— total rewrites — and those 44 carry 98.4% of its 6.3M cache writes. The disclosure plugin did its job
-(the tool schema fell from 62,656 tokens to 5,300-11,606); it is the *editing* that costs, not the
-size. The rule that follows is a design criterion: a context plugin is cache-compatible if and only if
-its mutations are append-only or confined to the end of the prompt.
-
-### 4. On a small window, the practices stop being an optimisation
-
-GLM 5 is the only model here under 1M tokens, and it reverses the question. Peak input on a single call:
-baseline 198,588 against a 200K window, all three combined 43,490. The bare agent answered **15 of the 60
-turns**, losing 90 calls to overflow and 15 of the 30 scored turns outright; the full stack answered all
-sixty and lost nothing. Cost stops being the argument — the argument is that the conversation finishes.
-The per-arm accounting is in the observations under the table above.
-
-This is also the regime where caching does not compete: GLM 5's card publishes no caching of either
-type, so there is nothing to weigh the plugins against.
-
-GLM 5 was the only model here under 1M tokens, which made this finding rest on a single model until the
-[tight-window study](#a-second-study-the-tight-window-class-on-three-vendors) below added three more from
-three different vendors. It reproduces on all three, and sharpens it: the bare agent is not the only arm
-that overflows in this class, and which *single* practice keeps a model inside its window depends on the
-model.
-
-### 5. Caching makes the agent cheaper, not better
-
-The model sees an identical prompt whether or not it was served from cache, so accuracy must be
-unchanged in principle — and measured, it moves by up to three turns in both directions with no
-mechanism, which is the single-replay noise floor. Do not read "cache on, 27 of 30" against "cache off,
-28 of 30" as a quality difference.
-
-### 6. Compression and caching optimise the same redundancy
-
-On the caching runs, **amplification** — billed prompt tokens divided by the tokens that were written
-to cache exactly once, i.e. how many times the same content was re-sent — is **66x to 83x** for the
-bare agent and the relevance filter, and **1.0x to 1.6x** for all three combined. The full stack barely
-re-sends anything, which is the point; but it also means the cache has nothing cheap left to re-read
-and collects only expensive writes. The two techniques address the same waste from opposite ends, and
-only one of them can bill it. That is why they are alternatives rather than a stack — with relevance
-filtering the exception, because it compresses once and then stops changing the prompt.
-
-## A second study: the tight-window class, on three vendors
-
-The table above is six models, five of them with a window of 1M tokens, and its argument is cost. This
-second study asks the other question: **what happens in the class where the window is the binding
-constraint**, and does the answer depend on whose model it is. Three vendors, one class, same 60-turn
-script, same 30 scored turns, prompt caching **off** in every row — two of the three models publish no
-caching at all, so there is nothing to turn on.
-
-| Vendor | Model | Window |
-|---|---|---:|
-| Zhipu | `zai.glm-4.7` | 202,752 |
-| Anthropic | `us.anthropic.claude-haiku-4-5` | 200,000 |
-| Alibaba | `qwen.qwen3-next-80b-a3b` | 256,000 |
-
-One column is new, and it is the one that decides how to read the rest. **Peak input** is the largest
-single call the arm sent, as a percentage of that model's window — the one quantity in this study that
-truncation cannot contaminate, because it is measured on the calls that *did* go out. **Completed** is
-how many of the 60 turns produced an answer at all, and **Scored lost** how many of the 30 scored turns
-were never answered. The twelve columns of the table above describe what
-a run spent and scored; neither of them says whether the conversation survived, and in this class that
-is the question.
-
-A cell marked `*` is truncated in the sense of trap 1 — it spent less and scored less because it stopped
-working. **In this study the truncated cells are not confined to the baseline**, which is what makes the
-accuracy column dangerous here: on GLM 4.7 three of the five arms overflowed.
-
-**Δ tokens is measured against the heaviest arm of each model, not against the baseline**, and the
-`← ref` marker names it. Every baseline here is truncated, so a delta against it is arithmetic on a
-number that stopped growing when the run stopped answering — it prints +301.0% for an arm that completed
-the whole script and reads as a regression. The heaviest *completing* arm is the closest thing each run
-has to the full workload uncompressed, so that is the reference.
-
-| Model | Configuration | Peak input | Completed | Scored lost | Total tokens | Δ vs heaviest | Accuracy | Correct | Cost | $/correct |
-|---|---|---:|:--:|:--:|---:|---:|---:|:--:|---:|---:|
-| **GLM 4.7** | Baseline * | 85% | 22/60 | **12/30** | 5,814,709 | −58.9% | 65.3% | 14/30 | $3.52 | *$0.25* |
-| | Relevance * | 83% | 27/60 | **11/30** | 11,140,007 | −21.3% | 66.1% | 17/30 | $6.75 | *$0.40* |
-| | Disclosure * ← ref | 85% | 40/60 | **6/30** | 14,153,824 | — | 73.2% | 20/30 | $8.56 | *$0.43* |
-| | Graph | 70% | 60/60 | 0 | 13,191,178 | −6.8% | **95.3%** | **27/30** | $7.96 | $0.29 |
-| | 🏆 All three | **37%** | 59/60 † | 0 | 5,916,862 | **−58.2%** | 83.5% | 22/30 | $3.60 | $0.16 |
-| **Haiku 4.5** | Baseline * | 80% | 24/60 | **12/30** | 6,058,882 | −54.1% | 65.3% | 13/30 | $6.09 | *$0.47* |
-| | Relevance ← ref | 75% | 60/60 | 0 | 13,214,041 | — | **93.7%** | **26/30** | $13.32 | $0.51 |
-| | Disclosure | 65% | 60/60 | 0 | 12,156,014 | −8.0% | 88.2% | 22/30 | $12.26 | $0.56 |
-| | Graph | 50% | 60/60 | 0 | 7,894,451 | −40.3% | 79.5% | 18/30 | $7.97 | $0.44 |
-| | 🏆 All three | **22%** | 60/60 | 0 | 3,260,491 | **−75.3%** | 89.8% | 25/30 | $3.34 | $0.13 |
-| **Qwen3 Next** | Baseline * | 117% | 14/60 | **16/30** | 8,231,351 | −75.1% | 59.1% | 11/30 | $1.16 | *$0.11* |
-| | Relevance | 70% | 60/60 | 0 | 21,803,250 | −33.9% | **91.3%** | **26/30** | $3.10 | $0.12 |
-| | Disclosure ← ref | 83% | 60/60 | 0 | 33,004,333 | — | 86.6% | 23/30 | $4.64 | $0.20 |
-| | Graph * | **131%** | 16/60 | **15/30** | 25,119,509 | −23.9% | 55.9% | 10/30 | $3.53 | *$0.35* |
-| | 🏆 All three | **25%** | 59/60 | 0 | 5,512,454 | **−83.3%** | 81.9% | 23/30 | $0.82 | $0.04 |
-
-#### Observations
-- **Read `Completed` and `Scored lost` before anything else in a starred row.** A starred arm did not
-  answer the script. GLM 4.7's bare agent answered 22 of 60 turns and never answered **12 of the 30**
-  scored ones, so most of its missing points are absence rather than error. The same holds for Qwen3
-  Next's *graph-only* arm — 16 turns answered, 15 scored turns lost — which is why its 55.9% must not be
-  read as the graph scoring badly.
-- **The full stack is the only arm that is both cheapest and complete.** Against the heaviest arm of each
-  model it sends **58.2%, 75.3% and 83.3%** fewer tokens while answering 59, 60 and 59 turns. Every other
-  low-token cell in this table is low because the arm stopped working.
-- **Peak input predicts completion without exception here**: every arm at 80% of its window or above lost
-  calls, every arm at 75% or below completed. The full stack sits at 37%, 22% and 25%.
-- **A completing arm can still be the most expensive one.** Relevance filtering on Haiku and disclosure on
-  Qwen3 Next are the heaviest arms of their models *and* they finish: the window problem and the token
-  problem are not the same problem, and only the full stack addresses both.
-- Peak input is the estimated prompt of the largest call, which is why it can exceed 100%: that is a call
-  the provider refused, and it is how a truncated arm advertises itself.
-- † GLM 4.7's all-three lost its one turn to a `ReadTimeoutError`, a network failure, not to the window —
-  that arm overflowed zero times.
-
-One replay per cell, so trap 3 applies in full: differences of two or three turns between two arms that
-both completed are inside the noise floor. Measured separately on this class, the same arm replayed three
-times moved by up to **two materially-correct turns out of eighteen**. `s/turn` is omitted from this
-table rather than reported: the three models ran concurrently *and* several arms died early, so the
-figure would compare the pace of a finished conversation against the pace of an abandoned one.
-
-### 7. Only the full stack keeps every vendor inside its window
-
-Peak input for all three combined is **37%, 22% and 25%** of the window against a bare agent's 85%, 80%
-and 117%. That is the finding, and `Completed` is its consequence: 59, 60 and 59 turns against 22, 24 and
-14. Every arm using **one** plugin fails to control the peak on at least one vendor — relevance and
-disclosure both sit at 83-85% on GLM 4.7 and overflow there (54 and 30 calls lost), and the graph alone
-reaches **131%** on Qwen3 Next and loses 88. No single practice is sufficient in this class on all three
-vendors; the conjunction is, on all three.
-
-### 8. Folding dialogue does not shrink a tool payload
-
-The graph alone is the cleanest arm on GLM 4.7 — 27 of 30, zero errors, the highest accuracy anywhere in
-this study — and on Qwen3 Next the same plugin peaks **above the window** and finishes 16 turns of 60.
-That is not a contradiction and not noise: in this scenario the mass is the 40k-120k-character
-documentation payloads, not the conversation, so folding history compresses the part that was not the
-problem. What attacks the payload is the relevance filter, and what removes the fixed schema floor is
-disclosure. The three are complementary by construction, which is why the conjunction holds where its
-members do not.
-
-**What this study cannot tell you is which single plugin is "best".** An arm that completed 27 of 60
-turns and an arm that completed 60 cannot be compared on accuracy at all — the first one's score is a
-score of the turns it survived. Relevance filtering looks second from last on GLM 4.7 (17 of 30) and is
-the most accurate arm on both other vendors (26 of 30); the GLM figure is its 54 overflows, not its
-recall. Read the single-strategy rows for their peak and their completion, and take accuracy from them
-only where `Completed` reads 60/60.
-
-### 9. The saving changes sign with the vendor, and that is not a regression
-
-All three combined cuts tokens 46.2% on Haiku and 33.0% on Qwen, but spends **1.8% more** than the bare
-agent on GLM 4.7. Read that against `Completed`: the GLM 4.7 baseline answered 22 turns and the full
-stack answered 59. Nearly tripling the work delivered for 1.8% more tokens is the result, and the sign
-alone gets it backwards. This is trap 1 at full strength — strong enough that the cheapest `$/correct`
-cell in the study belongs to a truncated baseline, which is why every truncated ratio here is italicised
-rather than competing.
-
-Measured on the same class with two to three replays, the leave-one-out arms say it from the other side:
-on GLM 4.7 at 20 turns all three combined is −54.8% tokens, but relevance+graph is **+6.1%** and
-relevance+disclosure **+13.1%** — either *pair* spends more than using no plugin at all. The saving is a
-conjunction, not a sum. See `CONFIGURATIONS` in
-[`src/config.py`](validation/community-plugin-A-B-D/src/config.py).
-
-### 10. The parameters to use on a window up to 250K
-
-These are the values the study above was run with, and the reason to write them down is that **every
-alternative tried against them lost**. On a window this size the knobs are not free choices — the
-sweep below is what rules them out.
-
-Three of them are the `TIGHT_WINDOW` set and apply *only* in this class; on a 1M window they cost 50%
-for nothing, which is finding 11 below. The harness picks the set from the model, so running a
-tight-window model needs no configuration at all — the values are spelled out here because a reader
-wiring the plugins into their own agent has no harness to pick for them.
-
-```python
-from strands import Agent
-from strands.agent.conversation_manager import NullConversationManager
-from strands_context_graph import ContextGraph, EmbeddingSimilarityMatcher
-from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
-from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
-
-relevance = RelevanceFilter(
-    store=FileStore("./artifacts"),   # file-backed: a reference read hours later must still resolve
-    max_result_tokens=4_000,          # above this a payload is filtered; the payloads here are 10-30x it
-    config={
-        "reranker": BedrockReranker(model_id="cohere.rerank-v3-5:0"),
-        "relevance_threshold": 0.02,  # calibrated to THIS reranker -- see the note below
-        "chunk_tokens": 500,
-        "preview_tokens": 2_000,      # REGIME-DEPENDENT: 2,000 here, 800 on a large window
-    },
-)
-
-graph = ContextGraph(
-    expand_threshold=0.55,       # keep the package default: with the filter installed, fold LESS
-    collapse_floor=0.45,
-    link_threshold=0.50,
-    description_tokens=250,      # REGIME-DEPENDENT: 250 here, 100 on a large window
-    body_budget=None,            # never bound in this class: peak sat at 22-37% of the window
-    min_cards=3,
-    max_retrieval_cycles=4,      # REGIME-DEPENDENT: 4 here, 8 on a large window
-    reuse_ttl_cycles=5,
-    include_artifact_tool=False,  # REQUIRED when the relevance filter is installed
-    matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3"),
-)
-
-disclosure = ProgressiveToolDisclosure(
-    catalog_tokens=20,
-    ttl_cycles=5,
-    top_k=4,
-    always_available=[*graph.retrieval_tool_names, "retrieve_context"],
-)
-
-agent = Agent(
-    model=...,                                    # max_tokens=4096, NOT higher -- see below
-    conversation_manager=NullConversationManager(),  # a precondition of the graph, not a preference
-    plugins=[relevance, graph, disclosure],       # construct the graph before disclosure
-)
+| A | `max_result_tokens` (trigger) | 4,000 | `VALIDATION_MAX_RESULT_TOKENS` |
+| A | `chunk_tokens` | 500 | `VALIDATION_CHUNK_TOKENS` |
+| A | `preview_tokens` | **by regime** — 800 large / 2,000 tight | `VALIDATION_PREVIEW_TOKENS` |
+| A | `relevance_threshold` | 0.02 | `VALIDATION_RELEVANCE_THRESHOLD` |
+| A | `include_retrieval_tool` | **False** | `VALIDATION_RELEVANCE_RETRIEVAL_TOOL` |
+| B | `catalog_tokens` | 20 | `VALIDATION_CATALOG_TOKENS` |
+| B | `ttl_cycles` | 5 | `VALIDATION_TTL_CYCLES` |
+| B | `top_k` | 4 | `VALIDATION_TOP_K` |
+| B | `catalog_in_system_prompt` | False | `VALIDATION_CATALOG_IN_SYSTEM_PROMPT` |
+| D | `expand_threshold` | 0.62 | `VALIDATION_GRAPH_EXPAND` |
+| D | `collapse_floor` | 0.45 | `VALIDATION_GRAPH_COLLAPSE` |
+| D | `link_threshold` | 0.50 | `VALIDATION_GRAPH_LINK` |
+| D | `description_tokens` | **by regime** — 100 large / 250 tight | `VALIDATION_GRAPH_DESCRIPTION_TOKENS` |
+| D | `body_budget` | **40,000** | `VALIDATION_GRAPH_BODY_BUDGET` |
+| D | `max_retrieval_cycles` | **by regime** — 8 large / 4 tight | `VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES` |
+| D | `reuse_ttl_cycles` | 5 | `VALIDATION_GRAPH_REUSE_TTL` |
+| D | `tags_per_card` | 5 | `VALIDATION_GRAPH_TAGS` |
+| D | `neighbors_per_candidate` | 3 | `VALIDATION_GRAPH_NEIGHBORS` |
+| D | `min_cards` | 3 | `VALIDATION_MIN_CARDS` |
+| D | `include_artifact_tool` | True, every arm | — |
+
+`relevance_threshold=0.02` is not a low bar by mistake: it is a position in a distribution, and
+`cohere.rerank-v3-5` returns strong matches around 0.29, so the package default of 0.5 rejects every chunk.
+
+`body_budget` is the only ceiling on how much travels at full content. `expand_threshold` is a per-Card
+*classifier* and cannot see the total, so with `body_budget=None` a long enough conversation sends every
+Card above the threshold whole — growth linear in the conversation, bounded by nothing.
+
+### The window regime
+
+Three budgets are not one number but two, and which pair applies is decided by the model's declared window
+against `TIGHT_WINDOW_CEILING = 300_000`. Recorded in every run as `meta.window_regime`, overridable with
+`VALIDATION_WINDOW_REGIME`.
+
+| Budget | `LARGE_WINDOW` | `TIGHT_WINDOW` |
+|---|---:|---:|
+| `preview_tokens` | 800 | 2,000 |
+| graph `description_tokens` | 100 | 250 |
+| graph `max_retrieval_cycles` | 8 | 4 |
+
+They are held as **one set** rather than three knobs because that is how they were measured: the comparison
+that established them reverted all three at once, so the aggregate is attributable and the individual
+contributions are not.
+
+**The ceiling is 300K, not the 250K the class is named after, and that is a measurement.** Qwen3 Next's
+window is 256,000 — above 250K — and it sits firmly in the tight regime: 94 refused calls on the bare
+agent, and a graph-alone arm that peaked *above* the window. The real determinant is the window against the
+payload mass in front of it, for which the window is only a proxy, and the errors are asymmetric — tight
+budgets on a large window cost tokens, large budgets on a tight window cost answers.
+
+**`preview_tokens` is the ceiling on everything downstream.** The graph derives a Card's numeric lines from
+the message, and by then the message carries the preview, so `expand_card` cannot return a figure the
+preview dropped. The two budgets are in series:
+
+```
+payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
 ```
 
-Five of these are load-bearing in a way a reader would not guess, and each one was measured:
+Raising the second while the first starves buys nothing, which is the measured reason a Description budget
+of 100 was correct *for* a preview of 800 and wrong once the preview was raised.
 
-**Cap the model's output at 4,096, and resist raising it.** The provider subtracts the requested output
-cap from the window *before* it admits the prompt, so the cap is a reservation taken out of history. At
-8,192 on GLM 4.7 Flash, Bedrock refused calls whose prompt was 194,561 tokens — a prompt that fits at
-4,096. Raising it to recover truncated answers converts completing calls into overflows, which is the
-opposite of what this class needs.
+### Parameter generations
 
-**`include_artifact_tool=False` is required, not optional.** With the relevance filter installed there
-are otherwise two retrieval tools over two stores that do not know each other, the model reaches for the
-wrong one, and the reference does not resolve.
+The tables in part 4 span three parameter sets. Each model section names the one its run used. **Do not
+compare a cell from one generation against a cell from another** — they are different code.
 
-**`relevance_threshold=0.02` is a position in a distribution, not a number.** On `cohere.rerank-v3-5` a
-strong match scores ~0.29 and an unrelated chunk ~0.03; the package default of `0.5` rejects every chunk
-that exists. Change the reranker and this value is meaningless until you re-measure its distribution.
+| Generation | Commit | What is different | Runs |
+|---|---|---|---|
+| **1** | `dd55284` | Filter ships its own `retrieve_context` (**on**). Graph split in two tunings: alone `0.62/0.45/0.50`, desc 250, `body_budget=60,000`; with-relevance `0.55/0.45/0.50`, desc **100**, `body_budget=None`. Preview 800 for every model. No retrieval ceiling. The graph's `expand_artifact` **dropped** whenever the filter is installed. Output cap hardcoded 4,096. | Opus 4.8 ×2, Opus 5 ×2, Fable 5 ×2, Astra, Sol, GLM 5 |
+| **2** | `d951195` | Preview **2,000** for every model. Graph with-relevance desc **250**, `max_retrieval_cycles=4`, live vector index, batched `expand_card`, conditional guidance. Disclosure gains the `[+]` catalog sigil, the guessed-call guard and the `find_tools` exemption. A truncated answer is now scored for what it says instead of as silence. | GLM 4.7, Haiku 4.5, Qwen3 Next |
+| **3** | `HEAD` | Filter's `retrieve_context` **removed by default**. One unified graph tuning for every arm. `body_budget=40,000`. `neighbors_per_candidate=3` — the `similar` edge finally has a reader. Window regime picks preview / desc / cycles. `include_artifact_tool=True` in every arm. | Opus 4.8, Haiku 4.5, GLM 5, GLM 4.7 Flash, Qwen3 Next, Nemotron Nano 9B |
 
-**`expand_threshold` stays at the default rather than rising.** When the relevance filter has already
-replaced a payload with a preview, the graph should fold *less*, not more — the full-content rung is
-already the cheap one. Raising it to 0.65 lost 1.5 materially-correct turns *and* increased tokens.
+Two of those changes were defects rather than tuning. The filter's `retrieve_context` was a safety net whose
+every result became a conversation message re-sent on every later call — the measured mechanism behind
+relevance filtering costing **+21.6%** on Haiku 4.5 in generation 1 instead of saving. And
+`include_artifact_tool=not relevance_installed` existed to leave exactly one artifact-retrieval tool when
+there were two; once the filter stopped registering one, the same line left the combined arm with **none**.
 
-**`preview_tokens=2_000` is the ceiling on everything downstream.** The graph derives a Card's numeric
-lines from the message, and by then the message carries the preview — so `expand_card` cannot return a
-figure the preview dropped. Lowering the preview to save tokens silently lowers the Description budget's
-value too; these two budgets are in series and the first one decides the second.
+### What was tried against these values and rejected
 
-#### What was tried against these values and rejected
-
-GLM 4.7, 20 turns of which 18 scored, two to three replays per row, all-three arm, each row changing
-only what its name says. The reference row is the block above.
+GLM 4.7, 20 turns of which 18 scored, two to three replays per row, all-three arm, each row changing only
+what its name says. Generation 2 parameters.
 
 | Variant | Total tokens | Δ vs baseline | Correct | Verdict |
 |---|---:|---:|:--:|---|
-| Baseline, no plugin * | 3,733,922 | — | 12.5/18 | overflowed 6x per replay |
+| Baseline, no plugin ✝ | 3,733,922 | — | 12.5/18 | overflowed 6× per replay |
 | **Reference (the values above)** | 1,906,838 | **−48.9%** | **16/18** | nothing beat it |
 | `expand_threshold` 0.65 | 2,044,890 | −45.2% | 14.5/18 | lost turns **and** cost tokens |
 | `ttl_cycles` 12 | 1,604,010 | −57.0% | 14.5/18 | −8pp tokens for −1.5 turns |
@@ -481,244 +221,632 @@ only what its name says. The reference row is the block above.
 | `relevance_threshold` 0.05 | 1,640,628 | −56.1% | 15/18 | −1 turn, inside the noise |
 
 The shape of that table is the finding: **the trade is monotone and the defaults sit at its knee.** Every
-row that spends less scores less, none dominates the reference, and the spread between replays of the
-*same* row reached two materially-correct turns — so a variant that gains one turn has not gained
-anything. A ninth attempt, raising the output cap to 8,192 and turning on a citable-density rerank prior,
-doubled cost for +0.67 turns and is the clearest example of the failure mode this table exists to
-prevent.
+row that spends less scores less, none dominates the reference, and the spread between replays of the *same*
+row reached two materially-correct turns — so a variant that gains one turn has gained nothing. A ninth
+attempt, raising the output cap to 8,192 and turning on a citable-density rerank prior, doubled cost for
++0.67 turns.
 
-**What is genuinely open.** These rows are 20 turns, where the window is not yet binding on this model.
-The 60-turn study above is where it binds, and there the same defaults hold — but the *single*-plugin
-ordering changes between the two lengths, so a value tuned at 20 turns should be confirmed at the length
-you actually run. Every knob is reachable from the environment (`VALIDATION_PREVIEW_TOKENS`,
-`VALIDATION_GRAPH_EXPAND`, `VALIDATION_TTL_CYCLES`, …) and each run records which ones it read, so
-repeating this sweep at another length is a list of variables rather than a list of commits.
+These rows are 20 turns, where the window is not yet binding on this model. A value tuned at 20 turns should
+be confirmed at the length actually run.
 
-### 11. Those parameters are for this class only — on a 1M window they cost 50% for nothing
+---
 
-The values in finding 10 were calibrated where evidence was starving. Replayed on **Opus 4.8**, a 1M
-window, caching off, the same five arms with those values against the published run above:
+## 3. Prices
 
-| Configuration | Published | With these parameters | Δ tokens | Correct, then → now |
-|---|---:|---:|---:|:--:|
-| Baseline (no plugin) | 14,377,382 | 16,178,910 | +12.5% | 28/30 → 26/30 |
-| Disclosure | 9,466,084 | 11,690,932 | +23.5% | 27/30 → 28/30 |
-| Relevance | 12,766,237 | 15,133,294 | +18.5% | 29/30 → 28/30 |
-| Graph | 10,385,714 | 10,043,554 | −3.3% | 27/30 → 24/30 |
-| **All three** | **2,569,888** | **3,858,779** | **+50.2%** | 28/30 → 28/30 |
+Every dollar figure is `measured units × a published list rate`. Nothing is derived from a bill, and no
+discount, commitment or account-specific fee is modelled — read the cost columns as **list cost**, and the
+comparisons between them as ratios between rows priced identically. Rates live in `MODEL_PRICING` in
+[`src/config.py`](validation/community-plugin-A-B-D/src/config.py), so correcting one never needs another
+run: the report re-renders from the recorded JSON.
 
-**Read the baseline row first, because it is the yardstick.** The baseline runs no plugin, so no change
-in finding 10 can reach it — and it still moved +12.5% in tokens and lost two materially-correct turns.
-That is trap 2 and trap 3 measured directly: the agent picked a different tool path, and one extra call
-early in a 60-turn conversation rides along in every later one. **Nothing smaller than that is
-attributable.** The graph's −3.3% is not a change; the disclosure and relevance rows are barely outside
-it; the all-three row, at four times the yardstick, is.
+Cost includes what each strategy spends **on its own account** — the graph's embedding calls
+(`cohere.embed-multilingual-v3`) and the filter's rerank calls (`cohere.rerank-v3-5:0`). Without that, a
+strategy that buys its saving with a second model call would rank better than it is.
 
-The mechanism is `preview_tokens` and `description_tokens`, and the graph-only arm isolates it. Both runs
-of that arm carry the same 5.4x jump in graph links that the live vector index produced (81 → 482), and
-its tokens went *down* — so the link count is not the amplifier. What only the all-three arm has is the
-filter's preview feeding the Card's Description, and its peak call went **49,943 → 81,065 (+62%)** while
-the resolution ladder barely moved (full 20/9/4 → 19/8/7). The graph is not folding differently; every
-rung is simply carrying more. Cancellations also went 14 → 24, which is the tightened guessed-call guard
-charging a round trip for each invented-argument call it now refuses.
-
-And it bought nothing: 28 of 30 both times. On a window this size there was no starvation to fix.
-
-**So these two budgets are regime-dependent, exactly as the graph's own thresholds were — and
-the harness now treats them that way.** The file carried `GRAPH_ALONE` and `GRAPH_WITH_RELEVANCE`
-because one set of graph knobs looked wrong for both cases (that split has since been removed — see
-finding 12); `LARGE_WINDOW` and `TIGHT_WINDOW` in
-[`src/config.py`](validation/community-plugin-A-B-D/src/config.py) are the same construction for the
-three budgets that differ across window classes:
-
-| Budget | `LARGE_WINDOW` | `TIGHT_WINDOW` |
-|---|---:|---:|
-| `preview_tokens` | 800 | 2,000 |
-| graph `description_tokens` (with relevance) | 100 | 250 |
-| graph `max_retrieval_cycles` | 8 | 4 |
-
-They are held as one set rather than three knobs because that is how they were measured: the comparison
-above reverted all three at once, so the aggregate is attributable and the individual contributions are
-not. The regime is derived from the agent model's declared context window, recorded in every run's
-`meta.window_regime`, and overridable with `VALIDATION_WINDOW_REGIME=tight|large` — which is how the
-Opus row above was produced.
-
-**The selection ceiling is 300K, not the 250K the class is named after, and that is a measurement
-rather than a rounding.** Qwen3 Next's window is 256,000 — above 250K — and it sat firmly in the tight
-regime: 92 overflows on the bare agent, and the graph-alone arm peaking at 131% of the window. The real
-determinant is not the window but the window against the payload mass in front of it, for which the
-window is only a proxy; the ceiling carries headroom because the errors are asymmetric. Tight budgets on
-a large window cost tokens (+50.2%, buying nothing). Large budgets on a tight window cost answers.
-
-### 12. The redesigned stack on six models — and one coupling that had become a bug
-
-Six changes went in after finding 11, all of them removals of something that existed without a
-consumer, or of a consumer that had disappeared without anyone turning the thing off:
-
-| Change | What it was | What it is |
+| Claim | Status | Source |
 |---|---|---|
-| `RelevanceFilter.include_retrieval_tool` | `True` — the filter shipped its own `retrieve_context` | **`False`** — the filter ends at the preview, mints no reference, writes no store |
-| graph tuning split | `GRAPH_ALONE` / `GRAPH_WITH_RELEVANCE`, picked by whether the filter was installed | **one `GRAPH_TUNING`** — the filter acts on a payload before it enters the history, the graph on a history that already exists, so neither has business reading the other |
-| graph `body_budget` with relevance | `None` — the step-down had no trigger, so every Card above the threshold travelled whole | **40,000** — the ceiling binds and a Card that does not fit drops one rung |
-| `find_context` neighbours | the `similar` edge was measured, stored, and read by nothing | **`neighbors_per_candidate=3`** — the edge finally has a reader |
-| disclosure catalog | always in `toolConfig` | `catalog_in_system_prompt` available (default `False`; every published figure was measured with it in the schema) |
-| harness `include_artifact_tool` | `not config.relevance` — the graph lost `expand_artifact` *because* the filter was installed | **`True` always** |
+| Per-model input, output and cache rates | published | [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/) and each model card |
+| Cache writes are billed above the input rate, implicit **and** explicit | documented | [Billing for cached tokens](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) |
+| Cache write = **1.25×** input, read = 90% discount, on GPT-5.6 | documented | [Prompt caching for models from OpenAI](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) |
+| Astra's cache write $13.75 against $11.00 input (1.25×) | published | [Astra model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html) |
+| Claude cache-read at 0.10× and write at 1.25× / 2.00× input | published for the models listed, **inferred** for Haiku 4.5, whose cache rates are not on the pricing table | `MODEL_PRICING` |
+| Token counts, call counts, accuracy, timings | measured from the API's own `usage` | the run JSON under `results/` |
 
-That last row was a real defect by the time it was found, and it is the clearest example of the
-pattern. The drop existed to leave exactly one artifact-retrieval tool when there were two; once the
-filter stopped registering one, the same line left the combined arm with **none** — the graph kept
-storing artifacts and nothing could read them back. Measured: with the drop still in place the Opus
-`all` arm was 23/30, and `A5-statement` (one row of a statement payload) failed. With it removed,
-26/30.
+---
 
-The full six-model replay of the corrected code, 60 turns, five arms each, caching off, one replay per
-cell. One table per model, because the columns that matter differ by class — and on a model whose window
-binds, three of them must be read before anything else:
+## 4. The models
 
-- **Answered** — how many of the 60 turns produced an answer at all. `Correct` counts turns that scored;
-  it does not say whether the turn was attempted.
-- **Scored lost** — how many of the 30 scored turns were never answered. Those score zero for a reason
-  that is not the strategy's, and they are what pulls a truncated arm's accuracy down.
-- **Refused** — calls Bedrock rejected with `ContextWindowOverflow`. A refused call is not billed, so an
-  arm with refusals has an **understated** token total.
+| Model | Window | Caching | Generations measured | Bare agent finished? | Cheapest completing arm |
+|---|---:|---|---|:--:|---|
+| [Claude Opus 4.8](#41-claude-opus-48) | 1,000,000 | explicit | 1 off, 1 on, 3 off | yes | all three |
+| [Claude Opus 5](#42-claude-opus-5) | 1,000,000 | explicit | 1 off, 1 on | yes | all three |
+| [Claude Fable 5](#43-claude-fable-5) | 1,000,000 | explicit | 1 off, 1 on | yes | all three |
+| [GPT-6 Astra](#44-gpt-6-astra) | 1,050,000 | implicit | 1 | yes | relevance |
+| [GPT-5.6 Sol](#45-gpt-56-sol) | 1,000,000 | implicit | 1 | yes | baseline |
+| [Claude Haiku 4.5](#46-claude-haiku-45) | 200,000 | explicit | 2, 3 | gen 2 **no**, gen 3 yes | all three |
+| [GLM 5](#47-glm-5) | 200,000 | none | 1, 3 | **no** | all three |
+| [GLM 4.7](#48-glm-47) | 202,752 | none | 2 | **no** | all three |
+| [GLM 4.7 Flash](#49-glm-47-flash) | 202,752 | none | 3 | **no** | all three |
+| [Qwen3 Next 80B](#410-qwen3-next-80b) | 256,000 | none | 2, 3 | **no** | all three |
+| [Nemotron Nano 9B](#411-nemotron-nano-9b) | 128,000 | none | 3 | **no** | all three |
 
-On the four models where the bare agent truncated, **Δ tokens is measured against the arm that consumed
-the most tokens** (`← ref`), not against the baseline. A baseline that answered 9 of 60 turns stopped
-accumulating tokens when it stopped answering, so a delta against it prints as a regression for the arms
-that completed the script. The heaviest arm is the closest thing each run has to the full workload
-uncompressed.
+---
 
-#### Claude Opus 4.8 — window 1,000,000
+### 4.1 Claude Opus 4.8
 
-| Configuration | Answered | Refused | Total tokens | Δ vs baseline | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) | 60/60 | 0 | 13,647,898 | — | 192,662 (19%) | 97.6% | 28/30 | $68.89 |
-| Progressive Tool Disclosure only | 60/60 | 0 | 9,381,497 | −31.3% | 139,961 (14%) | **97.6%** | **29/30** | $47.74 |
-| Relevance Filtering only | 60/60 | 0 | 13,447,761 | −1.5% | 189,714 (19%) | 89.8% | 27/30 | $67.96 |
-| Context Graph only | 60/60 | 0 | 10,254,016 | −24.9% | 149,010 (15%) | 85.0% | 21/30 | $51.84 |
-| **All three combined** | 60/60 | 0 | **3,348,835** | **−75.5%** | **59,405 (6%)** | 91.3% | 26/30 | **$17.47** |
+| Field | Value |
+|---|---|
+| Model id | `us.anthropic.claude-opus-4-8` |
+| Vendor | Anthropic |
+| Context window | 1,000,000 |
+| Caching | explicit; read $0.50, write $6.25 (5m) / $10.00 (1h) per Mtok |
+| List price | $5.00 in / $25.00 out per Mtok |
+| Runs | generation 1 caching off, generation 1 caching on, generation 3 caching off |
 
-**Observations.** Nothing truncates here, so every column is comparable and the baseline is the right
-reference. The window is not the constraint — the bare agent's largest call uses 19% of it — so this row
-set is a pure cost argument: **−75.5% for $17.47 against $68.89**, in line with the −82.1% published
-earlier under a different parameter set. The accuracy spread across the five arms (21/30 to 29/30) sits
-inside the variance measured in finding 13 and must not be read as a ranking.
+**Plugin parameters.**
 
-#### Claude Haiku 4.5 — window 200,000
+| Plugin | Generation 1 | Generation 3 |
+|---|---|---|
+| A relevance | `chunk 500`, `preview 800`, `threshold 0.02`, retrieval tool **on** | `chunk 500`, `preview 800` (large regime), `threshold 0.02`, retrieval tool **off** |
+| B disclosure | `catalog 20`, `ttl 5`, `top_k 4` | same, plus `[+]` sigil and guessed-call guard |
+| D graph | alone `0.62/0.45/0.50`, desc 250, body 60,000 · with-relevance `0.55/0.45/0.50`, desc **100**, body **none** · artifact tool dropped in the all arm | unified `0.62/0.45/0.50`, desc 100 (large regime), **body 40,000**, cycles 8, neighbours 3, artifact tool on |
 
-| Configuration | Answered | Refused | Total tokens | Δ vs baseline | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) | 60/60 | 0 | 12,703,571 | — | 196,722 (**98%**) | **95.3%** | **27/30** | $12.77 |
-| Progressive Tool Disclosure only | 60/60 | 0 | 10,296,950 | −18.9% | 160,920 (80%) | 88.2% | 22/30 | $10.37 |
-| Relevance Filtering only | 60/60 | 0 | 12,036,064 | −5.3% | 166,779 (83%) | 86.6% | 21/30 | $12.15 |
-| Context Graph only | 60/60 | 0 | 7,883,137 | −37.9% | 114,003 (57%) | 76.4% | 17/30 | $7.95 |
-| **All three combined** | 60/60 | 0 | **3,224,286** | **−74.6%** | **60,393 (30%)** | 84.2% | 20/30 | **$3.32** |
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · rerank
+`cohere.rerank-v3-5:0` · embed `cohere.embed-multilingual-v3` · region `us-east-1`.
 
-**Observations.** This run shows how narrow the margin is on a 200K window: the bare agent completed
-everything, and its largest call used **98% of the window**. It did not overflow — it simply did not need
-one more paragraph of history. Nothing in the token column says that; only the peak does. Compare GLM 5
-below, the same 200K window with a heavier tool path, where the bare agent lost 84 calls. The full stack's
-peak sits at 30%, and that margin is the result here, not the saving.
+**Results — generation 1, caching off.**
 
-#### GLM 5 — window 200,000
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7s | $72.50 | — |
+| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8s | $48.10 | −33.7% |
+| Relevance Filtering only | 12,766,237 | −11.2% | **96.9%** | **29/30** | 11.7s | $64.45 | −11.1% |
+| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8s | $52.43 | −27.7% |
+| **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7s** | **$13.36** | −81.6% |
 
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) ✝ | **18/60** | **14/30** | **84** | 6,150,161 | −58.3% | 193,207 (97%) | 65.3% | 14/30 | $6.17 |
-| Progressive Tool Disclosure only ✝ | **25/60** | **11/30** | **64** | 9,170,600 | −37.8% | 193,113 (97%) | 66.1% | 16/30 | $9.22 |
-| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 14,739,065 | — | 198,011 (99%) | 80.3% | 24/30 | $14.80 |
-| Context Graph only | 60/60 | 0 | 0 | 7,175,940 | −51.3% | 102,645 (51%) | **96.1%** | **28/30** | $7.21 |
-| **All three combined** | 60/60 | 0 | 0 | **2,908,717** | **−80.3%** | **41,553 (21%)** | 81.1% | 21/30 | **$2.96** |
+**Results — generation 1, caching on.**
 
-**Observations.** Three of five arms truncated, and the bare agent answered **18 of 60 turns** — its 65.3%
-is mostly absence, with 14 of its 30 scored turns never attempted. Only the graph and the full stack
-finished intact, and they are the only two whose peak stays below half the window. Relevance filtering
-nearly finishes (55 of 60) and is the heaviest arm of the run, which is why it is the reference rather than
-the baseline; against it the full stack sends **80.3% less** while answering every turn.
+| Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| 🏆 Baseline (no plugin) | 174 | 14,842,278 | 215,531 | **68.9** | 15,057,983 | — | 94.5% | 27/30 | **8.0s** | **$9.49** | — |
+| Progressive Tool Disclosure only | 202 | 5,578,574 | 3,679,071 | 1.5 | 9,257,847 | −38.4% | 94.5% | 27/30 | 10.0s | $26.65 | +181.0% |
+| Relevance Filtering only | 204 | 15,701,512 | 211,522 | **74.2** | 15,913,238 | +5.7% | 94.5% | 27/30 | 10.2s | $10.10 | +6.5% |
+| Context Graph only | 576,260 | 8,205,206 | 1,521,353 | 5.4 | 10,302,819 | −31.4% | **99.2%** | **29/30** | 9.2s | $17.29 | +82.3% |
+| **All three combined** | 328,419 | 1,067,190 | 2,253,984 | **0.5** | 3,649,593 | −75.5% | 94.5% | 27/30 | 10.4s | $17.14 | +80.7% |
 
-#### GLM 4.7 Flash — window 202,752
+**Results — generation 3, caching off.**
 
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) ✝ | **17/60** | **15/30** | **82** | 5,398,019 | −80.3% | 198,536 (98%) | 52.8% | 8/30 | $0.38 |
-| Progressive Tool Disclosure only ✝ ← ref | **36/60** | **7/30** | **40** | 27,403,577 | — | 198,654 (98%) | 58.3% | 11/30 | $1.93 |
-| Relevance Filtering only | 60/60 | 0 | 0 | 17,181,923 | −37.3% | 187,849 (93%) | **75.6%** | 17/30 | $1.22 |
-| Context Graph only ✝ | **52/60** | **2/30** | **8** | 18,123,481 | −33.9% | 198,646 (98%) | 74.8% | 18/30 ✝ | $1.28 |
-| **All three combined** | 60/60 | 0 | 0 | **4,010,248** | **−85.4%** | **53,355 (26%)** | 55.1% | 10/30 | **$0.30** |
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost | Δ cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|---:|
+| Baseline (no plugin) | 13,647,898 | — | 97.6% | 28/30 | 192,662 (19%) | 11.3s | $68.89 | — |
+| Progressive Tool Disclosure only | 9,381,497 | −31.3% | **97.6%** | **29/30** | 139,961 (14%) | 12.6s | $47.74 | −30.7% |
+| Relevance Filtering only | 13,447,761 | −1.5% | 89.8% | 27/30 | 189,714 (19%) | 12.2s | $67.96 | −1.4% |
+| Context Graph only | 10,254,016 | −24.9% | 85.0% | 21/30 | 149,010 (15%) | 10.1s | $51.84 | −24.7% |
+| **All three combined** | **3,348,835** | **−75.5%** | 91.3% | 26/30 | **59,405 (6%)** | 10.6s | **$17.47** | −74.6% |
 
-**Observations.** The one model whose reference arm is itself truncated: disclosure spent 27.4M tokens over
-237 calls and still answered only 36 of 60 turns, which is what an erratic tool path costs when every retry
-carries the whole history. Relevance filtering is the arm to use here — it completes, and among the
-completing arms it scores highest. The full stack completes and is by far the cheapest, but scores
-**10/30**, its worst result on any model. That is a genuine weakness rather than truncation, since the arm
-answered all sixty turns: it is the evidence-selection loss described in finding 8, at its sharpest.
+**Observations.**
 
-#### Qwen3 Next 80B — window 256,000
+- **This is the reference model for the cost argument.** The window is not a constraint — the bare agent's
+  largest call uses 19% of it — so nothing truncates and every column is comparable. The full stack sends
+  **−82.1%** (gen 1) and **−75.5%** (gen 3) for the same 28 and 26 of 30, at a fifth of the cost.
+- **The bare agent still peaks at 192,662–204,439 tokens on one call**, which is more than some models'
+  entire window. That peak is what decides which models this benchmark can run on at all.
+- **With caching on the ranking inverts and `read:write` says why.** The baseline re-reads a stable prefix
+  at 68.9 reads per write and costs **$9.49**; the full stack rewrites its prefix every turn, lands at 0.5,
+  and costs $17.14 — **1.8× more expensive than doing nothing**. Only relevance filtering keeps a
+  cache-friendly ratio (74.2), because it compresses once and then stops changing the prompt.
+- **Caching makes the agent cheaper, not better.** The model sees an identical prompt either way; accuracy
+  moves by up to three turns in both directions with no mechanism, which is the single-replay noise floor.
+- **The generation 3 run is where the two regressions of that generation are visible.** Relevance filtering
+  drops to −1.5% and 27/30, and its two lost turns are `A5-statement` and `R2-cross-reference` — both asking
+  for a redemption figure inside a statement payload. With the preview cutting the passage and
+  `retrieve_context` removed, that content is unreachable. The combined arm fails the same two.
+- **The graph-only arm's 21/30 is not attributable.** The same arm scored 27/30 on a byte-identical run —
+  see [the noise floor](#the-noise-floor).
 
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) ✝ | **13/60** | **17/30** | **94** | 8,591,570 | −74.1% | 248,552 (97%) | 54.3% | 9/30 | $1.21 |
-| Progressive Tool Disclosure only ✝ | **13/60** | **17/30** | **94** | 5,033,909 | −84.8% | 252,395 (99%) | 60.6% | 11/30 | $0.71 |
-| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 33,149,405 | — | 256,310 (100%) | 79.5% | **22/30** | $4.71 |
-| Context Graph only | 60/60 | 0 | 0 | 9,727,355 | −70.7% | 136,350 (53%) | **81.1%** | 20/30 | $1.38 |
-| **All three combined** | 60/60 | 0 | 0 | **4,395,046** | **−86.7%** | **38,496 (15%)** | 74.0% | 17/30 | **$0.68** |
+---
 
-**Observations.** Disclosure alone is exactly the trap these columns exist to prevent: 5.0M tokens and
-$0.71 look like the efficient arm until `Answered` says **13 of 60** and `Refused` says 94. It is the
-second-cheapest cell of the run and the second-worst outcome. A 256K window does not save this model —
-it carries the heaviest payloads of the battery, which is why 250K is the wrong ceiling for the window
-regime in finding 11. The full stack's largest call is **15% of the window**, against a bare agent that
-could not fit its own consolidation turns.
+### 4.2 Claude Opus 5
 
-#### Nemotron Nano 9B — window 128,000
+| Field | Value |
+|---|---|
+| Model id | `us.anthropic.claude-opus-5` |
+| Vendor | Anthropic |
+| Context window | 1,000,000 |
+| Caching | explicit; read $0.50, write $6.25 (5m) / $10.00 (1h) per Mtok |
+| List price | $5.00 in / $25.00 out per Mtok |
+| Runs | generation 1 caching off, generation 1 caching on |
 
-| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Peak/call (% window) | Accuracy | Correct | Cost |
-|---|:--:|:--:|---:|---:|---:|---:|---:|:--:|---:|
-| Baseline (no plugin) ✝ | **9/60** | **21/30** | **102** | 1,596,017 | −85.3% | 111,016 (87%) | 48.8% | 6/30 | $0.10 |
-| Progressive Tool Disclosure only ✝ | **14/60** | **16/30** | **92** | 2,298,800 | −78.8% | 118,522 (93%) | 59.1% | 9/30 | $0.14 |
-| Relevance Filtering only ✝ | **28/60** | **11/30** | **64** | 5,073,784 | −53.3% | 125,719 (98%) | 66.9% | **14/30** ✝ | $0.33 |
-| Context Graph only ✝ ← ref | **43/60** | **7/30** | **34** | 10,868,671 | — | 124,762 (97%) | 59.8% | 11/30 | $0.67 |
-| **All three combined** | **60/60** | **0** | **0** | 6,431,158 | −40.8% | **73,358 (57%)** | **68.5%** | 12/30 | $0.44 |
+**Plugin parameters.** Generation 1, as in [4.1](#41-claude-opus-48): filter retrieval tool on, preview 800,
+graph split `0.62`/`0.55`, `body_budget` 60,000 alone and none with relevance, artifact tool dropped in the
+all arm.
 
-**Observations.** The smallest window in the battery, and the clearest table: **four of the five arms could
-not finish**, and the one column that orders cleanly is `Refused` — 102, 92, 64, 34, **0**. The bare agent
-answered nine turns; its $0.10 is not a price for this workload, it is what nine turns cost. The full stack
-is the only arm that answered all sixty, and against the heaviest arm that *tried* it still sends 40.8%
-fewer tokens. At this window the practices are not an optimisation but the difference between a
-conversation and a truncated log — finding 4, reproduced at half the window.
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · region `us-east-1`.
 
-✝ *This arm had calls refused. Its token total is understated — a refused call is not billed — its accuracy
-is bounded by truncation rather than by the strategy, and every percentage in the row is arithmetic on a run
-that stopped working. Read `Answered` and `Scored lost` first.*
+**Results — caching off.**
 
-Four statements survive the noise band established in finding 13, because each holds on every model:
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) | 19,778,235 | — | 89.8% | 24/30 | 24.3s | $100.44 | — |
+| Progressive Tool Disclosure only ⚠ | 647,368 | −96.7% | 31.5% | 1/30 | 1.8s | $3.25 | −96.8% |
+| Relevance Filtering only | 18,106,860 | −8.5% | 96.9% | 28/30 | 21.4s | $91.89 | −8.5% |
+| Context Graph only | 13,527,548 | −31.6% | 93.7% | 25/30 | 26.0s | $69.54 | −30.8% |
+| **All three combined** | **5,565,805** | **−71.9%** | **100.0%** | **30/30** | 17.9s | **$29.17** | −71.0% |
 
-- **Peak input per call.** The full stack is the lowest in 6 of 6 — 6% to 57% of the window against a bare
-  agent's 19% to 98%. This is the truncation-immune quantity: it is measured on calls that went out.
-- **Turns answered.** The full stack answered **60 of 60 on all six models**. No other arm did: relevance
-  filtering answered everything on one of the four tight-window models, the graph on two, disclosure on
-  none.
-- **Refused calls.** The full stack is at **zero in 6 of 6**, and on Nemotron Nano 9B it is the only arm
-  that is — the bare agent lost 102 calls there, and relevance filtering alone still lost 64.
-- **Cost.** The full stack is the cheapest *completing* arm on 6 of 6. Cheaper cells exist, and every one
-  of them belongs to an arm that stopped answering.
+**Results — caching on.**
 
-**One regression is attributable, and it is the price of removing the filter's retrieval tool.** On
-Opus the two turns the `all` arm gets wrong that the graph-only arm gets right are `A5-statement` and
-`R2-cross-reference` — both asking for a redemption figure that lives inside a statement payload. The
-relevance-only arm fails exactly the same two. With the preview cutting the passage and no
-`retrieve_context` to ask for it back, that content is unreachable; the graph's `expand_artifact` does
-not resolve a reference the filter never minted. Restoring the tool costs what finding 9 measured — 
-every retrieval result becomes a conversation message and rides along on every later call — so the
-trade is explicit rather than free, and `include_retrieval_tool=True` is the way back.
+| Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|
+| Baseline (no plugin) | 196 | 26,321,602 | 285,328 | **92.3** | 26,607,126 | — | 92.1% | 24/30 | 23.2s | $17.16 | — |
+| Progressive Tool Disclosure only | 218 | 10,217,732 | 6,296,888 | 1.6 | 16,514,838 | −37.9% | 92.1% | 26/30 | 18.7s | $46.07 | +168.5% |
+| 🏆 Relevance Filtering only | 200 | 17,343,538 | 237,313 | **73.1** | 17,581,051 | −33.9% | 92.9% | 25/30 | 19.7s | **$12.06** | −29.7% |
+| Context Graph only | 664,269 | 9,508,166 | 2,898,117 | 3.3 | 13,070,552 | −50.7% | 94.5% | 27/30 | 22.0s | $28.34 | +65.2% |
+| **All three combined** | 363,512 | 1,526,446 | 3,470,771 | **0.4** | 5,360,729 | −79.6% | **95.3%** | 27/30 | 18.3s | $25.98 | +51.4% |
 
-### 13. One replay per cell cannot resolve anything smaller than ±6 turns
+**Observations.**
 
-This is the limit to read every table in this document against, and it is measured rather than
-asserted. Between the run that carried the `include_artifact_tool` drop and the run that removed it,
-**four Opus arms were running byte-identical code** — the drop only ever applied where the relevance
-filter was installed, so the baseline, graph-only, relevance-only and disclosure-only arms could not
-have been touched. All eight of those runs refused zero calls, so nothing is truncated either:
+- **The full stack was the most accurate arm of the cache-off run — 30 of 30 against the bare agent's 24.**
+  One replay, so read it as a path the agent can take rather than as a property of the stack; but it is the
+  only arm in this document that scored perfectly.
+- **⚠ The disclosure arm of the cache-off run is not a result.** The model never called `find_tools`, ran
+  without a tool schema and answered almost nothing (1 of 30, 1.8s per turn). The same arm with caching on
+  scored 26 of 30. This is path variance, and it is why a −96.7% token figure appears next to a useless run.
+- With caching on, relevance filtering is the only arm cheaper than doing nothing, at `read:write` 73.1.
+- Opus 5 used **35% more billed tokens with caching than without** on the baseline, purely because the
+  agent's non-deterministic path made 7 more tool calls. Compare arms within a run, not across runs.
+
+---
+
+### 4.3 Claude Fable 5
+
+| Field | Value |
+|---|---|
+| Model id | `us.anthropic.claude-fable-5` |
+| Vendor | Anthropic |
+| Context window | 1,000,000 |
+| Caching | explicit; read $1.00, write $12.50 (5m) / $20.00 (1h) per Mtok |
+| List price | $10.00 in / $50.00 out per Mtok — the most expensive model here |
+| Runs | generation 1 caching off, generation 1 caching on |
+
+**Plugin parameters.** Generation 1, as in [4.1](#41-claude-opus-48).
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · region `us-east-1`.
+
+**Results — caching off.**
+
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) | 21,620,903 | — | **100.0%** | **30/30** | 20.5s | $217.86 | — |
+| Progressive Tool Disclosure only | 14,284,626 | −33.9% | 97.6% | 29/30 | 20.5s | $144.58 | −33.6% |
+| Relevance Filtering only | 17,263,244 | −20.2% | 97.6% | 29/30 | 18.1s | $174.08 | −20.1% |
+| Context Graph only | 12,645,472 | −41.5% | 96.1% | 28/30 | 21.0s | $128.54 | −41.0% |
+| **All three combined** | **5,311,719** | **−75.4%** | 96.9% | 28/30 | 22.1s | **$55.32** | −74.6% |
+
+**Results — caching on.**
+
+| Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|
+| Baseline (no plugin) | 190 | 18,254,571 | 250,858 | **72.8** | 18,505,619 | — | 99.2% | **30/30** | 16.1s | $23.38 | — |
+| Progressive Tool Disclosure only | 248 | 8,001,876 | 6,708,508 | 1.2 | 14,710,632 | −20.5% | 98.4% | 29/30 | 19.3s | $93.96 | +301.8% |
+| 🏆 Relevance Filtering only | 212 | 17,687,881 | 229,005 | **77.2** | 17,917,098 | −3.2% | 98.4% | 29/30 | **15.7s** | **$22.48** | −3.9% |
+| Context Graph only | 812,339 | 10,368,477 | 2,528,084 | 4.1 | 13,708,900 | −25.7% | 98.4% | 29/30 | 21.7s | $53.19 | +127.5% |
+| **All three combined** | 360,961 | 1,291,253 | 3,567,890 | **0.4** | 5,220,104 | −71.5% | 96.1% | 27/30 | 23.3s | $52.58 | +124.9% |
+
+**Observations.**
+
+- **The bare agent is perfect here and the most expensive row in the document: 30 of 30 for $217.86.** This
+  is the model where the saving matters most in absolute dollars — the full stack holds 28 of 30 for
+  **$55.32**, a $162 difference on one 60-turn conversation.
+- The cache-on ranking inverts as on every Claude model: disclosure at `read:write` 1.2 costs **+301.8%**,
+  and only relevance filtering (77.2) is cheaper than doing nothing.
+- Two non-overflow errors occurred in the cache-off run (one in the relevance arm, one in all-three); both
+  were transport failures, not window failures.
+
+---
+
+### 4.4 GPT-6 Astra
+
+| Field | Value |
+|---|---|
+| Model id | `us.openai.gpt-6-astra` |
+| Vendor | OpenAI |
+| Context window | 1,050,000 |
+| Caching | **implicit** — not requested by the harness, applied by the service; read $1.10, write $13.75 per Mtok (1.25× input) |
+| List price | $11.00 in / $55.00 out per Mtok |
+| Runs | generation 1, implicit caching (there is no cache-off counterpart to run) |
+
+**Plugin parameters.** Generation 1, as in [4.1](#41-claude-opus-48).
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · served from `us-west-2`
+via cross-Region inference while called from `us-east-1`.
+
+**Results.**
+
+| Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|
+| Baseline (no plugin) | 228 | 15,270,589 | 213,127 | **71.7** | 15,483,944 | — | 92.9% | 26/30 | 10.4s | $21.20 | — |
+| Progressive Tool Disclosure only | 252 | 7,810,974 | 5,534,968 | 1.4 | 13,346,194 | −13.8% | 92.9% | 26/30 | 10.3s | $86.18 | +306.5% |
+| 🏆 Relevance Filtering only | 222 | 12,069,886 | 185,578 | **65.0** | 12,255,686 | −20.8% | 88.2% | 23/30 | 10.2s | **$17.33** | −18.3% |
+| Context Graph only | 252 | 1,473,390 | 8,536,045 | **0.2** | 10,009,687 | −35.2% | 91.3% | 25/30 | 10.9s | $120.59 | +468.8% |
+| **All three combined** | 292 | 17,588 | 4,051,747 | **0.0** | 4,069,627 | −73.5% | **94.5%** | **27/30** | **9.2s** | $57.38 | +170.7% |
+
+**Observations.**
+
+- **Implicit caching cannot be turned off, so this model has no uncached control.** Every row pays the write
+  premium, and the plugins that mutate the prefix pay it on nearly everything they send: the graph reads
+  1.47M against 8.54M written (`read:write` 0.2) and costs **+468.8%**.
+- **The full stack sends 73.5% fewer tokens and costs 170.7% more.** That is the whole caching argument in
+  one row: compression and caching attack the same redundancy, and on a model that caches implicitly the
+  service has already collected it.
+- The full stack is still the most accurate arm (27 of 30) and the fastest per turn. If accuracy is the
+  objective and the bill is not, the ranking is unchanged; if the bill is the objective, use relevance
+  filtering alone.
+
+---
+
+### 4.5 GPT-5.6 Sol
+
+| Field | Value |
+|---|---|
+| Model id | `us.openai.gpt-5.6-sol` |
+| Vendor | OpenAI |
+| Context window | 1,000,000 |
+| Caching | **implicit**; read $0.44, write $5.50 per Mtok (1.25× input) |
+| List price | $4.40 in / $22.00 out per Mtok |
+| Runs | generation 1, implicit caching |
+
+**Plugin parameters.** Generation 1, as in [4.1](#41-claude-opus-48).
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · served from `us-east-2`
+via cross-Region inference while called from `us-east-1`.
+
+**Results.**
+
+| Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|
+| 🏆 Baseline (no plugin) | 242 | 15,679,917 | 218,227 | **71.9** | 15,898,386 | — | **97.6%** | **29/30** | **9.0s** | **$8.82** | — |
+| Progressive Tool Disclosure only | 340 | 11,120,494 | 12,432,437 | 0.9 | 23,553,271 | +48.0% | 96.9% | 28/30 | 10.8s | $73.82 | +737.2% |
+| Relevance Filtering only | 276 | 17,145,788 | 208,099 | **82.4** | 17,354,163 | +9.2% | **97.6%** | **29/30** | 10.3s | $9.57 | +8.5% |
+| Context Graph only | 278 | 790,589 | 10,825,077 | **0.1** | 11,615,944 | −26.8% | 91.3% | 25/30 | 9.9s | $60.56 | +586.8% |
+| **All three combined** | 344 | 17,861 | 6,811,669 | **0.0** | 6,829,874 | −56.8% | 96.1% | 28/30 | 10.0s | $38.55 | +337.3% |
+
+**Observations.**
+
+- **This is the one model where doing nothing wins on every axis at once**: cheapest, most accurate, fastest.
+  A 1M window, implicit caching the service applies for free, and a conversation whose prefix is reused —
+  there is nothing left for a compressing plugin to buy.
+- **The disclosure arm sent more tokens than the bare agent (+48.0%) and wrote 12.4M of them.** Editing the
+  tool section invalidates the prefix, so each reveal turn reprocesses everything after it at the write rate.
+- Relevance filtering costs +8.5%, which is the smallest penalty of the four and the one to consider if a
+  reason other than cost demands compression here.
+
+---
+
+### 4.6 Claude Haiku 4.5
+
+| Field | Value |
+|---|---|
+| Model id | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| Vendor | Anthropic |
+| Context window | 200,000 |
+| Caching | explicit; read $0.10, write $1.25 (5m) / $2.00 (1h) per Mtok — **inferred**, not on the pricing table |
+| List price | $1.00 in / $5.00 out per Mtok |
+| Runs | generation 2 caching off, generation 3 caching off |
+
+**Plugin parameters.**
+
+| Plugin | Generation 2 | Generation 3 |
+|---|---|---|
+| A relevance | `chunk 500`, `preview 2,000`, `threshold 0.02`, retrieval tool **on** | same budgets (tight regime), retrieval tool **off** |
+| B disclosure | `catalog 20`, `ttl 5`, `top_k 4`, `[+]` sigil, guessed-call guard | same |
+| D graph | alone `0.62/0.45/0.50`, desc 250, body 60,000 · with-relevance `0.55/0.45/0.50`, desc 250, body **none**, cycles 4 · artifact tool dropped in the all arm | unified `0.62/0.45/0.50`, desc 250, **body 40,000**, cycles 4, neighbours 3, artifact tool on |
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · caching off · regime
+**tight** (gen 3 records it; gen 2 predates the field).
+
+**Results — generation 2.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **24/60** | **12/30** | **72** | 6,058,882 | −54.1% | 65.3% | 13/30 | 193,683 (97%) | 3.9s ✝ | $6.09 |
+| Progressive Tool Disclosure only | 60/60 | 0/30 | 0 | 12,156,014 | −8.0% | 88.2% | 22/30 | 167,060 (84%) | 8.6s | $12.26 |
+| Relevance Filtering only ← ref | 60/60 | 0/30 | 0 | 13,214,041 | — | **93.7%** | **26/30** | 177,119 (89%) | 8.6s | $13.32 |
+| Context Graph only | 60/60 | 0/30 | 0 | 7,894,451 | −40.3% | 79.5% | 18/30 | 118,442 (59%) | 7.0s | $7.97 |
+| **All three combined** | 60/60 | 0/30 | 0 | **3,260,491** | **−75.3%** | 89.8% | 25/30 | **56,545 (28%)** | 5.8s | **$3.34** |
+
+**Results — generation 3.**
+
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost | Δ cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|---:|
+| Baseline (no plugin) | 12,703,571 | — | **95.3%** | **27/30** | 196,722 (**98%**) | 7.9s | $12.77 | — |
+| Progressive Tool Disclosure only | 10,296,950 | −18.9% | 88.2% | 22/30 | 160,920 (80%) | 7.9s | $10.37 | −18.8% |
+| Relevance Filtering only | 12,036,064 | −5.3% | 86.6% | 21/30 | 166,779 (83%) | 9.3s | $12.15 | −4.9% |
+| Context Graph only | 7,883,137 | −37.9% | 76.4% | 17/30 | 114,003 (57%) | 7.8s | $7.95 | −37.7% |
+| **All three combined** | **3,224,286** | **−74.6%** | 84.2% | 20/30 | **60,393 (30%)** | 6.6s | **$3.32** | −74.0% |
+
+**Observations.**
+
+- **The same model, the same window, two runs, and the bare agent truncated in one and not the other.** In
+  generation 2 it lost 72 calls and answered 24 of 60 turns; in generation 3 it answered all sixty with its
+  largest call at **98% of the window**. Nothing in the plugins explains that — the baseline runs none of
+  them. It is the agent's tool path landing just inside or just outside the window, and it is the sharpest
+  illustration of why `Answered` has to be a column.
+- **This model is where relevance filtering was first measured costing more than nothing (+21.6%)**, which
+  is what motivated removing its retrieval tool in generation 3. It worked: the same arm moves to −5.3%.
+- **The full stack is the cheapest arm in both generations and within a cent of itself ($3.34, $3.32)**,
+  while the baseline it is compared against moved by a factor of two. The stack's cost is stable because it
+  does not depend on how much history there is.
+- **Accuracy across the two runs is not comparable.** Generation 2's numbers come from a run where three
+  arms scored over 60 answered turns and the baseline over 24.
+
+---
+
+### 4.7 GLM 5
+
+| Field | Value |
+|---|---|
+| Model id | `zai.glm-5` |
+| Vendor | Zhipu |
+| Context window | 200,000 |
+| Caching | **none published** — the model card lists neither implicit nor explicit caching, so there is nothing to weigh the plugins against |
+| List price | $1.00 in / $3.20 out per Mtok |
+| Runs | generation 1, generation 3 |
+
+**Plugin parameters.**
+
+| Plugin | Generation 1 | Generation 3 |
+|---|---|---|
+| A relevance | `preview 800`, retrieval tool **on** | `preview 2,000` (tight regime), retrieval tool **off** |
+| B disclosure | `catalog 20`, `ttl 5`, `top_k 4` | same, plus `[+]` sigil and guessed-call guard |
+| D graph | alone desc 250 / body 60,000 · with-relevance `0.55`, desc 100, body **none** · artifact tool dropped in the all arm | unified `0.62`, desc 250, **body 40,000**, cycles 4, neighbours 3, artifact tool on |
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · no caching · regime
+**tight**.
+
+**Results — generation 1.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **15/60** | **15/30** | **90** | 5,252,666 | −72.9% | 63.8% | 14/30 | 198,588 (99%) | 12.7s ✝ | $5.26 |
+| Progressive Tool Disclosure only ✝ | **41/60** | **7/30** | **38** | 11,327,573 | −41.6% | 74.8% | 20/30 | 198,249 (99%) | 30.1s ✝ | $11.37 |
+| Relevance Filtering only ← ref | 60/60 | 0/30 | 0 | 19,406,514 | — | **98.4%** | **29/30** | 192,751 (96%) | 48.8s | $19.48 |
+| Context Graph only | 60/60 | 0/30 | 0 | 8,931,685 | −54.0% | 85.0% | 23/30 | 117,147 (59%) | 28.1s | $8.99 |
+| **All three combined** | 60/60 | 0/30 | 0 | **2,457,277** | **−87.3%** | 92.1% | 26/30 | **43,490 (22%)** | 12.0s | **$2.51** |
+
+**Results — generation 3.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **18/60** | **14/30** | **84** | 6,150,161 | −58.3% | 65.3% | 14/30 | 193,207 (97%) | 12.6s ✝ | $6.17 |
+| Progressive Tool Disclosure only ✝ | **25/60** | **11/30** | **64** | 9,170,600 | −37.8% | 66.1% | 16/30 | 193,113 (97%) | 34.0s ✝ | $9.22 |
+| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 14,739,065 | — | 80.3% | 24/30 | 198,011 (99%) | 35.5s | $14.80 |
+| Context Graph only | 60/60 | 0/30 | 0 | 7,175,940 | −51.3% | **96.1%** | **28/30** | 102,645 (51%) | 20.5s | $7.21 |
+| **All three combined** | 60/60 | 0/30 | 0 | **2,908,717** | **−80.3%** | 81.1% | 21/30 | **41,553 (21%)** | 14.0s | **$2.96** |
+
+**Observations.**
+
+- **This is the model that reverses the question from cost to completion, and it reproduces.** In both
+  generations the bare agent lost 84–90 calls and answered 15–18 of 60 turns. Its 63.8% and 65.3% are
+  mostly absence: 14–15 of its 30 scored turns were never attempted.
+- **Only the graph and the full stack finished intact in both runs**, and they are the only two arms whose
+  peak call stays below 60% of the window. Every arm at 96% or above lost calls.
+- **Cost stops being the argument.** The full stack costs $2.51–$2.96 and answers everything; the bare agent
+  costs $5.26–$6.17 and answers a quarter of the script. The cheap-looking baseline is a truncated log.
+- **The graph alone is the most accurate arm of generation 3 (28/30)** and the second cheapest. On this model
+  the single-plugin choice that keeps you inside the window is the graph — which is *not* true of the next
+  two models, and that is the point of measuring more than one vendor.
+- No caching is published for this model, so the cache-versus-compression trade does not arise here at all.
+
+---
+
+### 4.8 GLM 4.7
+
+| Field | Value |
+|---|---|
+| Model id | `zai.glm-4.7` |
+| Vendor | Zhipu |
+| Context window | 202,752 |
+| Caching | none published |
+| List price | $0.60 in / $2.20 out per Mtok |
+| Runs | generation 2 |
+
+**Plugin parameters.** Generation 2: `preview 2,000`, filter retrieval tool **on**, disclosure `20/5/4`
+with the `[+]` sigil and guessed-call guard, graph alone `0.62/0.45/0.50` desc 250 body 60,000 ·
+with-relevance `0.55/0.45/0.50` desc 250 body **none** cycles 4, artifact tool dropped in the all arm.
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` explicit · no caching.
+
+**Results.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost | $/correct |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **22/60** | **12/30** | **70** | 5,814,709 | −58.9% | 65.3% | 14/30 | 186,905 (92%) | 18.4s ✝ | $3.52 | *$0.25* |
+| Progressive Tool Disclosure only ✝ ← ref | **40/60** | **6/30** | **30** | 14,153,824 | — | 73.2% | 20/30 | 195,178 (96%) | 47.4s ✝ | $8.56 | *$0.43* |
+| Relevance Filtering only ✝ | **27/60** | **11/30** | **54** | 11,140,007 | −21.3% | 66.1% | 17/30 | 194,955 (96%) | 36.4s ✝ | $6.75 | *$0.40* |
+| Context Graph only | 60/60 | 0/30 | 0 | 13,191,178 | −6.8% | **95.3%** | **27/30** | 176,766 (87%) | 36.4s | $7.96 | $0.29 |
+| **All three combined** | 59/60 † | 0/30 | 0 | **5,916,862** | **−58.2%** | 83.5% | 22/30 | **102,796 (51%)** | 23.6s | **$3.60** | **$0.16** |
+
+† The one missing turn was a `ReadTimeoutError`, a network failure, not the window; that arm refused zero
+calls. Fifteen other non-overflow errors occurred across the arms (3 baseline, 7 relevance, 5 disclosure,
+2 all-three) — output-cap truncations, now scored for what the partial answer says.
+
+**Observations.**
+
+- **Three of five arms truncated, and the truncated set is not just the baseline.** Relevance filtering lost
+  54 calls and disclosure 30, which is why the accuracy column is dangerous on this model: relevance looks
+  second-from-last here (17/30) and is the most accurate arm on both other vendors of its study. That figure
+  is its 54 overflows, not its recall.
+- **The full stack spends 1.8% *more* than the bare agent — and that is the result, not a regression.** The
+  baseline answered 22 turns and the full stack answered 59. Nearly tripling the work delivered for 1.8%
+  more tokens is what happened; the sign alone gets it backwards. It is also why every truncated `$/correct`
+  is italicised rather than competing: the cheapest ratio in the table belongs to an arm that quit.
+- **The graph alone is the cleanest arm on this model — 27 of 30, zero refusals, the highest accuracy in its
+  study** — while the same plugin on Qwen3 Next peaks above the window and answers 16 of 60. Folding history
+  compresses the part that was not the problem when the mass is in the payloads.
+- Measured on this model with 2–3 replays at 20 turns, the leave-one-out arms say it from the other side:
+  all three combined is −54.8% tokens, but relevance+graph is **+6.1%** and relevance+disclosure **+13.1%**
+  — either *pair* spends more than using no plugin at all. **The saving is a conjunction, not a sum.**
+
+---
+
+### 4.9 GLM 4.7 Flash
+
+| Field | Value |
+|---|---|
+| Model id | `zai.glm-4.7-flash` |
+| Vendor | Zhipu |
+| Context window | 202,752 |
+| Caching | none published |
+| List price | $0.07 in / $0.40 out per Mtok — the cheapest model here |
+| Runs | generation 3 |
+
+**Plugin parameters.** Generation 3, tight regime: `preview 2,000`, filter retrieval tool **off**,
+disclosure `20/5/4`, graph unified `0.62/0.45/0.50` desc 250 **body 40,000** cycles 4 neighbours 3,
+artifact tool on.
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · no caching · regime
+**tight**.
+
+**Results.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **17/60** | **15/30** | **82** | 5,398,019 | −80.3% | 52.8% | 8/30 | 198,536 (98%) | 7.3s ✝ | $0.38 |
+| Progressive Tool Disclosure only ✝ ← ref | **36/60** | **7/30** | **40** | 27,403,577 | — | 58.3% | 11/30 | 198,654 (98%) | 33.0s ✝ | $1.93 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 17,181,923 | −37.3% | **75.6%** | 17/30 | 187,849 (93%) | 13.4s | $1.22 |
+| Context Graph only ✝ | **52/60** | **2/30** | **8** | 18,123,481 | −33.9% | 74.8% | **18/30** | 198,646 (98%) | 29.7s ✝ | $1.28 |
+| **All three combined** | 60/60 | 0/30 | 0 | **4,010,248** | **−85.4%** | 55.1% | 10/30 | **53,355 (26%)** | 11.6s | **$0.30** |
+
+Ten non-overflow errors (2 baseline, 4 disclosure, 4 graph) — output-cap truncations.
+
+**Observations.**
+
+- **The only model whose reference arm is itself truncated.** Disclosure spent 27.4M tokens over 237 calls
+  and still answered 36 of 60 turns, which is what an erratic tool path costs when every retry carries the
+  whole history. Its Δ column is therefore measured against a run that did not finish either; treat the
+  magnitudes as a floor.
+- **Relevance filtering is the arm to use on this model.** It is the only single plugin that completed the
+  script and it scores highest among completing arms (17/30).
+- **The full stack completes, is by far the cheapest ($0.30), and scores 10/30 — its worst result anywhere.**
+  This is a genuine weakness rather than truncation: the arm answered all sixty turns. Two serial cuts
+  (`preview_tokens` then `description_tokens`) plus a reranker query that does not contain the sought
+  literal is an evidence-*selection* loss, and this model is where it bites hardest.
+- **Do not read the price column as a recommendation.** Every arm here costs under $2 because the model is
+  15× cheaper per token than Haiku; the interesting column is `Answered`.
+
+---
+
+### 4.10 Qwen3 Next 80B
+
+| Field | Value |
+|---|---|
+| Model id | `qwen.qwen3-next-80b-a3b` |
+| Vendor | Alibaba |
+| Context window | 256,000 |
+| Caching | none published |
+| List price | $0.14 in / $1.20 out per Mtok |
+| Runs | generation 2, generation 3 |
+
+**Plugin parameters.**
+
+| Plugin | Generation 2 | Generation 3 |
+|---|---|---|
+| A relevance | `preview 2,000`, retrieval tool **on** | `preview 2,000` (tight regime), retrieval tool **off** |
+| B disclosure | `20/5/4`, `[+]` sigil, guessed-call guard | same |
+| D graph | alone desc 250 body 60,000 · with-relevance `0.55` desc 250 body **none** cycles 4 · artifact tool dropped in the all arm | unified `0.62` desc 250 **body 40,000** cycles 4 neighbours 3, artifact tool on |
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · no caching · regime
+**tight** (256,000 is above 250K and still tight — see [the window regime](#the-window-regime)).
+
+**Results — generation 2.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **14/60** | **16/30** | **92** | 8,231,351 | −75.1% | 59.1% | 11/30 | 257,163 (100%) | 6.0s ✝ | $1.16 |
+| Progressive Tool Disclosure only ← ref | 60/60 | 0/30 | 0 | 33,004,333 | — | 86.6% | 23/30 | 248,224 (97%) | 19.6s | $4.64 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 21,803,250 | −33.9% | **91.3%** | **26/30** | 241,712 (94%) | 16.5s | $3.10 |
+| Context Graph only ✝ | **16/60** | **15/30** | **88** | 25,119,509 | −23.9% | 55.9% | 10/30 | 257,560 (**101%**) | 13.9s ✝ | $3.53 |
+| **All three combined** | 59/60 | 0/30 | 0 | **5,512,454** | **−83.3%** | 81.9% | 23/30 | **92,972 (36%)** | 11.9s | **$0.82** |
+
+**Results — generation 3.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **13/60** | **17/30** | **94** | 8,591,570 | −74.1% | 54.3% | 9/30 | 248,552 (97%) | 5.6s ✝ | $1.21 |
+| Progressive Tool Disclosure only ✝ | **13/60** | **17/30** | **94** | 5,033,909 | −84.8% | 60.6% | 11/30 | 252,395 (99%) | 4.0s ✝ | $0.71 |
+| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 33,149,405 | — | 79.5% | **22/30** | 256,310 (100%) | 19.9s | $4.71 |
+| Context Graph only | 60/60 | 0/30 | 0 | 9,727,355 | −70.7% | **81.1%** | 20/30 | 136,350 (53%) | 8.5s | $1.38 |
+| **All three combined** | 60/60 | 0/30 | 0 | **4,395,046** | **−86.7%** | 74.0% | 17/30 | **38,496 (15%)** | 10.2s | **$0.68** |
+
+**Observations.**
+
+- **This model carries the heaviest payload mass of the battery**, and it is why the tight-window ceiling is
+  300K rather than 250K: a 256,000-token window and the bare agent still peaks *at* it and loses 92–94
+  calls. Window size alone does not decide the regime; window against payload mass does.
+- **Which single plugin survives changes between the two generations, and neither answer is the graph's.** In
+  generation 2 the graph alone peaked at **101% of the window** and answered 16 of 60; in generation 3 it
+  answered all sixty at 53%. Disclosure went the other way — 60 of 60 in generation 2, 13 of 60 in
+  generation 3. Only the full stack answered nearly everything in both.
+- **The generation 3 disclosure row is the trap this table exists to prevent**: 5.0M tokens and $0.71 look
+  like the efficient arm until `Answered` reads 13 of 60 and `Refused` reads 94. It is the second-cheapest
+  cell of the run and the second-worst outcome.
+- **The full stack's peak call is 15% of the window**, an 85% margin on a model whose bare agent could not
+  fit its own consolidation turns.
+
+---
+
+### 4.11 Nemotron Nano 9B
+
+| Field | Value |
+|---|---|
+| Model id | `nvidia.nemotron-nano-9b-v2` |
+| Vendor | NVIDIA |
+| Context window | **128,000** — the smallest here |
+| Caching | none published |
+| List price | $0.06 in / $0.23 out per Mtok |
+| Runs | generation 3 |
+
+**Plugin parameters.** Generation 3, tight regime: `preview 2,000`, filter retrieval tool **off**,
+disclosure `20/5/4`, graph unified `0.62/0.45/0.50` desc 250 **body 40,000** cycles 4 neighbours 3,
+artifact tool on.
+
+**Validation parameters.** 60 turns / 30 scored · 1 replay · `max_output 4,096` · no caching · regime
+**tight**.
+
+**Results.**
+
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **9/60** | **21/30** | **102** | 1,596,017 | −85.3% | 48.8% | 6/30 | 111,016 (87%) | 4.2s ✝ | $0.10 |
+| Progressive Tool Disclosure only ✝ | **14/60** | **16/30** | **92** | 2,298,800 | −78.8% | 59.1% | 9/30 | 118,522 (93%) | 7.8s ✝ | $0.14 |
+| Relevance Filtering only ✝ | **28/60** | **11/30** | **64** | 5,073,784 | −53.3% | 66.9% | **14/30** | 125,719 (98%) | 12.4s ✝ | $0.33 |
+| Context Graph only ✝ ← ref | **43/60** | **7/30** | **34** | 10,868,671 | — | 59.8% | 11/30 | 124,762 (97%) | 22.8s ✝ | $0.67 |
+| **All three combined** | **60/60** | **0/30** | **0** | 6,431,158 | −40.8% | **68.5%** | 12/30 | **73,358 (57%)** | 28.6s | $0.44 |
+
+**Observations.**
+
+- **Four of the five arms could not finish, and the only column that orders cleanly is `Refused` — 102, 92,
+  64, 34, 0.** Each practice removes some of the pressure; only the conjunction removes all of it.
+- **The bare agent answered nine turns.** Its $0.10 is not a price for this workload — it is what nine turns
+  cost. This is the row that makes the case for the completion columns better than any argument.
+- **The full stack is the only arm that answered all sixty**, and against the heaviest arm that *tried* it
+  still sends 40.8% fewer tokens. At this window the practices are not an optimisation but the difference
+  between a conversation and a truncated log.
+- **It is also the slowest arm per turn (28.6s), and that is the honest trade**: retrieval cycles cost
+  latency, and they are what keep the conversation inside a 128K window.
+- Accuracy here is low across the board (6–14 of 30) because the model is small. Compare the arms with each
+  other, never this column with a larger model's.
+
+---
+
+## 5. What holds across the models
+
+### The noise floor
+
+**One replay per cell cannot resolve anything smaller than ±6 turns or ±20% of tokens**, and that is
+measured rather than asserted. Between two Opus 4.8 runs, four arms were executing **byte-identical code**
+— the only change between the runs applied to the combined arm alone — and all eight of those runs refused
+zero calls, so nothing is truncated either:
 
 | Opus 4.8 arm, identical code | Correct, run A → run B | Δ tokens |
 |---|:--:|---:|
@@ -727,122 +855,163 @@ have been touched. All eight of those runs refused zero calls, so nothing is tru
 | Relevance Filtering only | 25/30 → 27/30 | +1.7% |
 | Progressive Tool Disclosure only | 27/30 → 29/30 | −5.4% |
 
-Six materially-correct turns moved on the graph arm with no code change at all, and the bare agent —
-which no plugin can reach — moved four turns and 16% of its tokens. Across the whole battery the same
-comparison on Qwen3 Next's relevance arm moved **+79.2%** in tokens for the same 22/30.
+Six materially-correct turns moved on the graph arm with no code change, and the plugin-free baseline moved
+four turns and 16% of its tokens. On Qwen3 Next the same comparison moved the relevance arm **+79.2%** in
+tokens for the same 22 of 30.
 
-The cause is the one named in trap 2: the agent chooses its own tool path, and a single extra call early
-in a 60-turn conversation is re-sent in every later call. Nothing here is a measurement error.
+The cause is trap 3: the agent chooses its own tool path, and one extra call early in a 60-turn conversation
+is re-sent in every later call. So the figures that decide something here are the ones clearing that band by
+a wide margin — −75% tokens, 102 refused calls against 0, a peak call of 38K against 248K. **The per-arm
+accuracy ranking within a single model is not one of them.** Resolving the finer comparisons needs
+`--repeats`; at Opus list prices one 5-arm replay is ~$254, so it is a deliberate omission.
 
-What follows for reading this document: a difference of **1–2 turns, or under roughly 20% of tokens, is
-not evidence of anything** at n=1, whichever direction it points. The figures that decide something are
-the ones that clear that band by a wide margin — −75% tokens, 102 refused calls against 0, a peak call
-of 38K against 248K — and they are the ones stated as conclusions above. The per-arm accuracy ranking
-within a single model is not one of them.
+### Compression and caching optimise the same redundancy
 
-Resolving the finer comparisons needs replicas, which the harness supports with `--repeats`. That has
-not been run on this battery: at Opus list prices one 5-arm replay is ~$254, so three replicas of the
-six models is a four-figure measurement and it is a deliberate omission, not an oversight.
+On the caching runs, **amplification** — billed prompt tokens divided by the tokens written to cache exactly
+once, i.e. how many times the same content was re-sent — is **66× to 83×** for the bare agent and the
+relevance filter, and **1.0× to 1.6×** for all three combined. The full stack barely re-sends anything,
+which is the point; but it also means the cache has nothing cheap left to re-read and collects only
+expensive writes.
 
-## Prices and what they are based on
+`read:write` is the predictor and it is legible in every cache table above: 68–92 for the baseline and for
+relevance filtering, 0.0–1.6 for disclosure and for the full stack. **The two techniques are alternatives,
+not a stack** — with relevance filtering the exception, because it compresses once and then stops changing
+the prompt.
 
-Every dollar figure here is `measured units x a published list rate`. Nothing in this document is
-derived from an actual bill, and no discount, commitment or account-specific fee is modelled — so read
-the cost columns as list cost, and the comparisons between them (which is what the findings rest on) as
-ratios between rows priced identically.
+The design rule that follows: **a context plugin is cache-compatible if and only if its mutations are
+append-only or confined to the end of the prompt.** Size is not the problem; editing is. Disclosure cut the
+tool schema from 62,656 tokens to 5,300–11,606 and still cost +181% to +737% under caching.
 
-| Claim | Status | Source |
+Caching also only pays when the same prefix is re-sent inside the TTL. Turns in this benchmark land 8–24
+seconds apart, so nearly every call hit a warm cache — a best case. A system prompt per tenant, a tool set
+per user permission, one-shot fan-out, an A/B split across prompt variants, or a human who pauses longer
+than the TTL all pay the write premium and collect no read. In those shapes the plugins are the only lever.
+
+### The window is a proxy for payload mass, and below ~250K it decides completion
+
+Ordered by window, the bare agent's outcome:
+
+| Model | Window | Bare agent answered | Bare agent peak | Full stack answered | Full stack peak |
+|---|---:|:--:|---:|:--:|---:|
+| Opus 4.8 / Opus 5 / Fable 5 / Astra / Sol | 1M+ | 60/60 | 19% | 60/60 | 6% |
+| Haiku 4.5 (gen 3) | 200K | 60/60 | 98% | 60/60 | 30% |
+| Haiku 4.5 (gen 2) | 200K | **24/60** | 97% | 60/60 | 28% |
+| GLM 5 | 200K | **15–18/60** | 99% | 60/60 | 21% |
+| GLM 4.7 | 203K | **22/60** | 92% | 59/60 | 51% |
+| GLM 4.7 Flash | 203K | **17/60** | 98% | 60/60 | 26% |
+| Qwen3 Next | 256K | **13–14/60** | 100% | 59–60/60 | 15–36% |
+| Nemotron Nano 9B | 128K | **9/60** | 87% | 60/60 | 57% |
+
+Two readings, and the second is the one to take away. First: **at 1M the argument is cost, below ~250K it is
+completion.** Second: Haiku 4.5 appears twice with the same window and opposite outcomes, so the window is
+not the variable — it is the window against the payload mass in front of it, and the window is only what
+you can read off a model card in advance.
+
+### No single practice is sufficient, and which one to pick depends on the model
+
+| Model | Single plugin that completed | Best single arm by `Correct` |
 |---|---|---|
-| Per-model input, output and cache rates | published | [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/) and each model card |
-| Cache writes are billed above the input rate, implicit **and** explicit | documented | [Billing for cached tokens](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) |
-| Cache write = **1.25x** input, read = 90% discount, on GPT-5.6 | documented | [Prompt caching for models from OpenAI](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) |
-| Astra's cache write $13.75 against $11.00 input (1.25x) | published | [Astra model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html) |
-| Claude cache-read at 0.10x and write at 1.25x / 2.00x input | published for the models listed, **inferred** for Haiku 4.5, whose cache rates are not on the pricing table | `MODEL_PRICING` in [`src/config.py`](validation/community-plugin-A-B-D/src/config.py) |
-| Token counts, call counts, accuracy, timings | measured by the harness from the API's own `usage` | the run JSON under `results/` |
+| GLM 5 | graph (both generations) | graph, 28/30 |
+| GLM 4.7 | graph | graph, 27/30 |
+| GLM 4.7 Flash | relevance | relevance, 17/30 |
+| Qwen3 Next gen 2 | disclosure, relevance | relevance, 26/30 |
+| Qwen3 Next gen 3 | graph | relevance, 22/30 (with 10 refusals) |
+| Nemotron Nano 9B | **none** | relevance, 14/30 (with 64 refusals) |
 
-Correcting a rate never needs another run: rates live in one map and the report re-renders from the
-recorded JSON.
+Every arm using one plugin fails to control the peak on at least one model, and on the smallest window none
+of them completes. The full stack answered **60 of 60 on every model it was run against**. That is the
+conjunction argument: A attacks the payload, B removes the fixed schema floor, D folds the history, and the
+three address different mass.
 
-### What is not settled
+### The regression this document owes the reader
 
-**Caching on the Converse path for the OpenAI models.** Both cards list Implicit and Explicit Prompt
-Caching as *Responses API only*, yet these runs used Converse and came back with cache read and write
-counts anyway — measured on Astra's first baseline call as `inputTokens=2,
-cacheWriteInputTokens=48,583`. The *rate* is documented (1.25x); what is undocumented is that the
-traffic happens at all on this path, so the Astra and Sol columns price a documented rate against
-undocumented behaviour.
+Removing the filter's `retrieve_context` in generation 3 fixed a real cost (relevance filtering went from
++21.6% to −5.3% on Haiku) and cost two specific turns on Opus 4.8 — `A5-statement` and
+`R2-cross-reference`, both asking for a figure inside a statement payload the preview cut, with nothing left
+to ask for it back. `include_retrieval_tool=True` is the way back, at the price the cache tables show.
 
-**The 5-minute TTL is the best case.** Turns in this benchmark land 8-24 seconds apart, so nearly every
-call hit a warm cache. A human who pauses longer than the TTL between turns gets the opposite: the
-prefix is rewritten each turn at the write rate, which is worse than not caching. A 1-hour TTL exists
-for that case — `"ttl": "1h"` on the `cachePoint`, supported by all three Claude models here per the
-[supported-models table](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html) — at
-a higher write rate, and the pinned botocore in this harness cannot send it. Neither was measured.
+---
 
-**Cross-Region routing stayed put.** Every model was served by exactly one Region for the whole day
-(read from `inferenceRegion` in the invocation logs), including Sol and Astra, which were served from
-`us-east-2` and `us-west-2` while being called from `us-east-1` — so cache reads do work across a Geo
-CRIS hop. The documentation warns that "at times of high demand, these optimizations may lead to
-increased cache writes"
-([Cross-Region inference](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)),
-and that case did not occur here. Global CRIS was not tested at all.
-
-**These are the community packages.** Every mechanism above was measured on
-`validation/community-plugin-A-B-D/` with the three packages installed from this repository. The
-forked-SDK vended plugins place their cache checkpoints in their own code and were **not** re-measured;
-nothing on this page transfers to them without a run.
-
-**The two studies are not the same code.** The nine-run battery predates four fixes the tight-window
-study was run with, the load-bearing one being that the disclosure plugin used to cancel the model's
-first `find_tools` call of every session — `find_tools` is projected unconditionally but never recorded
-as exposed, so the guard read a call to it as a call made off a catalog entry and refused the one call
-that opens the discovery path. Measured on GLM 4.7 Flash, repairing it took searches from 1 to 7 per run
-and materially-correct turns from 6.7 to 9.3 of 18. Do not read a disclosure or all-three cell from the
-first table against one from the second; compare within a study.
-
-## Reproducing this
+## 6. Reproducing this
 
 ```bash
 cd validation/community-plugin-A-B-D
-./run.sh --total-turns 60 --tag myrun                    # cache off
-./run.sh --total-turns 60 --cache default --tag myrun-cache
+./run.sh --total-turns 60 --tag myrun                        # cache off
+./run.sh --total-turns 60 --cache default --tag myrun-cache  # Bedrock's own TTL, 5 minutes
 ```
 
-`--cache default` uses Bedrock's own TTL, which is 5 minutes. An explicit `--cache 5m` or `--cache 1h`
-is rejected by the pinned botocore 1.40, whose Converse model declares `cachePoint` with `type` alone —
-so the 1-hour TTL needs a newer botocore and was not measured.
+One model at a time, which is how every table in part 4 was produced:
 
-Correcting a rate never requires another run against Bedrock — edit `MODEL_PRICING` and re-render:
+```bash
+VALIDATION_AGENT_MODEL_ID=zai.glm-5 ./run.sh --total-turns 60 --tag tw-glm5
+VALIDATION_AGENT_MODEL_ID=qwen.qwen3-next-80b-a3b ./run.sh --total-turns 60 --tag tw-qwen3
+VALIDATION_AGENT_MODEL_ID=nvidia.nemotron-nano-9b-v2 ./run.sh --total-turns 60 --tag tw-nemo
+```
+
+Run **one process per model id**. Two concurrent runs against the *same* id draw on the same quota and
+produce `ServiceUnavailableException`, which contaminates a run without looking like a plugin failure;
+different ids have separate quota and are safe to run in parallel.
+
+Re-rendering a recorded run needs no AWS credentials at all, which is also how a corrected rate is applied:
 
 ```bash
 python -m src.run --report-only results/run-myrun.json
 ```
 
-The tight-window study is the same script against one model at a time, caching left off:
-
-```bash
-cd validation/community-plugin-A-B-D
-VALIDATION_AGENT_MODEL_ID=zai.glm-4.7 ./run.sh --total-turns 60 --tag tw-glm47
-VALIDATION_AGENT_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0 ./run.sh --total-turns 60 --tag tw-haiku45
-VALIDATION_AGENT_MODEL_ID=qwen.qwen3-next-80b-a3b ./run.sh --total-turns 60 --tag tw-qwen3
-```
-
-Re-running the parameter sweep needs no code edit: every knob in the block above reads an override off
-the environment, defaults unchanged, and each run records under `meta.sweep_overrides` which ones it
-read — so a result can never be read without its configuration.
+Every knob in part 2 reads an override off the environment, and each run records under
+`meta.sweep_overrides` which ones it read — so a result can never be read without its configuration:
 
 ```bash
 VALIDATION_PREVIEW_TOKENS=1200 ./run.sh --configs all --total-turns 20 --repeats 3 --tag sweep-preview
 VALIDATION_GRAPH_EXPAND=0.65 ./run.sh --configs all --total-turns 20 --repeats 3 --tag sweep-fold
+VALIDATION_RELEVANCE_RETRIEVAL_TOOL=1 ./run.sh --configs all relevance --total-turns 60 --tag gen1-filter
 ```
 
-The leave-one-out arms behind finding 9 are `no-disclosure`, `no-relevance` and `no-graph`. They are
-accepted by `--configs` but deliberately not in the default set, so adding them cannot change what a
-published table means:
+The leave-one-out arms are accepted by `--configs` but not in the default set, so adding them cannot change
+what a published table means:
 
 ```bash
 ./run.sh --configs no-disclosure no-relevance no-graph --total-turns 20 --repeats 3 --tag loo
 ```
 
-See [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) for
-what the harness measures and how scoring works.
+`--cache default` uses Bedrock's own 5-minute TTL. An explicit `--cache 5m` or `--cache 1h` is rejected by
+the pinned botocore 1.40, whose Converse model declares `cachePoint` with `type` alone — so the 1-hour TTL
+needs a newer botocore and was not measured.
+
+See [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) for what
+the harness measures and how scoring works.
+
+---
+
+## 7. What is not settled
+
+**Replicas.** Every cell in part 4 is one replay, against a measured noise floor of ±6 turns. No conclusion
+here should be read finer than that, and the finer comparisons are simply not resolved.
+
+**Caching on the Converse path for the OpenAI models.** Both cards list Implicit and Explicit Prompt Caching
+as *Responses API only*, yet these runs used Converse and came back with cache read and write counts anyway
+— measured on Astra's first baseline call as `inputTokens=2, cacheWriteInputTokens=48,583`. The *rate* is
+documented (1.25×); what is undocumented is that the traffic happens at all on this path, so the Astra and
+Sol tables price a documented rate against undocumented behaviour.
+
+**The 5-minute TTL is the best case.** Turns land 8–24 seconds apart here, so nearly every call hit a warm
+cache. A 1-hour TTL exists for the opposite case — `"ttl": "1h"` on the `cachePoint`, supported by all three
+Claude models here — at a higher write rate, and the pinned botocore cannot send it. Neither was measured.
+
+**Cross-Region routing stayed put.** Every model was served by exactly one Region for the whole day (read
+from `inferenceRegion` in the invocation logs), including Sol and Astra, served from `us-east-2` and
+`us-west-2` while being called from `us-east-1` — so cache reads do work across a Geo CRIS hop. The
+documentation warns that at times of high demand these optimisations may lead to increased cache writes;
+that case did not occur here. Global CRIS was not tested.
+
+**Generations are not comparable.** Part 2's generation table says which code each model's run used. A
+disclosure or all-three cell from generation 1 against one from generation 3 is a comparison of two
+different programs, and the differences between them are larger than most of the deltas in this document.
+
+**These are the community packages.** Every mechanism here was measured on `validation/community-plugin-A-B-D/`
+with the three packages installed from this repository. The forked-SDK vended plugins place their cache
+checkpoints in their own code and were **not** re-measured; nothing on this page transfers to them without a
+run.
+
+**Haiku 4.5's cache rates are inferred.** They are not on the pricing table; the read/write multipliers used
+are the family's. Every other rate is published.

@@ -180,7 +180,8 @@ stack answered all sixty, lost no calls and scored 26 of 30, with its peak call 
 against the baseline's 198,588. Below roughly 250K tokens these practices stop being an optimisation
 and become the thing that lets the conversation finish at all. A smaller window sharpens it: on
 Nemotron Nano 9B (128K) the bare agent answered **9 of 60** and the full stack was the only arm of five
-that answered every turn — see [`BENCHMARK.md`](BENCHMARK.md) finding 12 for the per-model accounting.
+that answered every turn — see the [Nemotron Nano 9B section](BENCHMARK.md#411-nemotron-nano-9b) of
+[`BENCHMARK.md`](BENCHMARK.md) for the per-model accounting.
 
 **Whether the model caches, and whether you want it to.** Prompt caching attacks the same redundancy
 these practices do, and only one of the two can bill it. On a model with a large window *and* caching
@@ -243,8 +244,8 @@ validation/
   then the per-practice docs (`design-a-*`, `design-b-*`, `design-d-*`).
 - **Run an agent with the practices:** see
   [`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md).
-- **Compare the models:** see [`BENCHMARK.md`](BENCHMARK.md) — the full cross-model table, what each
-  column means, and which cells are not comparable.
+- **Compare the models:** see [`BENCHMARK.md`](BENCHMARK.md) — one section per model with its
+  parameters, results and caveats, plus what holds across all eleven.
 - **Reproduce the numbers:** see
   [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) — it
   installs the packages, runs the benchmark, and generates JSON + Markdown + HTML reports.
