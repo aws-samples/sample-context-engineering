@@ -76,6 +76,23 @@ def _env_float(name: str, default: float) -> float:
     return default if raw is None else float(raw)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean knob. Accepts ``1/true/yes/on`` and ``0/false/no/off``, case-insensitively.
+
+    A value that is neither raises rather than falling back to the default: a typo in a sweep variable
+    must not silently measure the default configuration under the variant's name.
+    """
+    raw = _env(name)
+    if raw is None:
+        return default
+    lowered = raw.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name}=<{raw!r}> | must be one of 1/true/yes/on or 0/false/no/off")
+
+
 def _env_opt_int(name: str, default: int | None) -> int | None:
     """Like :func:`_env_int` but accepts ``none`` to mean the package's unbounded behaviour."""
     raw = _env(name)
@@ -196,9 +213,9 @@ token counts and the caller's ``requestMetadata`` but no prompts or completions.
 # --- Window regime -----------------------------------------------------------------
 #
 # Three of the budgets below are not one number but two, and which pair applies is decided by the
-# agent model's context window. This mirrors GRAPH_ALONE / GRAPH_WITH_RELEVANCE further down: a single
-# set of values is wrong, and the condition that selects between them is a measurement rather than a
-# preference.
+# agent model's context window. That condition is a measurement rather than a preference: a single set
+# of values is wrong because the window is what decides whether evidence starves or a larger budget
+# only buys a larger bill.
 
 TIGHT_WINDOW_CEILING = 300_000
 """At or below this many tokens, a model is in the tight-window regime.
@@ -389,11 +406,31 @@ class Thresholds:
 
     # -- context graph -------------------------------------------------------------
     #
-    # The graph's knobs are NOT here, because a single set of them is wrong. They depend on whether
-    # the relevance filter is also installed, which is a measured result rather than a preference --
-    # see GRAPH_ALONE and GRAPH_WITH_RELEVANCE below.
+    # The graph's knobs are NOT here: they live in GRAPH_TUNING below, as one set for every arm the
+    # graph appears in.
     min_cards: int = 3
     """Below this many Cards the whole choice is skipped: the only decision is 'send it all'."""
+
+    catalog_in_system_prompt: bool = False
+    """Place the disclosure catalog in the system prompt instead of in the tool schema.
+
+    With this on, ``toolConfig`` carries only the tools that are callable on the call -- the search tool,
+    the always-available ones, the exposed ones and the referenced ones -- and every other name arrives
+    as a prose listing under a header stating the rule.
+
+    Two defects motivate it, both located by reading the projection rather than by a run. A catalog entry
+    in ``toolConfig`` declares ``{"type": "object", "properties": {}}``, which a model reads as a tool
+    that takes no arguments, and the statement that the entry is incomplete lives in the SEARCH tool's
+    description -- a different place from the entry being read at the moment of the decision. Measured on
+    Opus 4.8 over 60 turns, the combined arm made 22 searches AND 19 premature cancellations: the model
+    follows the instruction and guesses at the same time, and each guess is a round trip of about 31,000
+    tokens carrying no information.
+
+    Unmeasured. It is off by default because every published figure was measured with the catalog in the
+    tool schema, and because a name outside ``toolConfig`` is a name the provider does not know: a model
+    that calls one anyway may be refused by the provider before the plugin's guard is reached, which is a
+    harder failure than the cancellation it replaces.
+    """
 
 
 THRESHOLDS = Thresholds(
@@ -405,16 +442,37 @@ THRESHOLDS = Thresholds(
     ttl_cycles=_env_int("VALIDATION_TTL_CYCLES", 5),
     top_k=_env_int("VALIDATION_TOP_K", 4),
     min_cards=_env_int("VALIDATION_MIN_CARDS", 3),
+    catalog_in_system_prompt=_env_bool("VALIDATION_CATALOG_IN_SYSTEM_PROMPT", False),
 )
 
 
 @dataclass(frozen=True)
 class GraphTuning:
-    """The graph's knobs, as one set. There are two of them, and which one applies is measured.
+    """The graph's knobs, as ONE set. There used to be two, selected by whether the filter was installed.
 
-    A single tuning for the graph is wrong, because what the graph should do depends on whether the
-    relevance filter has already acted on the same content. Both sets below were measured on the same
-    60-turn script against Haiku 4.5, one replay each.
+    **The split is gone, and the reason is a design argument rather than a new measurement.** It existed
+    because the graph "should fold less when relevance has already compressed the evidence" -- which
+    treats the two plugins as rivals for one job. They are not. They act at different moments on
+    different material:
+
+    - The relevance filter acts on ``AfterToolCallEvent``, on a payload that has not entered the history
+      yet. Its job is to decide what of that payload is worth keeping. Whether the survivor then goes to
+      the history, to the graph, or nowhere is not its concern.
+    - The graph acts at delivery, on a history that already exists. It never sees a payload; it sees
+      whatever was written down.
+
+    So the graph's input is *smaller* with the filter installed, not *different in kind*, and a knob that
+    decides how aggressively to fold a history has no business reading whether some other plugin trimmed
+    that history first. One set, and the filter's output is simply what the graph is given.
+
+    The measurement that justified the split is also confounded, which is what made it safe to drop.
+    Applying the graph-alone values with the filter present lost five materially correct turns -- but that
+    run had ``preview_tokens`` at 800 against payloads ten to thirty times that, so the Cards were starved
+    by the FIRST cut in the chain and a larger Description budget had nothing left to preserve. The
+    preview is 2,000 now, so the condition that produced the result no longer holds.
+
+    Unmeasured as a unified set: the values below are the graph's own measured optimum, which was measured
+    with no filter beside it. Every knob is env-overridable, so a sweep can settle it without a commit.
 
     Attributes:
         expand_threshold: Note at or above which a Card enters the call at full content.
@@ -444,19 +502,34 @@ class GraphTuning:
     tags_per_card: int = 5
     """Tags derived per Card, which is what ``find_context`` matches on. Reachable from a sweep
     because the graph's discovery path is only as good as the tags it searches."""
+    neighbors_per_candidate: int = 3
+    """``similar`` neighbours ``find_context`` lists under each candidate. ``0`` lists none.
+
+    The edge had no reader before this: measured on the write path, stored with its similarity as the
+    weight, omitted from ``_STRUCTURAL_WEIGHTS`` so it propagates no Note, and traversed by no retrieval
+    path. It answers what the candidate ranking cannot -- that ranking scores each Description against
+    the QUESTION and never against another Description, so two turns covering the same ground in
+    different words are invisible to each other in it.
+
+    Unmeasured: every published figure was produced with the edge unread, so a run with this above zero
+    is not comparable to them on tokens. ``VALIDATION_GRAPH_NEIGHBORS=0`` reproduces them."""
 
 
-GRAPH_ALONE = GraphTuning(
-    expand_threshold=0.62,
-    collapse_floor=0.45,
-    link_threshold=0.50,
-    description_tokens=250,
-    body_budget=60_000,
+GRAPH_TUNING = GraphTuning(
+    expand_threshold=_env_float("VALIDATION_GRAPH_EXPAND", 0.62),
+    collapse_floor=_env_float("VALIDATION_GRAPH_COLLAPSE", 0.45),
+    link_threshold=_env_float("VALIDATION_GRAPH_LINK", 0.50),
+    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", BUDGETS.graph_description_tokens),
+    body_budget=_env_opt_int("VALIDATION_GRAPH_BODY_BUDGET", 40_000),
+    max_retrieval_cycles=_env_opt_int("VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", BUDGETS.graph_max_retrieval_cycles),
+    reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
+    tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
+    neighbors_per_candidate=_env_int("VALIDATION_GRAPH_NEIGHBORS", 3),
 )
-"""Tuning for a graph with no relevance filter beside it. Raised off the package's defaults.
+"""The graph's tuning, for every arm it appears in. Raised off the package's defaults.
 
-One hypothesis: move mass off the full-content rung and onto a Description rich enough to carry the
-facts a check asks for.
+One hypothesis behind the thresholds: move mass off the full-content rung and onto a Description rich
+enough to carry the facts a check asks for.
 
 The package's defaults (0.55 / 100 tokens) used all three rungs -- full 52%, Description 30%, Title
 18% -- yet the graph still lost scored turns the no-plugin baseline got right, and not by forgetting
@@ -474,57 +547,32 @@ What these values measured against the defaults, same script, same model: input 
 8,462,341 (-6.4%), peak call 139,917 -> 119,342 (-15%), weighted accuracy 85.0% -> 89.0%, materially
 correct 23/30 -> 24/30, and the ladder shifting from 17/10/6 to 12/15/6 exactly as intended. The token
 and ladder moves are mechanical; the one-turn accuracy gain is inside the noise of a single replay.
-"""
 
-GRAPH_WITH_RELEVANCE = GraphTuning(
-    expand_threshold=_env_float("VALIDATION_GRAPH_EXPAND", 0.55),
-    collapse_floor=_env_float("VALIDATION_GRAPH_COLLAPSE", 0.45),
-    link_threshold=_env_float("VALIDATION_GRAPH_LINK", 0.50),
-    description_tokens=_env_int("VALIDATION_GRAPH_DESCRIPTION_TOKENS", BUDGETS.graph_description_tokens),
-    body_budget=_env_opt_int("VALIDATION_GRAPH_BODY_BUDGET", None),
-    max_retrieval_cycles=_env_opt_int(
-        "VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", BUDGETS.graph_max_retrieval_cycles
-    ),
-    reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
-    tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
-)
-"""Tuning for a graph installed alongside the relevance filter.
+``body_budget`` is 40,000, and the combined arm used to run it at ``None`` on the grounds that its "peak
+call sat at 49,863 tokens -- below any ceiling worth setting". **That premise is dead.** The same arm on
+Opus 4.8 now peaks at 75,000-81,000, and the peak call's composition says the growth is entirely message
+mass: 25,598 -> 38,507 tokens of messages against a flat 7,963 of tool schema.
 
-**The two knobs were calibrated in the wrong order, and this docstring used to record the consequence as
-a discovery.** It said the package's ``description_tokens`` of 100 belonged here because raising it "has
-little left to preserve" once the filter had replaced the payload with a preview. That observation was
-correct and the conclusion drawn from it was not: the preview's budget was 800 tokens against payloads
-ten to thirty times that, so what starved the Card was the FIRST cut, and lowering the second one
-accepted the loss instead of locating it. Reading the two in series --
+``None`` is not "no ceiling", it is *the step-down turned off*. ``distribute`` only moves a Card down a
+rung when the remaining budget cannot fit it (``scoring.py:382``: ``remaining is None or cost <=
+remaining``), so with ``None`` every Card at or above ``expand_threshold`` travels at full content however
+many of them there are. ``expand_threshold`` cannot substitute for the ceiling -- it is a per-Card
+classifier and knows nothing about the total, so the call grows linearly with the conversation and is
+bounded by nothing. The vended harness carries a ``gr-budget-40k`` variant for exactly this reason, "a
+ceiling that actually binds, so the budget-driven step down is exercised", and the combined arm was the
+one running without it. A Card that does not fit steps down ONE rung, to Description, never to Title, so
+the ceiling binding costs a Description on the lowest-Note Card of the turn rather than a dropped Card.
+``VALIDATION_GRAPH_BODY_BUDGET=none`` restores the measured configuration.
 
-    payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
+``max_retrieval_cycles`` is 4 against the package's 8, and the distribution is why. Measured on GLM 4.7
+Flash over 60 turns, the combined arm's retrieval spend per turn was 1 call on 13 turns, 2 on 5, 3 on 2,
+then 5, 8 and 12 -- so 87% of the turns that retrieved at all finished inside three calls, and the whole
+tail above five is two turns. Eight therefore binds on nothing a healthy turn does while leaving the
+pathological turn eight real Card rebuilds to spend; four keeps every turn in that 87% untouched and
+halves what the outlier costs.
 
--- the preview is the ceiling on everything downstream. So ``preview_tokens`` was raised to 2,000 first
-(see :class:`Thresholds`), and only then is 250 here worth anything: the figures a Card would preserve
-now exist in the message it derives from.
-
-The earlier measurement that produced 100 is not wrong, it is conditional. Applying the graph-alone set
-with the preview at 800 lost five materially correct turns while moving tokens 1.2%, which is exactly
-what a bigger Description budget with nothing left to put in it should do.
-
-``expand_threshold`` stays at 0.55 rather than the graph-alone 0.62 for a reason the preview does not
-change: raising it steps Cards off a full-content rung, and with the filter installed that rung is
-already the cheap one. *When relevance has compressed the evidence, the graph should fold less, not
-more.*
-
-``body_budget`` stays ``None`` here because that is how this arm was measured, and its peak call sat at
-49,863 tokens -- below any ceiling worth setting. Stating the measured configuration matters more than
-carrying a ceiling that never binds.
-
-``max_retrieval_cycles`` is 4 here against the package's 8, and the distribution is why. Measured on
-GLM 4.7 Flash over 60 turns, this arm's retrieval spend per turn was 1 call on 13 turns, 2 on 5, 3 on
-2, then 5, 8 and 12 -- so 87% of the turns that retrieved at all finished inside three calls, and the
-whole tail above five is two turns. Eight therefore binds on nothing a healthy turn does while leaving
-the pathological turn eight real Card rebuilds to spend; four keeps every turn in that 87% untouched
-and halves what the outlier costs.
-
-One replay each, so read every quantity here as the direction it points rather than as a settled
-number. ``--repeats 3`` is what would settle it.
+One replay each, so read every quantity here as the direction it points rather than as a settled number.
+``--repeats 3`` is what would settle it.
 """
 
 # --- Paths -------------------------------------------------------------------------
@@ -639,9 +687,9 @@ RUN_CONFIGS = {
         graph=True,
         label="Graph + disclosure (relevance removed)",
         notes=(
-            "Leave-one-out. Also the one arm where the graph keeps its own artifact tool, since "
-            "``include_artifact_tool`` is dropped only when the relevance filter is installed -- so "
-            "it measures the graph's recovery path as the package ships it."
+            "Leave-one-out. Every arm with the graph now keeps its own artifact tool: the "
+            "``include_artifact_tool=not config.relevance`` drop is gone, because the filter no "
+            "longer registers a retrieval tool for it to collide with."
         ),
     ),
     "no-graph": RunConfig(

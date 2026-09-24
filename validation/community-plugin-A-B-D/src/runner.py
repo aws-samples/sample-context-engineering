@@ -60,8 +60,7 @@ from .config import (
     ARTIFACTS_DIR,
     AWS_PROFILE,
     EMBED_MODEL_ID,
-    GRAPH_ALONE,
-    GRAPH_WITH_RELEVANCE,
+    GRAPH_TUNING,
     REGION,
     RERANK_MODEL_ID,
     RUN_CONFIGS,
@@ -196,6 +195,15 @@ records it, so a result can never be read without knowing which scorer produced 
 """
 
 
+RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL") == "1"
+"""Whether the relevance filter registers its own ``retrieve_context`` tool, read once at import.
+
+Off by default, matching the plugin's own default: the filter's contract ends at the tool result, so
+the arm measures preview quality alone. Set ``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=1`` to reproduce
+the published figures, which were all measured with the tool present.
+"""
+
+
 class _MeteredMatcher(EmbeddingSimilarityMatcher):
     """Counts what the graph's similarity matcher actually sends to Bedrock.
 
@@ -234,26 +242,29 @@ _FULL = "full"
 """The resolution name meaning a Card's part entered the call whole."""
 
 _GRAPH_ARTIFACT_TOOL = "expand_artifact"
-"""The graph's artifact-retrieval tool, dropped when the relevance filter is also installed.
+"""The graph's artifact-retrieval tool. Registered in every arm since the filter lost its own.
 
-Measured, not assumed. On the first 60-turn run the ``all`` configuration was the only one that
+Kept as the record of why it was ever dropped, because the reason was measured, not assumed. On the
+first 60-turn run the ``all`` configuration was the only one that
 could not answer A5 -- the turn whose answer is one row of a 90-character-per-line statement -- and
 the model said why in its own answer: "every export's artifact reference has come back unreachable
 ... I can't read the stored artifacts". It had called ``expand_artifact`` with a reference the
 relevance filter had minted.
 
-The two packages each ship their own retrieval tool over their own store, and nothing bridges them:
-``RelevanceFilter`` stores the raw sub-blocks it replaced and hands out references its
-``retrieve_context`` resolves, while ``ContextGraph`` records addresses it saw in placeholder text
-and resolves them through a store of its own. The graph's README is explicit that its bridge to
+At that time the two packages each shipped their own retrieval tool over their own store, and nothing
+bridged them: ``RelevanceFilter`` stored the raw sub-blocks it replaced and handed out references its
+``retrieve_context`` resolved, while ``ContextGraph`` recorded addresses it saw in placeholder text
+and resolved them through a store of its own. The graph's README is explicit that its bridge to
 another plugin's stash is built entirely on private symbols and degrades to "answers as prose naming
 the miss" -- which is exactly what happened, and the vended stack never hit it because relevance
 lived *inside* the ContextManager whose stash the graph bridged to.
 
-So when both are installed there are two plausible tools for one job and only one of them can
-resolve the reference. Dropping the graph's leaves exactly one artifact path. Its two other tools --
-``expand_card`` and ``find_context`` -- are untouched: they reach back into the conversation's own
-turns, which is a different job and one the relevance filter does not do.
+So with both installed there were two plausible tools for one job and only one could resolve the
+reference, and dropping the graph's left exactly one artifact path. That collision is gone:
+``RelevanceFilter`` now defaults to ``include_retrieval_tool=False``, mints no reference and writes
+no store, so ``expand_artifact`` is the only artifact path there is and dropping it leaves none.
+The graph's two other tools -- ``expand_card`` and ``find_context`` -- were never part of this:
+they reach back into the conversation's own turns, a different job the relevance filter does not do.
 """
 
 
@@ -349,9 +360,15 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         config.extra["_reranker"] = reranker
 
         relevance = RelevanceFilter(
-            # File-backed rather than in-memory: the payloads are large, the run is long, and a
-            # reference the model reads back hours into a run must still resolve.
+            # File-backed rather than in-memory: kept for the run's own inspection of what was cut.
+            # With the retrieval tool off the plugin writes nothing here, so the directory stays
+            # empty unless VALIDATION_RELEVANCE_RETRIEVAL_TOOL turns the tool back on.
             store=FileStore(str(storage_root)),
+            # The filter's job ends at the tool result: llm -> tool -> filtered result -> llm. A
+            # retrieval tool would put every recovered chunk into the history as a message that is
+            # re-sent on every later call, which is what made this arm cost MORE than no plugin on
+            # Haiku 4.5 (+21.6%) while saving on Opus.
+            include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL,
             max_result_tokens=THRESHOLDS.max_result_tokens,
             config={
                 "reranker": reranker,
@@ -370,13 +387,12 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         matcher = _MeteredMatcher(EMBED_MODEL_ID, boto_session=session)
         config.extra["_matcher"] = matcher
 
-        # Which tuning applies is a measured result, not a preference: with the relevance filter
-        # installed the payload is already a preview by the time the Card is derived, so folding
-        # harder costs recall without buying tokens. See the two docstrings in config.
-        tuning = GRAPH_WITH_RELEVANCE if config.relevance else GRAPH_ALONE
-        config.extra["_graph_tuning"] = (
-            "with-relevance" if config.relevance else "alone"
-        )
+        # One tuning for every arm the graph appears in. The split by "is the relevance filter also
+        # installed" is gone: the filter acts on a tool result before it enters the history, the graph
+        # acts on a history that already exists, so the filter only makes the graph's input smaller —
+        # it does not change what folding a history should cost. See GraphTuning's docstring.
+        tuning = GRAPH_TUNING
+        config.extra["_graph_tuning"] = "unified"
 
         graph = ContextGraph(
             expand_threshold=tuning.expand_threshold,
@@ -388,16 +404,16 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             max_retrieval_cycles=tuning.max_retrieval_cycles,
             reuse_ttl_cycles=tuning.reuse_ttl_cycles,
             tags_per_card=tuning.tags_per_card,
-            # Two retrieval tools for one job, over two stores that do not know each other, is what
-            # cost the first run its A5 answer. See _GRAPH_ARTIFACT_TOOL for the measurement.
-            #
-            # This used to be a de-registration applied from the outside, reaching into the plugin's
-            # private ``_tools``, because the package exposed no switch. It does now, so the sample
-            # code says what it means and a reader can copy it.
-            include_artifact_tool=not config.relevance,
+            neighbors_per_candidate=tuning.neighbors_per_candidate,
+            # Always on. This used to be ``not config.relevance``, to leave exactly one artifact
+            # path when the filter shipped a competing ``retrieve_context`` over a store of its own.
+            # The filter no longer registers a retrieval tool at all, so there is no second path to
+            # disambiguate from and the condition only took the capability away.
+            # See _GRAPH_ARTIFACT_TOOL for the measurement that motivated the old drop.
+            include_artifact_tool=True,
             matcher=matcher,
         )
-        config.extra["_graph_artifact_tool_dropped"] = config.relevance
+        config.extra["_graph_artifact_tool_dropped"] = False
         config.extra["_graph"] = graph
         plugins.append(graph)
 
@@ -418,10 +434,10 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                 # literal: it is a domain tool of the scenario, not a plugin's.
                 always_available=[
                     *(graph.retrieval_tool_names if graph is not None else ()),
-                    *(("retrieve_context",) if config.relevance else ()),
                     "list_accounts",
                 ],
                 referenced_source=_graph_referenced_source(graph) if graph is not None else None,
+                catalog_in_system_prompt=THRESHOLDS.catalog_in_system_prompt,
             )
         )
 

@@ -178,19 +178,41 @@ logs failures only, so the graph's evidence here is read off its end-of-run stat
 
 ---
 
-## The graph is tuned per configuration, and that is a measured result
+## The graph has ONE tuning, and the split it used to have was dropped on a design argument
 
-`src/config.py` carries two sets of graph thresholds, not one, selected on whether the relevance
-filter is also installed. Each run records which it used, under `graph_tuning`.
+`src/config.py` carries a single set of graph thresholds, `GRAPH_TUNING`, used by every arm the graph
+appears in. Each run records it under `graph_tuning`.
 
-| | `GRAPH_ALONE` | `GRAPH_WITH_RELEVANCE` |
+| | `GRAPH_TUNING` | package default |
 |---|---:|---:|
-| `expand_threshold` | 0.62 | 0.55 (package default) |
-| `description_tokens` | 250 | 100 (package default) |
-| `body_budget` | 60,000 | none |
+| `expand_threshold` | 0.62 | 0.55 |
+| `description_tokens` | 250 tight window / 100 large | 100 |
+| `body_budget` | 40,000 | none |
+| `neighbors_per_candidate` | 3 | 3 |
 
-The split exists because applying one set to both was measured and it lost. On Haiku 4.5, same script,
-one replay each:
+`description_tokens` is no longer a literal: it comes from the window regime (see `TIGHT_WINDOW_CEILING`),
+which is a second change the unification made. The 250 that was measured for the graph-alone arm was
+measured on Haiku 4.5 — a 200K window, so the tight regime, where the unified set still gives 250. On a
+large-window model that arm now gets 100 instead, on the regime's reasoning that a larger budget there
+buys a larger bill rather than a fact. That is a change to the graph-only arm's configuration on
+large-window models and it is unmeasured; `VALIDATION_GRAPH_DESCRIPTION_TOKENS=250` restores it.
+
+It used to be two sets, selected on whether the relevance filter was installed, on the reasoning that
+*"when relevance has already compressed the evidence, the graph should fold less, not more"*. **That
+reasoning treats the two plugins as rivals for one job, and they are not.** They act at different
+moments, on different material:
+
+- The relevance filter acts on `AfterToolCallEvent`, on a payload that has not entered the history yet.
+  Its job is to decide what of that payload is worth keeping. Where the survivor goes next — the
+  history, the graph, nowhere — is not its concern.
+- The graph acts at delivery, on a history that already exists. It never sees a payload; it sees what
+  was written down.
+
+So the filter makes the graph's input *smaller*, not *different in kind*, and a knob deciding how
+aggressively to fold a history has no business reading whether another plugin trimmed it first.
+
+The measurement that justified the split is also confounded, which is what made it safe to drop. On
+Haiku 4.5, one replay each:
 
 | Arm | Tuning | Tokens | Peak call | Accuracy | Materially correct | Ladder full/desc/title |
 |---|---|---:|---:|---:|:--:|:--:|
@@ -199,15 +221,17 @@ one replay each:
 | all | defaults | 2,406,570 | 49,863 | 81.9% | **21/30** | 21/7/5 |
 | all | tuned | 2,377,270 | 40,622 | 74.8% | **16/30** | 13/15/7 |
 
-*Tuned, the graph alone improves on both axes; the same values applied to all three lose five
-materially correct turns while moving tokens 1.2%.*
+*Tuned, the graph alone improves on both axes; the same values applied to all three lost five materially
+correct turns while moving tokens 1.2% — which is what produced the split.*
 
-The mechanism is that **the two strategies compete for the same job**. With the filter installed, an
-oversized payload is already an 800-token preview by the time the Card is derived, so the Card's
-numeric lines come from that preview rather than from the raw result: a larger Description budget has
-little left to preserve, and stepping Cards off a full-content rung the filter already shrank costs
-recall without buying tokens. *When relevance has already compressed the evidence, the graph should
-fold less, not more.*
+That last row ran with `preview_tokens` at **800**, against payloads ten to thirty times that. The Cards
+were starved by the FIRST cut in the chain, so a larger Description budget had nothing left to preserve:
+
+    payload -> preview budget -> the message -> the Card's numeric lines -> Description budget
+
+The preview is 2,000 now, so the condition that produced the result no longer holds. The unified set is
+therefore **unmeasured as a unified set** — every knob is env-overridable, and `--repeats 3` on the
+combined arm is what would settle it.
 
 ### What the tuning actually fixed
 
@@ -324,12 +348,19 @@ The vended stack never hit this, because relevance lived *inside* the `ContextMa
 the graph bridged to — one store, one retrieval path. Split into two packages, there are two
 plausible tools for one job and only one of them can resolve the reference.
 
-**The fix, in the harness and not in the plugins:** when the relevance filter is installed, drop the
-graph's `expand_artifact` tool, leaving exactly one artifact-retrieval path. Its other two tools,
-`expand_card` and `find_context`, are untouched — they reach back into the conversation's own turns,
-a different job the relevance filter does not do. See `_GRAPH_ARTIFACT_TOOL` in
-[`src/runner.py`](src/runner.py); the run records `graph_artifact_tool_dropped` in its counters so
-two runs stay distinguishable.
+**The fix at the time, in the harness and not in the plugins:** when the relevance filter was
+installed, drop the graph's `expand_artifact` tool, leaving exactly one artifact-retrieval path. Its
+other two tools, `expand_card` and `find_context`, were untouched — they reach back into the
+conversation's own turns, a different job the relevance filter does not do. See
+`_GRAPH_ARTIFACT_TOOL` in [`src/runner.py`](src/runner.py); the run records
+`graph_artifact_tool_dropped` in its counters so two runs stay distinguishable.
+
+**That drop has since been removed.** `RelevanceFilter` now defaults to
+`include_retrieval_tool=False`: it mints no reference and writes no store, so there is no second
+retrieval path to disambiguate from and `expand_artifact` is the only way to read a stored artifact.
+Keeping the drop would have left the combined arm with no artifact-recovery path at all. Every arm
+with the graph now runs `include_artifact_tool=True`, and `graph_artifact_tool_dropped` is recorded
+as `false`. The figures immediately below were measured with the drop in place.
 
 Re-measured with that one change, same 60 turns:
 
