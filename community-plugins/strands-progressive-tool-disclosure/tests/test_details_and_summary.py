@@ -17,6 +17,7 @@ tool specifications" is asserted against a recording rather than assumed.
 """
 
 import asyncio
+import copy
 import dataclasses
 from collections.abc import AsyncGenerator, Coroutine, Sequence
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ from typing import Any, TypeVar, cast
 import pytest
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
-from strands.hooks.events import BeforeToolCallEvent
+from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models.model import Model
 from strands.tools.decorator import tool
 from strands.types.tools import ToolContext, ToolSpec
@@ -40,6 +41,7 @@ from strands_progressive_tool_disclosure.plugin import (
     _SUMMARY_SYSTEM_PROMPT,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
+    _fold_tool_exchanges,
     _model_summarizer,
     _truncate_description,
 )
@@ -686,7 +688,8 @@ def test_the_premature_call_guard_never_cancels_the_loading_tool():
     plugin._on_before_tool_call(event)
 
     assert not event.cancel_tool
-    assert plugin._states[agent].premature_cancellations == 0
+    # The plugin tools return before any state is touched, so none may exist at all.
+    assert agent not in plugin._states or plugin._states[agent].premature_cancellations == 0
 
 
 def test_the_guard_exempts_the_loading_tool_called_with_no_arguments_too():
@@ -698,7 +701,8 @@ def test_the_guard_exempts_the_loading_tool_called_with_no_arguments_too():
     plugin._on_before_tool_call(event)
 
     assert not event.cancel_tool
-    assert plugin._states[agent].premature_cancellations == 0
+    # The plugin tools return before any state is touched, so none may exist at all.
+    assert agent not in plugin._states or plugin._states[agent].premature_cancellations == 0
 
 
 def test_a_tool_loaded_through_the_loading_tool_is_no_longer_premature():
@@ -711,9 +715,183 @@ def test_a_tool_loaded_through_the_loading_tool_is_no_longer_premature():
     assert premature.cancel_tool
     assert plugin._states[agent].premature_cancellations == 1
 
+    # The cancellation loads nothing: without get_tool_details the next call still cannot see it.
+    assert "send_wire" not in plugin._states[agent].exposed
+    assert GET_TOOL_DETAILS_NAME in premature.cancel_tool
+
     _load(plugin, agent, ["send_wire"])
+    _run(plugin._projection_handler(_model_call(agent)))
     retried = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
     plugin._on_before_tool_call(retried)
 
     assert not retried.cancel_tool
     assert plugin._states[agent].premature_cancellations == 1
+
+
+def _after_tool_call(agent: Agent, name: str, cancel_message: str | None = None) -> AfterToolCallEvent:
+    """Build a real post-call event for ``name``."""
+    return AfterToolCallEvent(
+        agent=cast("AgentType", agent),
+        selected_tool=None,
+        tool_use={"toolUseId": "t1", "name": name, "input": {}},
+        invocation_state={},
+        result={"toolUseId": "t1", "status": "success", "content": [{"text": "ok"}]},
+        cancel_message=cancel_message,
+    )
+
+
+def test_a_loaded_tool_stays_while_used_and_is_released_after_ttl_idle_cycles():
+    """Each call renews the tool; ``ttl_cycles`` cycles without a call send it back to the catalog."""
+    plugin = _plugin()
+    agent = _agent(plugin)
+    ttl = plugin._ttl_cycles
+
+    _load(plugin, agent, ["send_wire"])
+    for cycle in range(1, ttl + 3):
+        agent.event_loop_metrics.cycle_count = cycle
+        projection = _run(plugin._projection_handler(_model_call(agent)))
+        assert "send_wire" in {spec["name"] for spec in projection.tool_specs}
+        plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
+
+    agent.event_loop_metrics.cycle_count += ttl + 1
+    released = _run(plugin._projection_handler(_model_call(agent)))
+
+    assert {spec["name"] for spec in released.tool_specs} == {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
+    assert "- send_wire" in released.system_prompt
+    # Calling it again without loading it again is a premature call.
+    again = _before_tool_call(agent, "send_wire", {"account": "1", "amount": "2"})
+    plugin._on_before_tool_call(again)
+    assert again.cancel_tool
+
+
+def test_a_cancelled_call_renews_nothing():
+    """A cancelled call ran nothing, so it does not extend the tool's window."""
+    plugin = _plugin()
+    agent = _agent(plugin)
+    _load(plugin, agent, ["send_wire"])
+    loaded_at = plugin._states[agent].exposed["send_wire"]
+
+    agent.event_loop_metrics.cycle_count = loaded_at + 2
+    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire", cancel_message="cancelled"))
+    assert plugin._states[agent].exposed["send_wire"] == loaded_at
+
+    plugin._on_after_tool_call(_after_tool_call(agent, "send_wire"))
+    assert plugin._states[agent].exposed["send_wire"] == loaded_at + 2
+
+
+def _exchange(tool_use_id: str, name: str) -> list[dict[str, Any]]:
+    """One assistant call to ``name`` and the user message carrying its result."""
+    return [
+        {"role": "assistant", "content": [{"toolUse": {"toolUseId": tool_use_id, "name": name, "input": {}}}]},
+        {"role": "user", "content": [{"toolResult": {"toolUseId": tool_use_id, "content": [{"text": "ok"}]}}]},
+    ]
+
+
+_CALLABLE = {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
+"""What ``tool_specs`` carries once every domain tool has been released."""
+
+
+def test_a_released_tool_exchange_becomes_one_sentence_and_plugin_pairs_vanish():
+    """No call shape left to repeat: the result survives as text, the arguments do not."""
+    question = {"role": "user", "content": [{"text": "wire 10 to account 1"}]}
+    messages = [
+        question,
+        *_exchange("t1", GET_TOOL_DETAILS_NAME),
+        *_exchange("t2", "send_wire"),
+        {"role": "assistant", "content": [{"text": "Done."}]},
+        {"role": "user", "content": [{"text": "and the balance?"}]},
+    ]
+    original = copy.deepcopy(messages)
+
+    folded = _fold_tool_exchanges(messages, _CALLABLE)
+
+    assert folded == [
+        {
+            "role": "user",
+            "content": [question["content"][0], {"text": "The tool send_wire was called and the result was: ok"}],
+        },
+        *messages[-2:],
+    ]
+    assert not any("toolUse" in block for message in folded for block in message["content"])
+    assert messages == original
+
+
+def test_a_callable_tool_keeps_its_tool_form():
+    """A tool still in ``tool_specs`` may be called again, so its exchange is left as it is."""
+    messages = [
+        {"role": "user", "content": [{"text": "q"}]},
+        *_exchange("t1", "send_wire"),
+        {"role": "assistant", "content": [{"text": "Done."}]},
+        {"role": "user", "content": [{"text": "next"}]},
+    ]
+    assert _fold_tool_exchanges(messages, {*_CALLABLE, "send_wire"}) is messages
+
+
+def test_the_exchange_in_flight_is_kept_and_mixed_calls_keep_their_callable_part():
+    """The last two messages stay in tool form; in a mixed call only the unreachable blocks fold."""
+    in_flight = [{"role": "user", "content": [{"text": "q"}]}, *_exchange("t1", "send_wire")]
+    assert _fold_tool_exchanges(in_flight, _CALLABLE) is in_flight
+
+    mixed = [
+        {"role": "user", "content": [{"text": "q"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"toolUse": {"toolUseId": "t1", "name": "send_wire", "input": {"account": "1"}}},
+                {"toolUse": {"toolUseId": "t2", "name": "check_balance", "input": {"account": "1"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": "t1", "status": "error", "content": [{"text": "limit"}]}},
+                {"toolResult": {"toolUseId": "t2", "content": [{"json": {"balance": 10}}]}},
+            ],
+        },
+        {"role": "assistant", "content": [{"text": "10"}]},
+        {"role": "user", "content": [{"text": "thanks"}]},
+    ]
+    folded = _fold_tool_exchanges(mixed, {*_CALLABLE, "check_balance"})
+
+    assert [m["role"] for m in folded] == ["user", "assistant", "user", "assistant", "user"]
+    assert folded[1]["content"] == [mixed[1]["content"][1]]
+    assert folded[2]["content"] == [
+        {"text": "The tool send_wire was called and failed with: limit"},
+        mixed[2]["content"][1],
+    ]
+
+
+def _reasoning(text: str) -> dict[str, Any]:
+    """A signed reasoning block, as a thinking model returns it."""
+    return {"reasoningContent": {"reasoningText": {"text": text, "signature": "sig"}}}
+
+
+def test_the_turn_in_flight_reaches_a_reasoning_model_as_the_same_objects():
+    """A thinking model rejects a modified latest assistant message, so the current turn is never folded."""
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"text": "q1"}]},
+        {
+            "role": "assistant",
+            "content": [_reasoning("r1"), {"toolUse": {"toolUseId": "t1", "name": "send_wire", "input": {}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "ok"}]}}]},
+        {"role": "assistant", "content": [_reasoning("r2"), {"text": "Sent."}]},
+        {"role": "user", "content": [{"text": "q2"}]},
+        {
+            "role": "assistant",
+            "content": [_reasoning("r3"), {"toolUse": {"toolUseId": "t2", "name": "send_wire", "input": {}}}],
+        },
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t2", "content": [{"text": "ok"}]}}]},
+    ]
+
+    folded = _fold_tool_exchanges(messages, _CALLABLE)
+
+    # The turn in flight -- q2 and its tool loop -- is passed through by identity, released tool or not.
+    assert folded[-3:] == messages[-3:]
+    assert all(a is b for a, b in zip(folded[-3:], messages[-3:], strict=True))
+    # The closed turn is folded: the rewritten assistant message lost its reasoning and, emptied, left.
+    assert folded[:2] == [
+        {"role": "user", "content": [{"text": "q1"}, {"text": "The tool send_wire was called and the result was: ok"}]},
+        messages[3],
+    ]
+    assert folded[1] is messages[3]

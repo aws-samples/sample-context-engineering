@@ -43,7 +43,7 @@ from typing import Any, TypeVar, cast
 import pytest
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
-from strands.hooks.events import BeforeToolCallEvent
+from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models.model import Model
 from strands.tools.decorator import tool
 from strands.types._events import ToolResultEvent
@@ -295,11 +295,11 @@ def _catalog(context: InvokeModelContext) -> dict[str, str]:
 
 
 def _call_tool(loop: asyncio.AbstractEventLoop, agent: Agent, name: str, tool_input: dict[str, Any]) -> ToolResultEvent:
-    """Run the pre-call hook and then the registered tool, returning the tool's final result event.
+    """Run the pre-call hook, the registered tool and the post-call hook, returning the tool's result event.
 
-    Both halves matter. The hook is what renews the exposure and what would cancel a call made off a
-    catalog line, and the registered tool is what turns "the schema arrived" into "the call works":
-    the arguments are validated against the very specification the projection just carried.
+    The pre-call hook is what would cancel a call made off a catalog line, the registered tool is what
+    turns "the schema arrived" into "the call works", and the post-call hook is what marks the tool
+    for release on the next projection.
     """
     event = BeforeToolCallEvent(
         agent=cast("AgentType", agent),
@@ -316,7 +316,17 @@ def _call_tool(loop: asyncio.AbstractEventLoop, agent: Agent, name: str, tool_in
             last = item
         return cast("ToolResultEvent", last)
 
-    return _run(loop, execute())
+    result = _run(loop, execute())
+    agent.hooks.invoke_callbacks(
+        AfterToolCallEvent(
+            agent=cast("AgentType", agent),
+            selected_tool=None,
+            tool_use=event.tool_use,
+            invocation_state={},
+            result=result.tool_result,
+        )
+    )
+    return result
 
 
 def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_double(
@@ -404,22 +414,23 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
     # The summary was written once and cached; a second projection does not pay for it again.
     assert summarizer.asked == [WANTED]
 
-    # 5. The call: the arguments validate against the specification that just arrived, the tool runs,
-    # and the call renews the exposure at the current cycle.
+    # 5. The call: the arguments validate against the specification that just arrived and the tool
+    # runs. Its return renews the load at the current cycle.
     agent.event_loop_metrics.cycle_count = 2
     event = _call_tool(runner, agent, WANTED, {"account": "IA-1", "since": "2026-01-01"})
     assert event.tool_result["status"] == "success"
     assert event.tool_result["content"] == [{"text": "IA-1:2026-01-01"}]
     assert plugin._states[agent].exposed == {WANTED: 2}
 
-    # The renewal is what it claims to be: the schema is still resident a full TTL after the *call*,
-    # which is past the point the original load-time exposure would have aged out.
-    agent.event_loop_metrics.cycle_count = 2 + TTL_CYCLES
-    renewed = _run(runner, plugin._projection_handler(_model_call(agent)))
-    assert _projected(renewed)[WANTED] == registered
-    assert WANTED not in _catalog(renewed)
+    # 6. The release: a full TTL without a call sends it back to the catalog, and the projection is
+    # back to the two plugin tools. The history's toolUse for it does not keep it resident.
+    agent.event_loop_metrics.cycle_count = 2 + TTL_CYCLES + 1
+    released = _run(runner, plugin._projection_handler(_model_call(agent)))
+    assert set(_projected(released)) == {FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME}
+    assert WANTED in _catalog(released)
+    assert plugin._states[agent].exposed == {}
 
-    # And one search and one load paid for all of it: the projections in between went back to neither.
+    # One search and one load paid for the use; the projections in between went back to neither.
     assert index.searches == 1
     assert plugin._states[agent].searches == 1
     assert plugin._states[agent].loads == 1

@@ -5,11 +5,6 @@ with one warning.
 
 Validates: Requirements 11.1, 11.2, 11.3, 11.4, 11.5, 11.6.
 
-Feature: progressive-tool-disclosure-plugin, Property 23: A failing supplemental source degrades to history only and
-proceeds.
-
-Validates: Requirements 11.7.
-
 Feature: progressive-tool-disclosure-plugin, Property 24: A failing summarizer degrades to truncation and the
 projection still succeeds.
 
@@ -26,18 +21,14 @@ Failures are injected at each of the five points the requirement enumerates, one
 - ``build`` raises, which additionally must leave the registry fingerprint unwritten so the next call rebuilds rather
   than searching over a half-built index;
 - expiration raises, through a cycle counter that refuses to be read;
-- the history scan raises, through a malformed message;
 - the catalog's arrival in the system prompt raises, through a prompt of a shape nothing can append to;
 - the block union raises, through an ``always_available`` container that refuses membership part-way through the
   projection.
 
-Three paths degrade differently and are asserted separately. The search returns guidance to the model instead of a
-context, records zero exposures for that invocation, and logs its own single warning. The supplemental referenced
-source logs one ``debug``, not a warning, and the projection *proceeds*: a source that fails must not cost the token
-reduction — asserted against a baseline plugin configured with no source at all, so "degrades to history only" is an
-equality against the projection that never had a source, field for field. The summarizer degrades furthest from a
-failure: a summary that cannot be produced falls back to boundary truncation, every tool still gets a catalog line, and
-the projection applies as if nothing had happened.
+Two paths degrade differently and are asserted separately. The search returns guidance to the model instead of a
+context, records zero exposures for that invocation, and logs its own single warning. The summarizer degrades furthest
+from a failure: a summary that cannot be produced falls back to boundary truncation, every tool still gets a catalog
+line, and the projection applies as if nothing had happened.
 
 Everything runs offline: a stub model that raises if called, a deterministic summarizer on every plugin that keeps a
 catalog, ``ToolIndex`` doubles that raise on demand, and contexts built by hand. No network, no model call, no disk.
@@ -198,8 +189,8 @@ class _UnaskableNames(tuple):
         raise RuntimeError("the always-available names could not be read")
 
 
-FAILURE_POINTS = ["build", "expire", "history", "catalog", "union"]
-"""The five points requirement 11.5 enumerates, plus ``build`` from 11.1: one injected per example."""
+FAILURE_POINTS = ["build", "expire", "catalog", "union"]
+"""The projection-path points that can fail, plus ``build`` from 11.1: one injected per example."""
 
 names_strategy = st.lists(st.sampled_from(TOOL_NAMES), min_size=1, max_size=len(TOOL_NAMES), unique=True)
 
@@ -214,12 +205,6 @@ subset_strategy = st.lists(st.sampled_from(TOOL_NAMES), max_size=2, unique=True)
 need_strategy = st.sampled_from(["list the accounts", "move money between accounts", "read the audit trail"])
 
 failure_point_strategy = st.sampled_from(FAILURE_POINTS)
-
-# Every way the supplemental source can fail: raising, returning something that cannot be iterated at all, and
-# returning an iterable whose elements are not names. The plugin has to reach the same degradation from all of them.
-source_failure_strategy = st.sampled_from(
-    ["raises", "returns_int", "returns_none", "returns_object", "yields_nonstring"]
-)
 
 # Every way a summarizer can fail to produce a line: raising outright, raising from the awaited branch, and answering
 # with something that is not a usable summary. All of them have to reach the same truncation.
@@ -423,9 +408,6 @@ def test_any_projection_path_failure_degrades_to_the_received_context_with_exact
 
     if failure_point == "expire":
         agent.event_loop_metrics = _UnreadableMetrics()
-    elif failure_point == "history":
-        # A message that is not a mapping: the scan reads ``content`` off every message it is handed.
-        messages = ["the history was corrupted"]  # type: ignore[list-item]
     elif failure_point == "catalog":
         # A prompt that is neither text nor a list of blocks: the catalog has nowhere to be appended.
         system_prompt = 7
@@ -529,82 +511,6 @@ def test_a_failing_search_returns_guidance_with_exactly_one_warning_and_records_
 
 @given(
     names=names_strategy,
-    catalog_chars=catalog_chars_strategy,
-    ttl_cycles=ttl_strategy,
-    cycle=cycle_strategy,
-    exposed=subset_strategy,
-    always_available=subset_strategy,
-    referenced=subset_strategy,
-    failure=source_failure_strategy,
-)
-@PROPERTY_SETTINGS
-def test_a_failing_supplemental_source_degrades_to_history_only_and_proceeds(
-    names: list[str],
-    catalog_chars: int | None,
-    ttl_cycles: int,
-    cycle: int,
-    exposed: list[str],
-    always_available: list[str],
-    referenced: list[str],
-    failure: str,
-) -> None:
-    """Feature: progressive-tool-disclosure-plugin, Property 23.
-
-    Validates: Requirements 11.7.
-
-    A supplemental source that raises, that returns something non-iterable, or that yields a non-name degrades to the
-    retained history alone — asserted as an equality against the projection of an identically configured plugin that
-    has no source at all, on both fields the projection writes. The projection *proceeds*: the returned context is a
-    new one carrying the projection, not the received context passed through. Exactly one debug record carries
-    ``exc_info``, and nothing is logged at warning level: a source is supplemental, and losing it is not the operator's
-    problem.
-    """
-    sources: dict[str, Any] = {
-        "raises": _raising_source,
-        "returns_int": lambda agent: 7,
-        "returns_none": lambda agent: None,
-        "returns_object": lambda agent: object(),
-        "yields_nonstring": lambda agent: ["audit_log", 3],
-    }
-
-    configuration: dict[str, Any] = {
-        "catalog_chars": catalog_chars,
-        "summarizer": _stub_summarizer,
-        "ttl_cycles": ttl_cycles,
-        "always_available": tuple(always_available),
-    }
-
-    plugin = ProgressiveToolDisclosure(index=_SilentIndex(), referenced_source=sources[failure], **configuration)
-    agent = _agent(plugin)
-    _seed_state(plugin, agent, exposed, cycle)
-
-    # One set of incoming specifications for both calls, so the comparison below is about the source and nothing else.
-    incoming = _incoming_specs(agent, names)
-    messages = _messages(referenced)
-    context = _context(agent, incoming, messages)
-
-    with _captured_logs() as captured:
-        result = asyncio.run(plugin._projection_handler(context))
-
-    baseline_plugin = ProgressiveToolDisclosure(index=_SilentIndex(), referenced_source=None, **configuration)
-    baseline_agent = _agent(baseline_plugin)
-    _seed_state(baseline_plugin, baseline_agent, exposed, cycle)
-    baseline_context = _context(baseline_agent, deepcopy(incoming), messages)
-    baseline = asyncio.run(baseline_plugin._projection_handler(baseline_context))
-
-    assert result is not context, "a failing source degraded to passthrough instead of proceeding"
-    assert baseline is not baseline_context, "the baseline projection did not apply"
-    assert result.tool_specs == baseline.tool_specs, "a failing source changed the projection"
-    assert result.system_prompt == baseline.system_prompt, "a failing source changed the catalog"
-    assert result.messages is messages, "the projection changed the retained history"
-
-    debugs = _debugs_with_traceback(captured.records)
-    assert len(debugs) == 1, f"expected one debug with exc_info, got {len(debugs)}"
-    assert _at_or_above(captured.records, logging.WARNING) == [], "a failing source logged at warning level or above"
-
-
-@given(
-    names=names_strategy,
     catalog_chars=st.integers(min_value=1, max_value=24),
     ttl_cycles=ttl_strategy,
     cycle=cycle_strategy,
@@ -690,8 +596,3 @@ def _failing_summarizer(failure: str) -> Any:
     if failure == "raises_async":
         return raises_async
     return lambda spec, max_chars: junk[failure]
-
-
-def _raising_source(agent: Agent) -> Sequence[str]:
-    """A supplemental referenced source that fails outright."""
-    raise RuntimeError("the supplemental source is unavailable")

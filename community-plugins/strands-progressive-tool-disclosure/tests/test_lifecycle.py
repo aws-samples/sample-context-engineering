@@ -40,7 +40,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
-from strands.hooks.events import BeforeToolCallEvent
+from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.models.model import Model
 from strands.tools.decorator import tool
 from strands.types.tools import ToolContext, ToolSpec
@@ -242,6 +242,17 @@ def _model_call(agent: Agent) -> InvokeModelContext:
     declared = {field.name for field in dataclasses.fields(InvokeModelContext)}
 
     return InvokeModelContext(**{name: value for name, value in candidates.items() if name in declared})
+
+
+def _after_tool_call(agent: Agent, name: str) -> AfterToolCallEvent:
+    """Build a real post-call event for a call to ``name`` that ran."""
+    return AfterToolCallEvent(
+        agent=cast("AgentType", agent),
+        selected_tool=None,
+        tool_use={"toolUseId": "t1", "name": name, "input": {}},
+        invocation_state={},
+        result={"toolUseId": "t1", "status": "success", "content": [{"text": "ok"}]},
+    )
 
 
 def _before_tool_call(agent: Agent, name: str, tool_input: dict[str, Any] | None) -> BeforeToolCallEvent:
@@ -532,7 +543,7 @@ def test_a_premature_call_is_cancelled_exactly_under_the_conjunction(
     registry = agent.tool_registry.registry
     is_registered = name in registry
     if was_exposed and is_registered:
-        plugin._states[agent] = _DisclosureState(exposed={name: cycle})
+        plugin._states[agent] = _DisclosureState(exposed={name: cycle}, projected=frozenset({name}))
 
     event = _before_tool_call(agent, name, tool_input)
     exp_tool_use = copy.deepcopy(event.tool_use)
@@ -551,22 +562,19 @@ def test_a_premature_call_is_cancelled_exactly_under_the_conjunction(
     )
     assert bool(event.cancel_tool) is exp_cancelled
     if exp_cancelled:
-        # Requirement 8.1: the message names the tool, so the model knows which call to repeat.
+        # Requirement 8.1: the message names the tool and the loading tool that fixes it.
         assert name in cast("str", event.cancel_tool)
-        # Requirement 8.2: the cancelled call paid for the schema — the next projection carries it.
-        assert plugin._states[agent].exposed[name] == cycle
+        assert GET_TOOL_DETAILS_NAME in cast("str", event.cancel_tool)
+        # The guard loads nothing on the model's behalf: the next projection still does not carry it.
+        assert name not in plugin._states[agent].exposed
         assert plugin._states[agent].premature_cancellations == 1
 
-    if is_registered and name in _PLUGIN_TOOL_NAMES:
-        # The plugin tools are projected in full on every call, so the call records no exposure for them.
-        if not was_exposed:
-            assert name not in plugin._states[agent].exposed
-    elif is_registered:
-        # Requirement 7.3: a call is the strongest evidence the schema is still worth sending.
-        assert plugin._states[agent].exposed[name] == cycle
-    else:
-        # Requirement 8.6: an unknown name has no specification to expose, so no state is created.
-        assert plugin._states.get(agent) is None
+    # Requirement 8.6: the pre-call hook never exposes anything -- a call is not a load. Exposure is
+    # exactly what the test seeded, and an unknown name or a plugin tool creates no state at all.
+    exposed = plugin._states[agent].exposed if agent in plugin._states else {}
+    assert exposed == ({name: cycle} if was_exposed and is_registered else {})
+    if not is_registered or name in _PLUGIN_TOOL_NAMES:
+        assert plugin._states.get(agent) is None or was_exposed
 
     # Requirement 8.7: the only writes are the disclosure state and, when premature, ``cancel_tool``.
     assert event.tool_use == exp_tool_use
@@ -584,7 +592,7 @@ def test_repeated_use_keeps_a_schema_resident_without_re_loading(
 ) -> None:
     """Feature: progressive-tool-disclosure-plugin, Property 16.
 
-    Repeated use keeps a schema resident without re-loading.
+    Repeated use keeps a schema resident without re-loading; ``ttl_cycles`` idle cycles release it.
 
     Validates: Requirements 7.3, 7.4.
     """
@@ -597,34 +605,33 @@ def test_repeated_use_keeps_a_schema_resident_without_re_loading(
     first = _run(plugin._projection_handler(_model_call(agent)))
     assert _is_cataloged(first, "list_accounts")
 
-    # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING -- so the
-    # projection that follows it still carries the catalog line and not the specification.
+    # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING.
     found = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
     assert "list_accounts" in found
     assert (index.searches, plugin._states[agent].searches) == (1, 1)
     assert plugin._states[agent].exposed == {}
     assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
 
-    # Loading is the one write that exposes.
     _load(plugin, agent, ["list_accounts"])
-    assert plugin._states[agent].loads == 1
 
-    # Used in every cycle of a stretch longer than the TTL: the call renews, the projection carries
-    # the full specification, and no cycle of the stretch pays for a second search or a second load.
+    # Used in every cycle of a stretch longer than the TTL: each call renews, the projection carries the
+    # full specification, and no cycle of the stretch pays for a second load.
     for cycle in range(1, ttl_cycles + extra_cycles + 1):
         agent.event_loop_metrics.cycle_count = cycle
-        plugin._on_before_tool_call(_before_tool_call(agent, "list_accounts", {"owner": "A1"}))
-
         projected = _run(plugin._projection_handler(_model_call(agent)))
         assert _projected(projected)["list_accounts"] == registered
         assert "list_accounts" not in _catalog_names(projected)
+
+        call = _before_tool_call(agent, "list_accounts", {"owner": "A1"})
+        plugin._on_before_tool_call(call)
+        assert not call.cancel_tool
+        plugin._on_after_tool_call(_after_tool_call(agent, "list_accounts"))
         assert plugin._states[agent].exposed["list_accounts"] == cycle
 
-    # Requirement 7.4: one search and one load bought the whole stretch, TTL length notwithstanding.
-    assert (index.searches, plugin._states[agent].searches) == (1, 1)
     assert plugin._states[agent].loads == 1
+    assert plugin._states[agent].premature_cancellations == 0
 
-    # And the moment use stops, the exposure ages out: residency is bought by use, not granted.
+    # And the moment use stops, the tool ages out: residency is bought by use, not by the history.
     agent.event_loop_metrics.cycle_count += ttl_cycles + 1
     assert _is_cataloged(_run(plugin._projection_handler(_model_call(agent))), "list_accounts")
 
