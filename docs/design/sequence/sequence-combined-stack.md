@@ -47,9 +47,9 @@ are defined in `RUN_CONFIGS` (`config.py:614`) with the boolean flags `disclosur
 Construction order inside `build_plugins`, and what each plugin is attached with:
 
 - **Relevance filter** — built under `if config.relevance:` (`runner.py:343`). Constructed at
-  `runner.py:359` as `RelevanceFilter(...)` with `store=FileStore(str(storage_root))`
-  (`runner.py:363`), **`include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:368`)**,
-  `max_result_tokens=THRESHOLDS.max_result_tokens` (`runner.py:369`), and a `config={...}` dict
+  `runner.py:362` as `RelevanceFilter(...)` with `store=FileStore(str(storage_root))`
+  (`runner.py:366`), **`include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:371`)**,
+  `max_result_tokens=THRESHOLDS.max_result_tokens` (`runner.py:372`), and a `config={...}` dict
   carrying `reranker` (`runner.py:371`), `relevance_threshold`, `chunk_tokens`, `preview_tokens`.
   Appended at `runner.py:378`. The reranker is `_MeteredDensityReranker` or `_MeteredReranker`,
   selected at `runner.py:351` by `DENSITY_RERANK` (`runner.py:190`).
@@ -192,8 +192,8 @@ auto-discovered tool when the flag is off, matched by `tool_name` rather than by
 With the flag off, three things do not happen — all in `_store_and_rewrite` (`plugin.py:481`):
 
 1. **Nothing is stored.** The store-write loop sits under `if self._include_retrieval_tool:`
-   (`plugin.py:509`), so the `FileStore` directory stays empty (the comment at `runner.py:361`–
-   `runner.py:362` says exactly this).
+   (`plugin.py:509`), so the `FileStore` directory stays empty (the comment at `runner.py:363`–
+   `runner.py:365` says exactly this).
 2. **No reference token is minted.** `references` stays empty, so the `[ref: …]` / `[refs: …]` suffix
    (`plugin.py:540`) is never appended: the rewritten result is the `[Relevance: …]` marker plus the
    verbatim preview and nothing else (`plugin.py:538`).

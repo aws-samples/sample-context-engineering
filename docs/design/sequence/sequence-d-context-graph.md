@@ -8,7 +8,7 @@ Authority: `community-plugins/strands-context-graph/src/strands_context_graph/`.
 
 `ContextGraph` (`plugin.py:446`) is a Strands `Plugin` that projects an agent's short-term memory as a graph of **Cards** — one Card per *closed* turn (`plugin.py:797`, `cards.py:closed_turn_ranges:153`), each Card holding **addresses** (durable `tracking_id`s and a reference key), never message content (`state.py:Card:64`). It never mutates `agent.messages`; instead it registers one `InvokeModelStage.Input` delivery handler plus three hooks (`plugin.py:init_agent:616`), and each turn it computes a per-Card **Note** from the cosine similarity between the turn's question and each Card's Description (`scoring.py:compute_notes:194`), propagates that Note exactly one jump along the structural links (`scoring.py:_propagate:234`), and from the resulting Note picks a **Resolution** per Card on a three-rung ladder — Full Content / Description / Title (`scoring.py:distribute:319`). At delivery it *removes* the collapsed messages from the call's own message list and *folds* a `<collapsed_turns>` block describing what left into the last user message (`projection.py:deliver:185`, `compaction.py:render_final_block:94`). The Resolution steps down only when the body budget runs out, never as a verdict (`scoring.py:distribute:319`, budget branch `scoring.py:385`). Three retrieval tools (`expand_card`, `expand_artifact`, `find_context`) let the model reach back into a Card the choice collapsed (`plugin.py:1074`, `plugin.py:1102`, `plugin.py:1145`).
 
-**Two things shipped today and are documented below as first-class mechanics, not footnotes:**
+**Two mechanics are documented below as first-class, not footnotes:**
 
 1. `find_context` now traverses the `similar` edge. `_similar_neighbors` (`tools.py:454`) is the **first and only reader of that edge anywhere in the plugin** — before it, the edge was measured on the write path, stored with its similarity as the weight, propagated no Note, and was walked by nothing at all. Each candidate now carries its strongest neighbours as a `related turns:` line (`tools.py:527`). See §3 and §6.2.
 2. The harness runs `body_budget` at `40_000` instead of `None`, set through `VALIDATION_GRAPH_BODY_BUDGET` (`config.py:523`), which is what makes the **budget-driven step down** in `distribute` an exercised path rather than dead code. `None` is not "no ceiling"; it is *the step down turned off* (`scoring.py:382`). See §5.1.
@@ -55,17 +55,17 @@ A `Card` (`state.py:Card:64`) is a frozen dataclass that "Holds addresses and de
 | `tool` | `cards.py:414` (one per `toolUse` name), and on artifact Cards through `_link` (`cards.py:765`) | a tool name | **Not via `_STRUCTURAL_WEIGHTS`** — walked separately by `_spread_over_tool_hubs` (`scoring.py:288`), weight `scoring.py:_W_TOOL:62` | No |
 | `artifact` | `cards.py:417` (one per cited reference) | a reference / artifact-Card title | **Yes**, weight `scoring.py:_W_ARTIFACT:65`, listed in `_STRUCTURAL_WEIGHTS` (`scoring.py:71`) | No |
 | `follows` | `cards.py:420` (to the immediately-preceding turn's Card) | prior Card title | **Yes**, weight `scoring.py:_W_PREVIOUS:68`, listed in `_STRUCTURAL_WEIGHTS` (`scoring.py:73`) | No |
-| `similar` | `cards.py:427`–`428` (inside `register_card`, bidirectional, ≥ `link_threshold`) and `cards.py:1062`–`1063` (inside `link_newly_measurable`) | Card title | **No** — carries NO Note (`_STRUCTURAL_WEIGHTS` omits it, `scoring.py:71`; docstring `scoring.py:81`) | **Yes, as of today** — `_similar_neighbors` (`tools.py:454`), reached from `_render_candidates` (`tools.py:489`) |
+| `similar` | `cards.py:427`–`428` (inside `register_card`, bidirectional, ≥ `link_threshold`) and `cards.py:1062`–`1063` (inside `link_newly_measurable`) | Card title | **No** — carries NO Note (`_STRUCTURAL_WEIGHTS` omits it, `scoring.py:71`; docstring `scoring.py:81`) | **Yes** — `_similar_neighbors` (`tools.py:454`), reached from `_render_candidates` (`tools.py:489`) |
 
 Verified against source:
 
 - `_STRUCTURAL_WEIGHTS` (`scoring.py:71`) contains **exactly** `{"follows": _W_PREVIOUS, "artifact": _W_ARTIFACT}` — only `follows` and `artifact`. Confirmed.
 - `tool` is walked separately by `_spread_over_tool_hubs` (`scoring.py:288`); `_spread_over_card_edges` (`scoring.py:259`) skips any kind whose `_STRUCTURAL_WEIGHTS.get(kind)` is `None`, i.e. `tool` and `similar` (`scoring.py:279`–`284`). Confirmed.
-- `similar` propagates **no** Note. Its docstring (`scoring.py:81`): "``similar`` targets a Card but inherits no Note at all (Requirement 8.4): it is an edge a manual search traverses." Confirmed — and as of today that sentence finally describes running code.
+- `similar` propagates **no** Note. Its docstring (`scoring.py:81`): "``similar`` targets a Card but inherits no Note at all (Requirement 8.4): it is an edge a manual search traverses." Confirmed — and that sentence now describes running code.
 
 ### The hole this closed, and what closing it does not change
 
-Before today, the `similar` edge was **paid for and read by nothing**. Three facts, each still true in source:
+Until `_similar_neighbors` was written, the `similar` edge was **paid for and read by nothing**. Three facts, each still true in source:
 
 1. It is measured on the write path — a real cosine similarity, stored as the Link's `weight` (`state.py:114`), computed twice over (`cards.py:427` at registration, `cards.py:1062` in the second pass).
 2. It propagates **zero** Note, because `_STRUCTURAL_WEIGHTS` (`scoring.py:71`) carries only `follows` and `artifact`, and `_spread_over_card_edges` skips every kind the mapping does not name (`scoring.py:283`).
@@ -202,7 +202,7 @@ The mechanism, exactly:
 
 So the ceiling costs a Description on the lowest-Note Card of the turn. It never drops a Card.
 
-**Today's change is that this branch is now exercised.** The harness moved `body_budget` from `None` to `40_000` (`config.py:523`), on the finding that the premise for `None` is dead: the combined arm's peak call went from 49,863 tokens to 75,000–81,000 on Opus 4.8, and the peak call's composition attributes the growth entirely to message mass (25,598 → 38,507 tokens of messages against a flat 7,963 of tool schema). That reasoning is recorded in `GraphTuning`'s docstring, in the paragraph on `body_budget` (`config.py:551`). `VALIDATION_GRAPH_BODY_BUDGET=none` restores the previous configuration (`config.py:523`).
+**This branch is now exercised.** The harness moved `body_budget` from `None` to `40_000` (`config.py:523`), on the finding that the premise for `None` is dead: the combined arm's peak call went from 49,863 tokens to 75,000–81,000 on Opus 4.8, and the peak call's composition attributes the growth entirely to message mass (25,598 → 38,507 tokens of messages against a flat 7,963 of tool schema). That reasoning is recorded in `GraphTuning`'s docstring, in the paragraph on `body_budget` (`config.py:551`). `VALIDATION_GRAPH_BODY_BUDGET=none` restores the previous configuration (`config.py:523`).
 
 ### 5.3 What the model receives per rung
 
@@ -389,7 +389,7 @@ Returns:
     The requested part of the artifact, or an error naming what was missing.
 ```
 
-`find_context` docstring (`plugin.py:1146`–`1163`) — **unchanged by today's work.** The neighbour line is not advertised in the schema; the model discovers it in the answer, and the answer's own closing line tells it what to do with a title:
+`find_context` docstring (`plugin.py:1146`–`1163`) — **unchanged by the neighbour work.** The neighbour line is not advertised in the schema; the model discovers it in the answer, and the answer's own closing line tells it what to do with a title:
 
 ```text
 Find earlier turns of this conversation that match what you need, described in your words.
