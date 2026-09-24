@@ -1,11 +1,12 @@
 # strands-progressive-tool-disclosure
 
 Progressive Tool Disclosure for Strands Agents. Instead of sending every tool's full specification on
-every model call, the plugin projects the call's tool list down to five ordered blocks: the
-`find_tools` search tool, the `always_available` tools, the schemas already exposed and still live by
-TTL, the tools the history references, and a ~20-token catalog entry for everything else. A tool's
-full schema enters the call when the model searches for it, and leaves again after `ttl_cycles` idle
-cycles.
+every model call, the plugin sends in `tool_specs` only the tools that are callable on the call —
+`find_tools`, `get_tool_details`, the `always_available` tools, the schemas loaded and still live by
+TTL, and the tools the history references — and lists every other tool as one line in the system
+prompt: its name and a summary of its description, at most `catalog_chars` characters. The model
+loads full schemas with `get_tool_details([names])`, and they leave again after `ttl_cycles` idle
+cycles. `find_tools` searches when no catalog name fits.
 
 The plugin reads the per-call copy the event loop hands to `InvokeModelStage` and never mutates
 `agent.tool_registry.registry` — every tool stays callable regardless of what the call shows.
@@ -16,8 +17,9 @@ The plugin reads the per-call copy the event loop hands to `InvokeModelStage` an
 pip install strands-progressive-tool-disclosure
 ```
 
-One runtime dependency: `strands-agents`. The default index is standard-library only, so the base
-install performs no network call.
+One runtime dependency: `strands-agents`. The default index is standard-library only. The default
+summarizer calls the agent's own model once per tool whose description is longer than
+`catalog_chars`, on the first projected call, and caches the line; pass a `summarizer` to avoid it.
 
 ## Usage
 
@@ -29,8 +31,8 @@ agent = Agent(
     tools=[...],
     plugins=[
         ProgressiveToolDisclosure(
-            catalog_tokens=20,      # per-tool description budget in the catalog; None = search-only
-            ttl_cycles=5,           # cycles an exposed schema survives after its last use
+            catalog_chars=80,       # summary limit per catalog line; None = no catalog
+            ttl_cycles=5,           # cycles a loaded schema survives after its last use
             always_available=[],    # tools that skip discovery and carry full spec every call
         )
     ],
@@ -39,11 +41,12 @@ agent = Agent(
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `catalog_tokens` | `int >= 1 \| None` | `20` | Token budget of a catalog entry's description. `None` drops the catalog entirely, leaving only the search tool as the hint that other tools exist. |
-| `ttl_cycles` | `int >= 1` | `5` | Idle cycles an exposure survives after its last use. |
+| `catalog_chars` | `int >= 1 \| None` | `80` | Character limit of a catalog line's summary. `None` drops the catalog entirely, leaving only the two plugin tools as the hint that other tools exist. |
+| `summarizer` | `Callable[[ToolSpec, int], str \| Awaitable[str]] \| None` | `None` | Writes a catalog line for a description longer than the limit. `None` uses the agent's model; usage is reported as `summary_usage`. Failures fall back to a boundary cut. |
+| `ttl_cycles` | `int >= 1` | `5` | Idle cycles a loaded schema survives after its last use. |
 | `always_available` | `Sequence[str]` | `()` | Names that carry their full specification on every call, skipping the discovery cycle. |
-| `index` | `ToolIndex \| None` | `LexicalToolIndex()` | Search implementation. Any object exposing `build` and `search`. |
-| `top_k` | `int >= 1` | `3` | How many tools a single search exposes. |
+| `index` | `ToolIndex \| None` | `LexicalToolIndex()` | Search implementation behind `find_tools`. Any object exposing `build` and `search`. |
+| `top_k` | `int >= 1` | `3` | How many tools a single search lists. |
 | `referenced_source` | `Callable[[Agent], Iterable[str]] \| None` | `None` | Supplemental source of names to keep at full spec, on top of the ones the history references. |
 
 ## Private-API caveat

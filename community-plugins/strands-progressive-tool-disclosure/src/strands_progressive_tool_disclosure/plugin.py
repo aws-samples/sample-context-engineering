@@ -1,28 +1,30 @@
 """Progressive tool disclosure: the projection sent on each model call.
 
-This module holds the description budget used by catalog entries. A catalog entry names a tool the
-model has not asked for yet, so its description has to be short enough that listing every unexposed
-tool stays cheap, and faithful enough that the model can tell whether the capability is the one it
-needs. Faithful here means literal: the short description is a prefix of the registered one, cut at a
-boundary, never a rewrite.
+Every call carries, in ``tool_specs``, only the tools that are callable on it: the two plugin tools
+(``find_tools`` and ``get_tool_details``), the always-available ones, the exposed ones and the ones the
+retained history still references. Every other tool reaches the model as one line of a catalog in the
+system prompt -- its name and a summary of its description, at most ``catalog_chars`` characters long.
 
-Token counts are estimated from character counts rather than measured. ``Model.count_tokens`` is
-async and operates over ``Messages``, not over a bare string, which makes it the wrong tool for
-budgeting dozens of descriptions inside a single projection. The four-characters-per-token heuristic
-is the same one ``ContextOffloader`` uses for preview slicing, and the correctness properties assert
-against this same estimator, so the budget contract is verifiable end to end.
+The summary is written by a model, once per tool, and cached for the life of the plugin instance, so
+the catalog is byte-stable across calls. A description that already fits the limit is used verbatim and
+costs no call. Truncation at a sentence or word boundary is the fallback when a summary cannot be
+produced, never the primary path.
+
+Token counts in the logs are estimated from character counts rather than measured, with the same
+four-characters-per-token heuristic ``ContextOffloader`` uses for preview slicing.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import math
 import weakref
-from collections.abc import Callable, Container, Iterable, KeysView, Sequence
+from collections.abc import Awaitable, Callable, Container, Iterable, KeysView, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from strands.hooks.events import BeforeToolCallEvent
 from strands.plugins import Plugin, hook
@@ -35,6 +37,7 @@ from .index import LexicalToolIndex, ToolIndex, ToolMatch
 
 if TYPE_CHECKING:
     from strands.agent.agent import Agent
+    from strands.models.model import Model
 
     from ._compat import InvokeModelContext
 
@@ -43,8 +46,35 @@ logger = logging.getLogger(__name__)
 FIND_TOOLS_NAME = "find_tools"
 """Name of the search tool. Also the name the projection looks for to decide it can project at all."""
 
-_DEFAULT_CATALOG_TOKENS = 20
-"""Description budget per catalog entry. Cuts the resident cost by ~96% at a low risk."""
+GET_TOOL_DETAILS_NAME = "get_tool_details"
+"""Name of the loading tool: the one call that puts full specifications into the next projection.
+
+Not ``get_details``: a bare verb-noun that generic is a name a domain tool can already hold, and a
+collision would silently shadow one of the two in the registry."""
+
+_PLUGIN_TOOL_NAMES = frozenset({FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME})
+"""Both plugin tools. Carried in full on every projected call and never cancelled by the guard."""
+
+_DEFAULT_CATALOG_CHARS = 80
+"""Summary limit per catalog line, in characters. About twenty tokens, the budget that measured ~96% of
+the resident saving at a low risk."""
+
+_SUMMARY_CONCURRENCY = 8
+"""Summaries requested at once when an index build meets many new tools. Bounds the burst, not the total."""
+
+_SUMMARY_SYSTEM_PROMPT = """\
+You write catalog lines for tools. You are given one tool's name and description. Reply with a single \
+summary of what the tool does, at most {max_chars} characters, in the language of the description. Keep \
+what tells this tool apart from similar ones: the object it acts on and what it returns. No preamble, no \
+quotes, no tool name, no trailing period needed."""
+"""Instruction of the default summarizer. Asks for the discriminating content, which is what the model
+reading the catalog needs to decide whether to load the tool."""
+
+ToolSummarizer: TypeAlias = "Callable[[ToolSpec, int], str | Awaitable[str]]"
+"""Summarizer: receives a registered specification and the character limit, returns the summary.
+
+May be sync or async. What it returns is clamped to the limit afterwards, so a summarizer that overruns
+cannot overrun the catalog; one that raises or returns nothing falls back to truncation."""
 
 _DEFAULT_TTL_CYCLES = 5
 """Cycles an exposure survives after its last use."""
@@ -52,8 +82,24 @@ _DEFAULT_TTL_CYCLES = 5
 _DEFAULT_TOP_K = 3
 """How many tools one search exposes."""
 
-_MATCHES_HEADER = "Full parameters for these tools are available on your next call:"
-"""Opens the search result. What the model has to know is that the schema is one turn away."""
+_MATCHES_HEADER = (
+    f"Tools that match. Nothing is loaded yet: call `{GET_TOOL_DETAILS_NAME}` with the names you want, then call them."
+)
+"""Opens the search result. A search only finds; loading is the other tool's job, and this says so."""
+
+_DETAILS_LOADED_HEADER = "Loaded. These tools are callable with their full parameters on your next call:"
+"""Opens the loading result. The specification itself travels in ``tool_specs``, not in this text: a tool
+result is resident in the history, a projection is per call and forgettable."""
+
+_DETAILS_UNKNOWN = "Not a tool, ignored: {names}. Use names from the catalog or from `" + FIND_TOOLS_NAME + "`."
+"""Line naming the requested names the registry does not have."""
+
+_DETAILS_EMPTY_GUIDANCE = (
+    "Pass the names of the tools you want loaded, as a list. Take them from the catalog, or call `"
+    + FIND_TOOLS_NAME
+    + "` first."
+)
+"""Answer to a loading call that named nothing usable."""
 
 _EMPTY_NEED_GUIDANCE = "Describe what you are trying to do, in your own words, then call this tool again."
 """Answer to an empty need. Guidance rather than an error: the model can recover on its own turn."""
@@ -102,115 +148,146 @@ def _estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / _CHARS_PER_TOKEN)
 
 
-_CATALOG_SIGIL = "[+] "
-"""Prefix marking a description as a catalog entry whose parameters are not loaded.
-
-A catalog entry is otherwise indistinguishable from a tool that genuinely takes no arguments: the name
-is real, the description reads whole, and ``inputSchema`` is a valid empty object. The only statement
-that the list is incomplete lives in ``find_tools``'s own description -- a sibling tool's prose, not the
-entry the model is looking at when it decides. Measured on GLM 4.7 Flash over 60 turns, that gap costs
-the whole search path: ``searches: 0`` with seventeen premature cancellations, and one tool exposed at
-the end. The model does not disbelieve the catalog; it has no reason to suspect it.
-
-Four characters, so the signal is attached where the decision happens while the explanation stays in one
-place. Ninety catalog entries pay about ninety tokens per call between them, against a search round trip
-each time the model guesses instead.
-"""
-
-
-def _catalog_entry(spec: ToolSpec, catalog_tokens: int) -> ToolSpec:
-    """Build the catalog entry of ``spec``: verbatim name, short marked description, empty input schema.
-
-    The name is copied character by character because it is the key the model calls the tool by:
-    truncating or normalizing it would produce a spec that cannot be called. The description is the
-    only field that pays for the budget, and ``inputSchema`` is emptied rather than dropped because
-    providers reject a spec without it. ``outputSchema`` and ``annotations`` are omitted: annotations
-    never reach the provider, and the output shape only matters once the tool is about to be called,
-    at which point the full specification is what gets projected.
-
-    The description carries :data:`_CATALOG_SIGIL`, which is what tells the model this entry is a
-    listing rather than a complete specification. The sigil is added AFTER truncation and is not charged
-    against ``catalog_tokens``: a budget that could swallow the marker would leave the entry looking
-    complete at exactly the settings where the catalog is tightest, which is the opposite of what the
-    budget is for.
-
-    Args:
-        spec: Full specification as registered in the ``ToolRegistry``. Left unmodified.
-        catalog_tokens: Catalog budget in tokens. Must be at least ``1``.
-
-    Returns:
-        A new ``ToolSpec`` carrying only ``name``, a marked ``description`` and an empty, closed
-        ``inputSchema``.
-    """
-    return {
-        "name": spec["name"],
-        "description": _CATALOG_SIGIL + _truncate_description(spec["description"], catalog_tokens),
-        # A fresh schema per entry: a shared dict would let one consumer's mutation reach every entry.
-        "inputSchema": {"json": {"type": "object", "properties": {}, "additionalProperties": False}},
-    }
-
-
 _CATALOG_PROMPT_HEADER = """\
 # Tools available on request
 
 The tools listed below are NOT in your tool list for this call. They exist and they work, but their
-parameters have not been loaded, so you cannot call them yet — a call to a name from this list will be
-refused, not executed.
+parameters have not been loaded, so you cannot call them yet.
 
-To use one, call `{find_tools}` first and describe what you are trying to do in your own words. The
-tools that match arrive complete, with their parameters, in your tool list on the next turn, and you
-call the one you want from there.
+To use one or more of them, call `{get_tool_details}` with their names as a list. They arrive complete,
+with their parameters, in your tool list on the next call, and you call them from there. If none of the
+names below fits what you need, call `{find_tools}` and describe the need in your own words.
 
 Your tool list for this call is complete and callable as it stands. Anything in it, you call directly.
-Anything only in the list below, you reach through `{find_tools}`.
 
 """
 """Preamble of the system-prompt catalog: the rule, stated where the model reads the names.
 
-This is the placement fix for the defect ``_CATALOG_SIGIL`` only marks. A catalog ENTRY in ``tool_specs``
-is read as a callable tool whose ``inputSchema`` says it takes no arguments, and the statement that it is
-a listing lives in a sibling tool's description -- so the entry and the rule are in different places, and
-the entry is the one being read at the moment of the decision. Here the name and the rule governing it
-arrive in the same block, and the name is not in ``tool_specs`` at all, so nothing asserts it is callable.
+The names are not in ``tool_specs`` at all, so nothing asserts they are callable, and the rule that
+governs them arrives in the same block. The common path is catalog -> ``get_tool_details`` -> call;
+``find_tools`` is the fallback for a need the model cannot map to a listed name.
 """
 
 
 def _catalog_prompt_block(
     incoming: Sequence[ToolSpec],
     full_spec_names: Container[str],
-    catalog_tokens: int,
-    find_tools_name: str = FIND_TOOLS_NAME,
+    summaries: Mapping[str, str],
 ) -> str:
-    """Render the catalog as one system-prompt block: the rule, then ``- name: short description``.
+    """Render the catalog as one system-prompt block: the rule, then ``- name: summary``.
 
     Every tool that is not getting a full specification on this call is listed, and NOTHING else --
     the projection and this block partition the registry between them, so no name appears in both and
     no name is missing from both.
 
-    The listing is deliberately not marked with :data:`_CATALOG_SIGIL`: the sigil exists to flag an
-    entry that is sitting in ``tool_specs`` pretending to be callable, and nothing here is in
-    ``tool_specs``. The header carries the rule instead.
-
     Args:
         incoming: Specifications received in ``context.tool_specs``, in arrival order. Read only.
         full_spec_names: Names that ARE carrying a full specification on this call, and so must not be
             listed here.
-        catalog_tokens: Description budget per listed tool, in tokens.
-        find_tools_name: Name of the search tool, named in the header.
+        summaries: Catalog line of each tool, by name. A name without one is listed by name only.
 
     Returns:
         The block, or ``""`` when every incoming tool is already carrying a full specification -- an
         empty catalog must add nothing to the prompt rather than a header promising a list.
     """
-    lines = [
-        f"- {spec['name']}: {_truncate_description(spec['description'], catalog_tokens)}"
-        for spec in incoming
-        if spec["name"] not in full_spec_names
-    ]
+    lines = []
+    for spec in incoming:
+        name = spec["name"]
+        if name in full_spec_names:
+            continue
+        summary = summaries.get(name, "")
+        lines.append(f"- {name}: {summary}" if summary else f"- {name}")
     if not lines:
         return ""
 
-    return _CATALOG_PROMPT_HEADER.format(find_tools=find_tools_name) + "\n".join(lines)
+    header = _CATALOG_PROMPT_HEADER.format(find_tools=FIND_TOOLS_NAME, get_tool_details=GET_TOOL_DETAILS_NAME)
+    return header + "\n".join(lines)
+
+
+def _clamp_summary(text: object, max_chars: int) -> str:
+    """Normalize a summarizer's answer to one line of at most ``max_chars`` characters.
+
+    Whitespace is collapsed and wrapping quotes are dropped, because a model asked for a bare line still
+    answers with one sometimes. An answer over the limit is cut at a boundary rather than rejected: it is
+    still a summary, and the cut is the same one the fallback would make.
+
+    Args:
+        text: What the summarizer returned. Anything that is not a string is treated as empty.
+        max_chars: Character limit.
+
+    Returns:
+        The clamped line, or ``""`` when there was nothing usable.
+    """
+    if not isinstance(text, str):
+        return ""
+    line = " ".join(text.split()).strip("\"'`")
+    return _truncate_description(line, max_chars) if line else ""
+
+
+async def _summarize(spec: ToolSpec, max_chars: int, summarizer: ToolSummarizer) -> tuple[str, bool]:
+    """Produce the catalog line of ``spec``: verbatim, summarized, or truncated, in that order of preference.
+
+    A description that already fits the limit is the best possible summary of itself and costs no call.
+    A longer one goes to ``summarizer``. A summarizer that raises or answers nothing falls back to the
+    boundary truncation, so no tool is ever left without a line and no failure escapes the projection.
+
+    Args:
+        spec: Full specification as registered. Left unmodified.
+        max_chars: Character limit of the line.
+        summarizer: What writes the summary.
+
+    Returns:
+        The line, and whether ``summarizer`` was actually called for it.
+    """
+    description = spec.get("description") or ""
+    if len(description) <= max_chars:
+        return " ".join(description.split()), False
+
+    try:
+        answered = summarizer(spec, max_chars)
+        if inspect.isawaitable(answered):
+            answered = await answered
+        line = _clamp_summary(answered, max_chars)
+    except Exception:
+        logger.warning("tool summary failed | tool=<%s> | falling back to truncation", spec["name"], exc_info=True)
+        line = ""
+
+    return (line or _truncate_description(description, max_chars)), True
+
+
+def _model_summarizer(model: Model, usage: dict[str, int]) -> ToolSummarizer:
+    """Build the default summarizer: one plain call to ``model`` per tool, no tools, no history.
+
+    The call goes to ``model.stream`` directly rather than through an agent, so it passes through no
+    agent middleware -- this plugin's projection included -- and cannot recurse into itself. Its token
+    usage is added to ``usage``, because a summary is an auxiliary cost of the strategy and has to be
+    visible next to what it saves.
+
+    Args:
+        model: Model to summarize with -- by default the agent's own.
+        usage: Counters to accumulate into: ``calls``, ``inputTokens``, ``outputTokens``.
+
+    Returns:
+        An async summarizer.
+    """
+
+    async def summarize(spec: ToolSpec, max_chars: int) -> str:
+        messages: Messages = [
+            {"role": "user", "content": [{"text": f"Tool: {spec['name']}\n\nDescription:\n{spec['description']}"}]}
+        ]
+        parts: list[str] = []
+        usage["calls"] = usage.get("calls", 0) + 1
+        async for event in model.stream(messages, None, _SUMMARY_SYSTEM_PROMPT.format(max_chars=max_chars)):
+            delta = event.get("contentBlockDelta", {}).get("delta", {})
+            if "text" in delta:
+                parts.append(delta["text"])
+            reported: dict[str, Any] = dict(event.get("metadata", {}).get("usage") or {})
+            for key in ("inputTokens", "outputTokens"):
+                if key in reported:
+                    usage[key] = usage.get(key, 0) + int(reported[key])
+        return "".join(parts)
+
+    return summarize
 
 
 def _append_to_system_prompt(system_prompt: SystemPrompt, block: str) -> SystemPrompt:
@@ -268,26 +345,25 @@ def _requires_parameters(spec: ToolSpec) -> bool:
     return isinstance(required, list) and len(required) > 0
 
 
-def _truncate_description(text: str, catalog_tokens: int) -> str:
-    """Cut ``text`` to at most ``catalog_tokens`` tokens, preferring a sentence/word boundary.
+def _truncate_description(text: str, max_chars: int) -> str:
+    """Cut ``text`` to at most ``max_chars`` characters, preferring a sentence/word boundary.
 
-    The cut is attempted at the last sentence boundary that fits the budget, then at the last word
-    boundary, and only by character count when no word boundary fits — the case of a single token
-    longer than the whole budget, where any boundary-based cut would return nothing.
+    The FALLBACK of a catalog line, used only when a summary could not be produced, and the clamp applied
+    to a summary that overran. The cut is attempted at the last sentence boundary that fits, then at the
+    last word boundary, and only by character count when no word boundary fits — the case of a single
+    word longer than the whole limit, where any boundary-based cut would return nothing.
 
     A cut at a sentence boundary reads as a whole and carries no ellipse; a cut mid-sentence gets
-    one, and the ellipse counts against the budget like any other character.
+    one, and the ellipse counts against the limit like any other character.
 
     Args:
-        text: Description as registered in the ``ToolRegistry``.
-        catalog_tokens: Catalog budget in tokens. Must be at least ``1``.
+        text: Text to cut.
+        max_chars: Character limit. Must be at least ``1``.
 
     Returns:
-        A prefix of ``text``, possibly followed by an ellipse, whose estimated token count is at most
-        ``catalog_tokens``. Returns ``text`` unchanged when it already fits, which covers the empty
-        description.
+        A prefix of ``text``, possibly followed by an ellipse, at most ``max_chars`` characters long.
+        Returns ``text`` unchanged when it already fits, which covers the empty text.
     """
-    max_chars = catalog_tokens * _CHARS_PER_TOKEN
     if len(text) <= max_chars:
         return text
 
@@ -366,22 +442,36 @@ def _validate_positive_int(value: object, parameter: str) -> None:
         raise ValueError(f"{parameter}=<{value!r}> | must be an integer greater than or equal to 1")
 
 
-def _validate_catalog_tokens(catalog_tokens: object) -> None:
+def _validate_catalog_chars(catalog_chars: object) -> None:
     """Reject anything that is neither ``None`` nor an integer greater than or equal to ``1``.
 
     ``None`` suppresses the catalog altogether, which is a supported configuration; ``0`` is not, as
-    a budget of zero tokens would emit catalog entries nothing fits in.
+    a limit of zero characters would emit catalog lines nothing fits in.
 
     Args:
-        catalog_tokens: Value received by the constructor.
+        catalog_chars: Value received by the constructor.
 
     Raises:
-        ValueError: When ``catalog_tokens`` is neither ``None`` nor an ``int`` of at least ``1``.
+        ValueError: When ``catalog_chars`` is neither ``None`` nor an ``int`` of at least ``1``.
     """
-    if catalog_tokens is None:
+    if catalog_chars is None:
         return
-    if isinstance(catalog_tokens, bool) or not isinstance(catalog_tokens, int) or catalog_tokens < 1:
-        raise ValueError(f"catalog_tokens=<{catalog_tokens!r}> | must be None or an integer greater than or equal to 1")
+    if isinstance(catalog_chars, bool) or not isinstance(catalog_chars, int) or catalog_chars < 1:
+        raise ValueError(f"catalog_chars=<{catalog_chars!r}> | must be None or an integer greater than or equal to 1")
+
+
+def _validate_summarizer(summarizer: object) -> None:
+    """Reject anything that is neither ``None`` nor callable.
+
+    Args:
+        summarizer: Value received by the constructor.
+
+    Raises:
+        ValueError: When ``summarizer`` is not ``None`` and is not callable.
+    """
+    if summarizer is None or callable(summarizer):
+        return
+    raise ValueError(f"summarizer=<{summarizer!r}> | must be None or a callable taking (spec, max_chars)")
 
 
 def _validate_always_available(always_available: object) -> None:
@@ -452,23 +542,29 @@ class _DisclosureState:
     or any session storage. Losing it on a process restart costs one search, and the worst case is
     today's behavior without the plugin.
 
-    The two counters live here for the same reason the exposures do: what they measure is a session,
+    The counters live here for the same reason the exposures do: what they measure is a session,
     and a session is an agent. They are what tells whether the disclosure pays off on a given load —
-    a high search count for the same need argues for preloading, and a high cancellation count argues
-    the catalog descriptions are not informative enough.
+    a high search count for the same need argues for preloading, a high cancellation count argues
+    the catalog lines are not informative enough, and ``summary_usage`` is the auxiliary cost the
+    catalog was bought with.
 
     Attributes:
         exposed: Tool name to the cycle count of its last use. A fresh state has zero exposures.
-        fingerprint: Registry tool names as of the last index build, or ``None`` when the index has
-            not been built yet — the value that makes the first projection build it.
-        searches: Cycles this session spent searching: one per search tool invocation.
+        fingerprint: ``(name, description)`` pairs as of the last index build, or ``None`` when the
+            index has not been built yet — the value that makes the first projection build it.
+        searches: Cycles this session spent searching: one per ``find_tools`` invocation.
+        loads: Cycles this session spent loading: one per ``get_tool_details`` invocation.
         premature_cancellations: Calls this session cancelled for a schema that was not loaded.
+        summary_usage: Calls and tokens the default summarizer spent on this agent's behalf. Empty when
+            every description fit the limit, or when a custom summarizer was supplied.
     """
 
     exposed: dict[str, int] = field(default_factory=dict)
-    fingerprint: frozenset[str] | None = None
+    fingerprint: frozenset[tuple[str, str]] | None = None
     searches: int = 0
+    loads: int = 0
     premature_cancellations: int = 0
+    summary_usage: dict[str, int] = field(default_factory=dict)
 
 
 _DisclosureStates: TypeAlias = "weakref.WeakKeyDictionary[Agent, _DisclosureState]"
@@ -654,7 +750,6 @@ def _tool_names_referenced_in(messages: Messages) -> KeysView[str]:
 def _should_passthrough(
     incoming_names: Iterable[str],
     registry_names: Container[str],
-    find_tools_name: str = FIND_TOOLS_NAME,
 ) -> bool:
     """Decide whether the incoming call must be left exactly as it arrived.
 
@@ -664,29 +759,28 @@ def _should_passthrough(
       for a synthetic spec that was never registered, and projecting over it would break the mode.
       Any name outside the registry is treated the same way: the projection has no full specification
       to emit for it, and dropping it would strand the caller.
-    - The search tool is not in the call. ``init_agent`` returns before the ``_PluginRegistry``
-      registers the vended tool, so the first calls can legitimately arrive without it. Without the
-      search tool in the projection the model has no way back to a hidden schema, so there is nothing
-      to hide.
+    - A plugin tool is not in the call. ``init_agent`` returns before the ``_PluginRegistry`` registers
+      the vended tools, so the first calls can legitimately arrive without them. Without
+      ``get_tool_details`` the model has no way to load a hidden schema, and without ``find_tools`` no
+      way to find one, so there is nothing to hide.
 
     Args:
         incoming_names: Tool names received in ``context.tool_specs``, in arrival order.
         registry_names: Names registered in the agent's ``ToolRegistry``. Membership is all that is
             asked of it.
-        find_tools_name: Name of the search tool. Defaults to :data:`FIND_TOOLS_NAME`.
 
     Returns:
         ``True`` when the caller must return the invocation context unchanged, by object identity;
         ``False`` when the projection applies.
     """
-    found_find_tools = False
+    found: set[str] = set()
     for name in incoming_names:
         if name not in registry_names:
             return True
-        if name == find_tools_name:
-            found_find_tools = True
+        if name in _PLUGIN_TOOL_NAMES:
+            found.add(name)
 
-    return not found_find_tools
+    return found != _PLUGIN_TOOL_NAMES
 
 
 def _compose_projection(
@@ -694,17 +788,15 @@ def _compose_projection(
     exposed: Container[str],
     referenced: Container[str],
     always_available: Container[str],
-    catalog_tokens: int | None,
-    find_tools_name: str = FIND_TOOLS_NAME,
 ) -> list[ToolSpec]:
-    """Build the projection as the union of five blocks, each name appearing at most once.
+    """Build the projection as the union of four blocks of full specifications, each name at most once.
 
-    The blocks are visited in a fixed order — the search tool, ``always_available``, the live
-    exposures, the names the retained history still references, and the catalog entries of whatever
-    is left. Order matters twice over. It decides which form of a tool wins: a name emitted by any
-    of the first four blocks carries its full specification, so reaching the catalog block it is
-    already seen and never re-emitted as a reduced entry. And it puts the search tool first, which
-    is what makes the projection non-empty on every projected path.
+    The blocks are visited in a fixed order — the plugin tools, ``always_available``, the live
+    exposures, and the names the retained history still references. Every name that reaches the
+    projection carries its full, verbatim specification: there is no reduced form in ``tool_specs``,
+    so nothing in it asserts an empty ``inputSchema``. Whatever is left goes to the system-prompt
+    catalog instead. The plugin tools come first, which is what makes the projection non-empty on every
+    projected path.
 
     Inside a block, iteration follows ``incoming`` rather than the block's own container. Two calls
     with the same disclosure state, the same history and the same configuration then produce the
@@ -712,39 +804,24 @@ def _compose_projection(
     invalidated by a reordering that changes no content.
 
     Args:
-        incoming: Specifications received in ``context.tool_specs``, in arrival order. This order is
-            the order of every block, and these specifications are what gets emitted — nothing is
-            read from the registry here. Left unmodified.
-        exposed: Names with a live exposure. Membership is all that is asked of it, so the caller's
-            exposure map can be passed directly once expiration has been applied.
+        incoming: Specifications received in ``context.tool_specs``, in arrival order. Left unmodified.
+        exposed: Names with a live exposure, after expiration has been applied.
         referenced: Names of the ``toolUse`` blocks in the retained history.
         always_available: Names configured to carry their full specification on every call.
-        catalog_tokens: Catalog budget in tokens, or ``None`` to omit every catalog entry while
-            keeping the other four blocks.
-        find_tools_name: Name of the search tool. Defaults to :data:`FIND_TOOLS_NAME`.
 
     Returns:
-        The projected specifications. Every name is a name of ``incoming``, appears once, and a name
-        that reached any of the first four blocks appears as its full specification. A name
+        The projected specifications. Every name is a name of ``incoming`` and appears once. A name
         configured in ``always_available`` but absent from ``incoming`` is simply omitted.
     """
     projected: list[ToolSpec] = []
     seen: set[str] = set()
 
-    # The first four blocks emit full specifications; only their membership test differs.
-    for block in ({find_tools_name}, always_available, exposed, referenced):
+    for block in (_PLUGIN_TOOL_NAMES, always_available, exposed, referenced):
         for spec in incoming:
             name = spec["name"]
             if name in block and name not in seen:
                 seen.add(name)
                 projected.append(spec)
-
-    if catalog_tokens is not None:
-        for spec in incoming:
-            name = spec["name"]
-            if name not in seen:
-                seen.add(name)
-                projected.append(_catalog_entry(spec, catalog_tokens))
 
     return projected
 
@@ -801,78 +878,38 @@ def _project(
     exposed: Container[str],
     referenced: Container[str],
     always_available: Container[str],
-    catalog_tokens: int | None,
-    find_tools_name: str = FIND_TOOLS_NAME,
+    summaries: Mapping[str, str] | None,
     referenced_source: ReferencedSource | None = None,
-    catalog_in_system_prompt: bool = False,
 ) -> InvokeModelContext:
-    """Return ``context`` with ``tool_specs`` replaced by the composed projection.
+    """Return ``context`` with ``tool_specs`` replaced by the projection and the catalog in the prompt.
 
-    A new context object rather than a mutation of the received one: ``tool_specs`` is the single
-    field this plugin has any say over, and ``replace`` makes that explicit. The retained history,
-    the ``ToolRegistry`` and every other field are carried over untouched — the projection changes
-    what a call is told about, not what the agent has.
-
-    ``catalog_in_system_prompt`` moves the catalog off ``tool_specs`` and into the system prompt, which
-    makes ``system_prompt`` the second field this function writes. ``tool_specs`` then carries ONLY the
-    tools that are actually callable on this call — the search tool, the always-available ones, the
-    exposed ones and the referenced ones — and every other name reaches the model as prose. Two things
-    change, and both were defects:
-
-    - A catalog entry in ``tool_specs`` declares an empty ``inputSchema``, which reads as "takes no
-      arguments" and invites the guess that :meth:`_on_before_tool_call` then has to cancel at the cost
-      of a whole round trip. A name in prose makes no such claim.
-    - The rule governing the catalog stops living in a sibling tool's description and arrives in the
-      same block as the names it governs.
+    A new context object rather than a mutation of the received one. Two fields are written, and only
+    two: ``tool_specs`` carries ONLY the tools that are callable on this call, and ``system_prompt``
+    carries one line for every other tool. The retained history, the ``ToolRegistry`` and every other
+    field are carried over untouched — the projection changes what a call is told about, not what the
+    agent has.
 
     Args:
         context: Invocation context received by the ``InvokeModelStage.Input`` handler.
         exposed: Names with a live exposure, after expiration has been applied.
         referenced: Names of the ``toolUse`` blocks in ``context.messages``.
         always_available: Names configured to carry their full specification on every call.
-        catalog_tokens: Catalog budget in tokens, or ``None`` to omit the catalog entirely — in which
-            case ``catalog_in_system_prompt`` has nothing to move and is not consulted.
-        find_tools_name: Name of the search tool. Defaults to :data:`FIND_TOOLS_NAME`.
+        summaries: Catalog line of each tool, by name, or ``None`` to add no catalog at all.
         referenced_source: Supplemental Referenced Source, or ``None``. The union happens here rather
             than in the caller because this is already the boundary between what the history says and
             what the projection emits, and ``_compose_projection`` stays unaware the source exists.
-        catalog_in_system_prompt: Render the catalog as a system-prompt block instead of as entries in
-            ``tool_specs``.
 
     Returns:
         A new invocation context whose ``tool_specs`` is the projection, and whose ``system_prompt``
-        carries the catalog block when ``catalog_in_system_prompt`` is set.
+        carries the catalog block unless ``summaries`` is ``None`` or nothing is left to list.
     """
     resolved_referenced = _union_referenced(referenced, referenced_source, context.agent)
+    projected = _compose_projection(context.tool_specs, exposed, resolved_referenced, always_available)
 
-    if catalog_tokens is None or not catalog_in_system_prompt:
-        projected = _compose_projection(
-            context.tool_specs,
-            exposed,
-            resolved_referenced,
-            always_available,
-            catalog_tokens,
-            find_tools_name,
-        )
+    if summaries is None:
         return replace(context, tool_specs=projected)
 
-    # ``catalog_tokens=None`` on the projection is what drops the entries: the same code path that
-    # suppresses the catalog altogether is the one that makes room for it in the prompt, so the two
-    # placements cannot both emit a name.
-    projected = _compose_projection(
-        context.tool_specs,
-        exposed,
-        resolved_referenced,
-        always_available,
-        None,
-        find_tools_name,
-    )
-    block = _catalog_prompt_block(
-        context.tool_specs,
-        {spec["name"] for spec in projected},
-        catalog_tokens,
-        find_tools_name,
-    )
+    block = _catalog_prompt_block(context.tool_specs, {spec["name"] for spec in projected}, summaries)
     return replace(
         context,
         tool_specs=projected,
@@ -881,32 +918,30 @@ def _project(
 
 
 class ProgressiveToolDisclosure(Plugin):
-    """Send a lean catalog plus a search tool on each model call, instead of every full schema.
+    """Send a catalog in the system prompt plus two small tools on each call, instead of every full schema.
 
     Every registered tool stays in the ``ToolRegistry`` and stays callable. What changes is the
-    projection: a call carries the search tool, the tools configured as always available, the tools
-    whose schema is currently exposed, the tools the retained history still references, and a catalog
-    entry — name and a short description — for everything else. The model describes what it needs,
-    the search tool exposes the matching tools, and their full ``inputSchema`` arrives on the next
-    call. An exposure expires by inactivity, measured in event loop cycles and renewed on each use.
+    projection: ``tool_specs`` carries only the tools that are callable on the call -- ``find_tools``,
+    ``get_tool_details``, the tools configured as always available, the tools whose schema is currently
+    exposed and the tools the retained history still references -- and every other tool is one line of a
+    catalog appended to the system prompt: its name and a summary of its description.
 
-    Nothing is added to the system prompt by default: the usage instruction lives in the search tool's own
-    description, which already travels in ``tool_specs``. ``catalog_in_system_prompt=True`` changes that
-    deliberately — the catalog moves to a system-prompt block and ``tool_specs`` is left carrying only the
-    tools that are callable on the call.
+    The flow is catalog -> ``get_tool_details([names])`` -> call. ``find_tools`` stays for a need the
+    model cannot map to a listed name: it searches and lists matches, and loading them is still
+    ``get_tool_details``' job. An exposure expires by inactivity, measured in event loop cycles and
+    renewed on each use.
 
-    No failure here leaves the agent without tool specifications. A search that raises, or one that
-    ranks a tool that does not do what was asked, returns guidance instead of an exception, and the
-    search tool is in the next projection like in every other one: the model rewords and searches
-    again, at the cost of one cycle. A failure on the projection path degrades to the specifications
-    received, which is today's behaviour without the plugin.
+    No failure here leaves the agent without tool specifications. A summary that cannot be produced
+    falls back to a boundary truncation, a search that raises returns guidance, and a failure on the
+    projection path degrades to the specifications received, which is today's behaviour without the
+    plugin.
 
     Example:
         ```python
         from strands import Agent
         from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 
-        agent = Agent(tools=[...], plugins=[ProgressiveToolDisclosure()])
+        agent = Agent(tools=[...], plugins=[ProgressiveToolDisclosure(catalog_chars=80)])
         ```
     """
 
@@ -915,64 +950,53 @@ class ProgressiveToolDisclosure(Plugin):
     def __init__(
         self,
         *,
-        catalog_tokens: int | None = _DEFAULT_CATALOG_TOKENS,
+        catalog_chars: int | None = _DEFAULT_CATALOG_CHARS,
+        summarizer: ToolSummarizer | None = None,
         ttl_cycles: int = _DEFAULT_TTL_CYCLES,
         always_available: Sequence[str] = (),
         index: ToolIndex | None = None,
         top_k: int = _DEFAULT_TOP_K,
         referenced_source: ReferencedSource | None = None,
-        catalog_in_system_prompt: bool = False,
     ) -> None:
-        """Fix the configuration of the instance. Nothing is indexed and no call goes out here.
+        """Fix the configuration of the instance. Nothing is indexed or summarized and no call goes out here.
 
         Args:
-            catalog_tokens: Description budget of a catalog entry, in tokens, or ``None`` to drop the
-                catalog entirely and leave the search tool's description as the only hint, in the
-                projection, that other tools exist at all. That is the cheapest configuration and the
-                one with the least to go on: with no name to recognize, the model may well answer from
-                what it knows instead of searching.
+            catalog_chars: Character limit of one catalog line's summary, or ``None`` to add no catalog
+                at all and leave the two plugin tools' descriptions as the only hint that other tools
+                exist. That is the cheapest configuration and the one with the least to go on: with no
+                name to recognize, the model may well answer from what it knows instead of searching.
+            summarizer: What writes a catalog line when a description does not fit ``catalog_chars``.
+                Receives ``(spec, max_chars)`` and returns the summary, sync or async. ``None`` uses the
+                agent's own model, one plain call per tool, once per plugin instance; its token usage is
+                reported in the agent's disclosure state as ``summary_usage``. A description that
+                already fits is used verbatim and never reaches the summarizer, and a summarizer that
+                fails falls back to truncation at a sentence or word boundary.
             ttl_cycles: Cycles an exposure survives after its last use.
             always_available: Names that carry their full specification on every call, skipping the
                 discovery cycle.
-            index: Search implementation. Defaults to :class:`LexicalToolIndex`, which needs no
-                network.
-            top_k: How many tools one search exposes.
+            index: Search implementation behind ``find_tools``. Defaults to :class:`LexicalToolIndex`,
+                which needs no network.
+            top_k: How many tools one search lists.
             referenced_source: Callable receiving the agent of the call and returning tool names that
                 are to carry their full specification on this call, on top of the ones the retained
-                history references. An extra input to a calculation this plugin keeps ownership of:
-                the decision of which names get a full specification and which get a catalog entry
-                stays here. ``None`` composes the referenced names from the retained history alone.
-            catalog_in_system_prompt: Put the catalog in the system prompt instead of in
-                ``tool_specs``. ``tool_specs`` then carries only the tools that are callable on this
-                call, and every other name arrives as a prose listing under a header that states the
-                rule. This removes the empty ``inputSchema`` that a catalog entry otherwise declares --
-                the thing a model reads as "takes no arguments" before making the call that has to be
-                cancelled -- and it puts the rule in the same block as the names it governs instead of
-                in a sibling tool's description. Ignored when ``catalog_tokens`` is ``None``, which
-                already means there is no catalog to place.
-
-                One consequence to weigh: a name outside ``tool_specs`` is a name the provider does not
-                know. A model that calls it anyway may be refused by the provider before
-                :meth:`_on_before_tool_call` is reached, so the recover-by-cancellation path is not
-                guaranteed here the way it is when the name sits in the projection.
+                history references. ``None`` composes the referenced names from the retained history
+                alone.
 
         Raises:
             ValueError: When any parameter is outside its accepted values. Every check runs before
                 any state is set up, so a construction that fails leaves no handler, hook or tool
                 registered on any agent.
         """
-        _validate_catalog_tokens(catalog_tokens)
+        _validate_catalog_chars(catalog_chars)
+        _validate_summarizer(summarizer)
         _validate_positive_int(ttl_cycles, "ttl_cycles")
         _validate_positive_int(top_k, "top_k")
         _validate_always_available(always_available)
         _validate_index(index)
         _validate_referenced_source(referenced_source)
-        if not isinstance(catalog_in_system_prompt, bool):
-            raise ValueError(
-                f"catalog_in_system_prompt=<{catalog_in_system_prompt!r}> | must be True or False"
-            )
 
-        self._catalog_tokens = catalog_tokens
+        self._catalog_chars = catalog_chars
+        self._summarizer = summarizer
         self._ttl_cycles = ttl_cycles
         # A tuple, so the sequence the caller keeps cannot change the configuration after the fact.
         self._always_available = tuple(always_available)
@@ -981,7 +1005,9 @@ class ProgressiveToolDisclosure(Plugin):
         # call, which the first projection is what has.
         self._index: ToolIndex = LexicalToolIndex() if index is None else index
         self._referenced_source = referenced_source
-        self._catalog_in_system_prompt = catalog_in_system_prompt
+        # Keyed by (name, description): a tool re-registered with a different description gets a new
+        # line, and the same description is never summarized twice, whichever agent asked first.
+        self._summaries: dict[tuple[str, str], str] = {}
         self._states = _new_disclosure_states()
         super().__init__()
 
@@ -989,17 +1015,14 @@ class ProgressiveToolDisclosure(Plugin):
         """Register the projection handler on the agent's ``InvokeModelStage`` input phase.
 
         One handler per agent, and nothing else: ``Plugin`` auto-registers ``@hook`` and ``@tool``
-        members, but not middleware, so this is the whole hook-up. The retained history and the
-        ``ToolRegistry`` come out of here untouched, and so does the system prompt unless
-        ``catalog_in_system_prompt`` is set — by default the usage instruction the model needs lives in
-        :meth:`find_tools`' own description, which already travels in ``tool_specs``.
+        members, but not middleware, so this is the whole hook-up.
 
         A single instance may be registered on several agents. The handler is the same bound method
         on each, but the disclosure state it reads is keyed by the agent of the call, so exposures
-        never cross over.
+        never cross over. Summaries are shared, because a summary depends on the description alone.
 
-        The search tool and the pre-call hook are registered by the ``_PluginRegistry`` *after* this
-        returns, so the handler cannot assume the search tool is in the registry on its first calls —
+        The plugin tools and the pre-call hook are registered by the ``_PluginRegistry`` *after* this
+        returns, so the handler cannot assume they are in the registry on its first calls —
         :func:`_should_passthrough` is what covers that window.
 
         Args:
@@ -1008,22 +1031,15 @@ class ProgressiveToolDisclosure(Plugin):
         agent._middleware_registry.add_middleware(InvokeModelStage.Input, self._projection_handler)
 
     async def _projection_handler(self, context: InvokeModelContext) -> InvokeModelContext:
-        """Rewrite ``context.tool_specs`` as the projection for this one call.
+        """Rewrite ``context.tool_specs`` and append the catalog to ``context.system_prompt``, for this call.
 
-        The only place ``tool_specs`` is ever rewritten. No hook, no tool and no other stage touches
-        it, so what the model is told about a call is decided here or nowhere.
-
-        Any failure on this path degrades to the context received, unchanged: the call goes out with
-        the full ``tool_specs``, which is exactly today's behaviour without the plugin. The whole path
-        sits under one ``except``, so a failing projection emits one warning and not one per step —
-        whether it came from ``build``, from expiration, from the history scan, from a catalog entry or
-        from the union itself. Nothing escapes to the stage, and no failure state is kept: the very
-        next model call attempts the projection again. A failed ``build`` in particular leaves the
-        fingerprint unwritten, so the next call rebuilds rather than searching a half-built index.
+        The only place either field is ever rewritten. Any failure on this path degrades to the context
+        received, unchanged: the call goes out with the full ``tool_specs``, which is exactly today's
+        behaviour without the plugin. Nothing escapes to the stage, and no failure state is kept: the
+        very next model call attempts the projection again.
 
         Args:
-            context: Invocation context received from the stage. Only ``tool_specs`` is replaced, and
-                by way of a new context object rather than a mutation.
+            context: Invocation context received from the stage.
 
         Returns:
             A new context carrying the projection, or ``context`` itself when the projection does not
@@ -1039,18 +1055,15 @@ class ProgressiveToolDisclosure(Plugin):
             state = _state_for(self._states, agent)
             _expire(state, agent.event_loop_metrics.cycle_count, self._ttl_cycles)
 
-            await self._ensure_index(state, context.tool_specs)
-
-            referenced = _tool_names_referenced_in(context.messages)
+            await self._ensure_index(state, context.tool_specs, agent)
 
             projected = _project(
                 context,
                 state.exposed,
-                referenced,
+                _tool_names_referenced_in(context.messages),
                 self._always_available,
-                self._catalog_tokens,
+                None if self._catalog_chars is None else self._summaries_for(context.tool_specs),
                 referenced_source=self._referenced_source,
-                catalog_in_system_prompt=self._catalog_in_system_prompt,
             )
             _instrument(lambda: _log_projection(projected.tool_specs))
             return projected
@@ -1058,30 +1071,29 @@ class ProgressiveToolDisclosure(Plugin):
             logger.warning("projection failed | passing the received context through unchanged", exc_info=True)
             return context
 
-    async def _ensure_index(self, state: _DisclosureState, specs: Sequence[ToolSpec]) -> None:
-        """Build the index when the incoming tool names differ from the ones it was built from.
+    async def _ensure_index(self, state: _DisclosureState, specs: Sequence[ToolSpec], agent: Agent) -> None:
+        """Build the index and the missing summaries when the incoming tool names changed.
 
-        The index cannot be built at construction time: what it indexes are the specifications of a
-        call, and the first projection is what has them. It also cannot be built once and forgotten —
-        MCP tools and ``register_dynamic_tool`` can arrive at runtime — so the set of incoming names
-        is kept as a fingerprint and compared on every projection. A tool registered late is indexed
-        on the first projection it shows up in, which is the projection that makes it findable.
+        Neither can happen at construction time: what they cover are the specifications of a call, and
+        the first projection is what has them. MCP tools and ``register_dynamic_tool`` can arrive at
+        runtime, and a tool can be re-registered with a new description, so the set of incoming
+        ``(name, description)`` pairs is kept as a fingerprint and compared on every projection.
 
-        A ``frozenset`` of the names is enough: what the index holds is one entry per specification,
-        so a registry that gained or lost a name is a registry the index no longer covers, and the
-        order names arrive in has no say over what gets indexed.
-
-        The fingerprint is written after the build returns. A build that raises leaves it as it was,
-        so the next projection tries again rather than searching over a half-built index.
+        Summaries are only requested for tools that do not have one yet, concurrently and bounded by
+        :data:`_SUMMARY_CONCURRENCY`. They are written before the fingerprint, and the fingerprint only
+        after the index build returns, so a build that raises is retried on the next projection.
 
         Args:
-            state: Disclosure state of the agent. Its fingerprint is the only field written.
-            specs: Specifications received in ``context.tool_specs``. Passed on to ``build`` as a
-                copy, so the list the projection reads is not the list the index holds.
+            state: Disclosure state of the agent. Its fingerprint and summary usage are written.
+            specs: Specifications received in ``context.tool_specs``.
+            agent: Agent of the call, whose model the default summarizer uses.
         """
-        fingerprint = frozenset(spec["name"] for spec in specs)
+        fingerprint = frozenset((spec["name"], spec.get("description") or "") for spec in specs)
         if state.fingerprint == fingerprint:
             return
+
+        if self._catalog_chars is not None:
+            await self._summarize_missing(specs, self._catalog_chars, agent, state)
 
         # The index may be a network-backed implementation, so build is allowed to be awaitable.
         built = self._index.build(list(specs))
@@ -1090,17 +1102,61 @@ class ProgressiveToolDisclosure(Plugin):
 
         state.fingerprint = fingerprint
 
+    async def _summarize_missing(
+        self, specs: Sequence[ToolSpec], max_chars: int, agent: Agent, state: _DisclosureState
+    ) -> None:
+        """Fill the summary cache for every catalog-eligible spec that has no line yet.
+
+        Args:
+            specs: Specifications received in ``context.tool_specs``.
+            max_chars: Character limit of a line.
+            agent: Agent of the call.
+            state: Disclosure state of the agent; the default summarizer accounts its usage here.
+        """
+        missing = [
+            spec
+            for spec in specs
+            if spec["name"] not in _PLUGIN_TOOL_NAMES
+            and (spec["name"], spec.get("description") or "") not in self._summaries
+        ]
+        if not missing:
+            return
+
+        summarizer = self._summarizer or _model_summarizer(agent.model, state.summary_usage)
+        gate = asyncio.Semaphore(_SUMMARY_CONCURRENCY)
+
+        async def one(spec: ToolSpec) -> None:
+            async with gate:
+                line, _ = await _summarize(spec, max_chars, summarizer)
+            self._summaries[(spec["name"], spec.get("description") or "")] = line
+
+        await asyncio.gather(*(one(spec) for spec in missing))
+
+    def _summaries_for(self, specs: Sequence[ToolSpec]) -> dict[str, str]:
+        """Return the cached catalog line of each spec, by name. A spec without one is left out.
+
+        Args:
+            specs: Specifications received in ``context.tool_specs``.
+
+        Returns:
+            Name to catalog line.
+        """
+        lines: dict[str, str] = {}
+        for spec in specs:
+            line = self._summaries.get((spec["name"], spec.get("description") or ""))
+            if line is not None:
+                lines[spec["name"]] = line
+        return lines
+
     @tool(context=True)
     async def find_tools(self, need: str, tool_context: ToolContext) -> str:
-        """Find the tools that can do what you need.
+        """Search for tools that can do what you need, when no name in the tool catalog fits.
 
-        Any tool whose description begins with `[+]` is a listing, not a full specification: you are
-        seeing its name and one line about it, and its parameters have not been loaded. Calling one of
-        those directly does not work, because you would be guessing its arguments.
+        This only finds tools; it does not load them. It answers with matching tool names and one line
+        about each. To use any of them, call `get_tool_details` with their names, then call them.
 
-        Call this tool instead, with a description of what you are trying to do in your own words. The
-        tools that match arrive with their full parameters on your next turn, and then you call the one
-        you want. A tool listed without `[+]` is complete and you can call it straight away.
+        If a name in the catalog already fits what you need, skip this and call `get_tool_details`
+        directly.
 
         Args:
             need: What you are trying to do, described in your own words. A capability, not a tool
@@ -1109,27 +1165,20 @@ class ProgressiveToolDisclosure(Plugin):
             tool_context: Injected by the framework. Not user-facing.
 
         Returns:
-            The matching tool names with a short description of each, or guidance to describe the
-            need or to reword it when there is nothing to list.
+            The matching tool names with a one-line summary of each, or guidance to describe the need
+            or to reword it when there is nothing to list.
         """
         agent = tool_context.agent
         state = _state_for(self._states, agent)
-        cycle = agent.event_loop_metrics.cycle_count
 
-        # The counter measures cycles spent searching, so every invocation counts: a blank need and a
-        # failed search each cost the cycle just the same as one that answered.
+        # Every invocation counts: a blank need and a failed search each cost the cycle just the same.
         _instrument(lambda: _record_search(state))
 
-        # A blank need cannot rank anything, so the search is not attempted at all: asking the model
-        # to say what it wants is cheaper than a top_k of noise it would then have to discard.
+        # A blank need cannot rank anything, so the search is not attempted at all.
         if not need.strip():
             _instrument(lambda: _log_search_outcome(need, ()))
             return _EMPTY_NEED_GUIDANCE
 
-        # Only the search call sits under the except, and deliberately so: the exposure loop runs on
-        # what search returned, so a search that raised never reaches it and the invocation records
-        # zero exposures. Widening the guard over the loop would let a half-written set of exposures
-        # survive a failure.
         try:
             # The index may be a network-backed implementation, so search is allowed to be awaitable.
             found = self._index.search(need, self._top_k)
@@ -1140,62 +1189,85 @@ class ProgressiveToolDisclosure(Plugin):
             return _SEARCH_FAILED_GUIDANCE
 
         registry = agent.tool_registry.registry
-        exposed: list[str] = []
+        names: list[str] = []
         lines: list[str] = []
         for match in matches:
             registered = registry.get(match.name)
-            # A match the registry does not have has no specification to expose and no description to
-            # report, so it is left out of both the exposures and the text.
-            if registered is None:
+            # A match the registry does not have has nothing to load and no description to report.
+            if registered is None or match.name in _PLUGIN_TOOL_NAMES:
                 continue
-            _renew(state, match.name, cycle)
-            exposed.append(match.name)
+            names.append(match.name)
             lines.append(f"- {match.name}: {self._short_description(registered.tool_spec)}")
 
-        _instrument(lambda: _log_search_outcome(need, exposed))
+        _instrument(lambda: _log_search_outcome(need, names))
 
-        # Nothing to list: either search ranked no tool, or every match it ranked is absent from the
-        # registry. Both leave the header with an empty list under it, which reads as a failure of the
-        # tool rather than of the wording, so the reformulation guidance goes out instead.
         if not lines:
             return _NO_MATCH_GUIDANCE
 
-        # Name and short description only. The schema arrives through the projection, which is
-        # per-call and therefore forgettable; a tool result is a message, and a message is resident.
+        # Names and summaries only: nothing is exposed here. Loading is get_tool_details' one job, so
+        # the model always takes the same path to a schema whether it started from the catalog or here.
         return "\n".join([_MATCHES_HEADER, *lines])
+
+    @tool(context=True)
+    async def get_tool_details(self, names: list[str], tool_context: ToolContext) -> str:
+        """Load the full parameters of one or more tools from the catalog, so you can call them.
+
+        Pass every tool you are about to need in one call. They arrive complete in your tool list on
+        your next call, and stay there while you keep using them.
+
+        Args:
+            names: Exact tool names, as written in the catalog or in a `find_tools` result.
+            tool_context: Injected by the framework. Not user-facing.
+
+        Returns:
+            The tools that were loaded, and any requested name that is not a tool.
+        """
+        agent = tool_context.agent
+        state = _state_for(self._states, agent)
+        cycle = agent.event_loop_metrics.cycle_count
+        _instrument(lambda: setattr(state, "loads", state.loads + 1))
+
+        # Tolerate a bare string and duplicates: a model that loads one tool may not wrap it in a list.
+        received: object = names
+        requested = [received] if isinstance(received, str) else list(names or ())
+        wanted = list(dict.fromkeys(n.strip() for n in requested if isinstance(n, str) and n.strip()))
+        if not wanted:
+            return _DETAILS_EMPTY_GUIDANCE
+
+        registry = agent.tool_registry.registry
+        lines: list[str] = []
+        unknown: list[str] = []
+        for name in wanted:
+            registered = registry.get(name)
+            if registered is None:
+                unknown.append(name)
+                continue
+            _renew(state, name, cycle)
+            lines.append(f"- {name}: {self._short_description(registered.tool_spec)}")
+
+        _instrument(lambda: logger.info("tools loaded | loaded=<%s> | unknown=<%s>", len(lines), ", ".join(unknown)))
+
+        parts = [_DETAILS_LOADED_HEADER, *lines] if lines else []
+        if unknown:
+            parts.append(_DETAILS_UNKNOWN.format(names=", ".join(unknown)))
+        return "\n".join(parts)
 
     @hook  # type: ignore[call-overload]  # sync hook method; the @hook overloads only infer async
     def _on_before_tool_call(self, event: BeforeToolCallEvent) -> None:
         """Renew the exposure of the tool about to be called, and recover a premature call.
 
         A tool being called is the strongest evidence that its schema is still worth sending, so the
-        call itself renews the TTL. That is what lets a tool used over a stretch of consecutive cycles
-        keep its full specification in every projection without a second search.
+        call itself renews the TTL.
 
-        The second job is the call the model made off a catalog entry, before the parameters had ever
-        been projected. Such a call arrives with no arguments against a tool that requires some, so it
-        would fail on validation and cost a cycle anyway. The cycle is spent exposing the schema
-        instead: the call is cancelled with a message asking for the same call again, and the renewal
-        above has already exposed the tool, so the next projection carries the full specification.
+        The second job is a call to a tool whose schema was never projected -- a name the model read in
+        the catalog and called without loading it first. Such a call is cancelled with a message asking
+        for the same call again, and the renewal has already exposed the tool, so the retry carries the
+        full specification. It is a safety net: the catalog names are not in ``tool_specs``, so the
+        common path never reaches it.
 
-        The four conditions are all necessary, and each one on its own is a reason to let the call
-        through. An already exposed tool was called with the schema in hand. A tool in
-        ``always_available`` never had its schema hidden. A tool with no required parameter is
-        callable empty. And a call carrying arguments came from a model that knew what to pass.
-
-        The search tool is exempt for the same reason as ``always_available``, and the exemption used
-        to be missing. :func:`_project` emits ``find_tools`` in its first block, unconditionally, so
-        its full specification travels on every call -- but it is never written to ``exposed``, which
-        only records what a search revealed. The guard therefore read a call to it as a call made off
-        a catalog entry and cancelled it, answering that the parameters "were not loaded" when the
-        model had just read them. That cost a round trip, and worse than the round trip: it denied the
-        one call that opens the discovery path, at the moment the model chose to take it. Measured on
-        GLM 4.7 Flash, that arm searched once in sixty turns and guessed the rest.
-
-        A name the registry does not have is left alone entirely — no cancellation and no exposure.
-        There is no specification to expose for it, and the event loop already reports the unknown
-        tool. ``event.tool_use`` and the ``ToolRegistry`` come out of here unchanged on every path:
-        the only writes are the disclosure state and, in the premature case, ``event.cancel_tool``.
+        Exempt: an already exposed tool, anything in ``always_available``, the two plugin tools (both
+        are emitted in full on every call but never written to ``exposed``), and a tool with no required
+        parameter, which is callable empty. A name the registry does not have is left alone entirely.
 
         Args:
             event: The pre-call event. Only ``cancel_tool`` is ever written.
@@ -1207,43 +1279,39 @@ class ProgressiveToolDisclosure(Plugin):
             return
 
         state = _state_for(self._states, agent)
+        # The plugin tools are projected in full on every call, so an exposure entry for them would
+        # carry no information and only age out for nothing.
+        if name in _PLUGIN_TOOL_NAMES:
+            return
         # Read before the write: whether the schema was already projected is what tells a normal call
-        # apart from a call made off a catalog entry, and the renewal erases that distinction.
+        # apart from a call made off the catalog, and the renewal erases that distinction.
         was_exposed = name in state.exposed
         _renew(state, name, agent.event_loop_metrics.cycle_count)
 
-        if was_exposed or name in self._always_available or name == FIND_TOOLS_NAME:
+        if was_exposed or name in self._always_available or name in _PLUGIN_TOOL_NAMES:
             return
 
-        # A call to a tool whose schema was never projected is a call made off a catalog entry: the
-        # model knew the name but never saw the parameters. Whether it left the arguments out or made
-        # them up is not the distinction that matters -- it could not have known them either way.
-        #
-        # The guard used to require an EMPTY input, so an invented-argument call slipped through and ran
-        # against a schema the model had not seen. That is the worse of the two outcomes: an empty call
-        # fails loudly and gets one retry with the real schema, while invented arguments can satisfy a
-        # permissive tool and return a confidently wrong answer nothing in the run marks as suspect.
-        # Measured on GLM 4.7 Flash, the model guesses constantly -- seventeen empty guesses were
-        # cancelled in one run, and the argumented ones were never counted at all.
-        #
-        # The cost is one round trip on a guess that happened to be right. The cancellation says the
-        # parameters are available now, and the renewal above has already made that true.
+        # Arguments or not, the model could not have known the parameters, so either way the call is a
+        # guess: invented arguments against a permissive tool are the worse outcome, a confidently wrong
+        # answer nothing in the run marks as suspect.
         if _requires_parameters(agent.tool_registry.registry[name].tool_spec):
             event.cancel_tool = _PREMATURE_CALL_MESSAGE.format(name=name)
             _instrument(lambda: _record_premature_cancellation(state, name))
 
     def _short_description(self, spec: ToolSpec) -> str:
-        """Cut ``spec``'s description to the catalog budget, for use in the search result.
+        """Return ``spec``'s catalog line: the cached summary, or a truncation when there is none.
 
-        Falls back to the default budget when the catalog is suppressed: ``catalog_tokens=None``
-        drops the catalog from the projection, it does not mean the search result should carry a full
-        description.
+        Falls back to the default limit when the catalog is suppressed: ``catalog_chars=None`` drops the
+        catalog from the prompt, it does not mean a search result should carry a full description.
 
         Args:
             spec: Full specification as registered in the ``ToolRegistry``. Left unmodified.
 
         Returns:
-            The short description of the tool.
+            The one-line description of the tool.
         """
-        budget = _DEFAULT_CATALOG_TOKENS if self._catalog_tokens is None else self._catalog_tokens
-        return _truncate_description(spec["description"], budget)
+        cached = self._summaries.get((spec["name"], spec.get("description") or ""))
+        if cached is not None:
+            return cached
+        limit = _DEFAULT_CATALOG_CHARS if self._catalog_chars is None else self._catalog_chars
+        return _truncate_description(" ".join((spec.get("description") or "").split()), limit)
