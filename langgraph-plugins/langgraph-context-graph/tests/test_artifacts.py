@@ -527,3 +527,22 @@ def test_end_to_end_the_artifact_card_reaches_the_next_projection():
     graph = final["context_graph"]
     assert REFERENCE in graph.cards
     assert graph.cards[REFERENCE].kind == "artifact"
+
+
+def test_stash_must_have_a_retrieve_method():
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="stash="):
+        ContextGraphMiddleware(stash=object())
+
+
+def test_expand_artifact_falls_back_to_the_stash():
+    class _Stash:
+        async def retrieve(self, reference):
+            if reference == "mem_1_tc1_0":
+                return "from the stash\nsecond line"
+            raise KeyError(reference)
+
+    middleware = ContextGraphMiddleware(stash=_Stash())
+    answer = asyncio.run(middleware.expand_artifact(GraphState(), middleware._store_for(""), "mem_1_tc1_0"))
+    assert "from the stash" in answer

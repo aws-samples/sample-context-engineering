@@ -31,6 +31,8 @@ class _MockMatcher:
 class _FakeReranker:
     """Keyword scorer standing in for BedrockReranker — no AWS."""
 
+    max_sources_per_query = 100
+
     def __init__(self):
         self.search_units = 0
 
@@ -40,13 +42,10 @@ class _FakeReranker:
 
 
 def _build_stack():
-    """The combined arm exactly as the design/benchmark specifies."""
-    graph = ContextGraphMiddleware(matcher=_MockMatcher())
+    """The combined arm exactly as the benchmark builds it, and as the Strands harness does."""
+    relevance = RelevanceFilterMiddleware(config={"reranker": _FakeReranker()})
+    graph = ContextGraphMiddleware(matcher=_MockMatcher(), stash=relevance.stash)
     disclosure = ProgressiveToolDisclosureMiddleware()
-    relevance = RelevanceFilterMiddleware(
-        include_retrieval_tool=False,
-        config={"reranker": _FakeReranker()},
-    )
     # Outermost first (design §8): D wraps B; A is on the tool surface.
     return [graph, disclosure, relevance]
 
@@ -79,18 +78,52 @@ def test_a_is_on_the_tool_surface_not_the_model_call_layer():
     assert type(relevance).awrap_tool_call is not AgentMiddleware.awrap_tool_call
 
 
-def test_only_the_graph_retrieval_tools_are_visible_in_the_combined_arm():
+def test_the_combined_arm_carries_both_retrieval_paths_over_one_content():
     graph, disclosure, relevance = _build_stack()
 
     def names(mw):
         return {getattr(t, "name", getattr(t, "__name__", "")) for t in getattr(mw, "tools", [])}
 
-    graph_tools = names(graph)
-    relevance_tools = names(relevance)
+    # As in the Strands harness: the filter keeps retrieve_all_context, the graph keeps its three.
+    assert "retrieve_all_context" in names(relevance)
+    assert {"expand_card", "expand_artifact", "find_context"} <= names(graph)
 
-    # A ships NO retrieval tool when include_retrieval_tool=False; D owns retrieval.
-    assert "retrieve_all_context" not in relevance_tools
-    assert graph_tools & {"find_context", "expand_card"}
+
+@pytest.mark.asyncio
+async def test_a_reference_the_filter_mints_resolves_through_expand_artifact():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from context_core.graph import GraphState
+    from langgraph_relevance_filter._compat import ToolCallRequest
+
+    graph, _, relevance = _build_stack()
+    payload = "\n".join(f"row {i}: refund issued for account {i}" for i in range(4000))
+    request = ToolCallRequest(
+        tool_call={"id": "tc1", "name": "query_ledger", "args": {}},
+        tool=None,
+        state={
+            "messages": [
+                HumanMessage(content="which refunds were issued?"),
+                AIMessage(content="", tool_calls=[{"id": "tc1", "name": "query_ledger", "args": {}}]),
+            ]
+        },
+        runtime=None,
+    )
+
+    async def handler(_request):
+        return ToolMessage(content=payload, tool_call_id="tc1", name="query_ledger")
+
+    rewritten = await relevance.awrap_tool_call(request, handler)
+    reference = rewritten.content.split("[ref: ", 1)[1].split("]", 1)[0].split(",")[0].strip()
+    assert reference.startswith("mem_")
+
+    answer = await graph.expand_artifact(GraphState(), graph._store_for(""), reference)
+    assert "row 3999: refund issued for account 3999" in answer
+
+    # Without the stash the same reference is absent, which is the Strands result with no ContextManager.
+    bare = ContextGraphMiddleware(matcher=_MockMatcher())
+    missing = await bare.expand_artifact(GraphState(), bare._store_for(""), reference)
+    assert "row 3999" not in missing
 
 
 def test_graph_async_hook_closes_the_sync_async_gap():

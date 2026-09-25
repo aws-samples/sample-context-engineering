@@ -465,6 +465,40 @@ def build_middleware(config: RunConfig, session: boto3.Session) -> list[AgentMid
     disclosure: ProgressiveToolDisclosureMiddleware | None = None
     relevance: RelevanceFilterMiddleware | None = None
 
+    if config.relevance:
+        # Namespaced by run tag as well as configuration: the tag is what keeps two runs executing
+        # at the same time from writing into each other's stored sub-blocks and serving the wrong
+        # content back through retrieve_all_context.
+        storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
+        storage_root.mkdir(parents=True, exist_ok=True)
+
+        reranker = _MeteredReranker(
+            model_id=RERANK_MODEL_ID,
+            boto_session=session,
+            boto_client_config=_client_config(),
+        )
+        config.extra["_reranker"] = reranker
+
+        # On in every arm, as in the Strands harness (RELEVANCE_RETRIEVAL_TOOL, default on, is the only
+        # switch there). With disclosure installed the tool stays in the catalog and is loaded only for
+        # the rare question that needs a whole result, exactly as the Strands harness leaves it.
+        include_retrieval_tool = RELEVANCE_RETRIEVAL_TOOL
+        config.extra["_relevance_retrieval_tool"] = include_retrieval_tool
+
+        relevance = RelevanceFilterMiddleware(
+            # File-backed rather than in-memory, so the run can inspect what was cut.
+            store=FileStore(str(storage_root)),
+            include_retrieval_tool=include_retrieval_tool,
+            max_result_tokens=THRESHOLDS.max_result_tokens,
+            config={
+                "reranker": reranker,
+                "relevance_threshold": THRESHOLDS.relevance_threshold,
+                "chunk_tokens": THRESHOLDS.chunk_tokens,
+                "preview_tokens": THRESHOLDS.preview_tokens,
+            },
+        )
+        config.extra["_relevance"] = relevance
+
     if config.graph:
         matcher = _MeteredMatcher(EMBED_MODEL_ID, boto_session=session)
         config.extra["_matcher"] = matcher
@@ -490,45 +524,15 @@ def build_middleware(config: RunConfig, session: boto3.Session) -> list[AgentMid
             matcher=matcher,
             # Always on, as in the Strands harness (runner.py there passes True explicitly).
             include_artifact_tool=True,
+            # The filter's store as the second resolution layer, so a [ref: mem_N_...] the filter
+            # minted resolves through expand_artifact too. Strands gets this from the ContextManager
+            # Stash when one is installed; LangGraph has none, so it is wired explicitly.
+            stash=relevance.stash if relevance is not None else None,
         )
         config.extra["_graph"] = graph
         config.extra["_graph_artifact_tool_dropped"] = False
 
-    if config.relevance:
-        # Namespaced by run tag as well as configuration: the tag is what keeps two runs executing
-        # at the same time from writing into each other's stored sub-blocks and serving the wrong
-        # content back through retrieve_all_context.
-        storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
-        storage_root.mkdir(parents=True, exist_ok=True)
-
-        reranker = _MeteredReranker(
-            model_id=RERANK_MODEL_ID,
-            boto_session=session,
-            boto_client_config=_client_config(),
-        )
-        config.extra["_reranker"] = reranker
-
-        # Off in the combined arm, on when relevance runs alone. With disclosure installed the
-        # filter's retrieval tool sits in the catalog and costs a discovery cycle to reach, and the
-        # graph already offers ``expand_card``/``find_context`` over the same conversation -- so the
-        # combined arm measures the excerpt, and the single-strategy arm measures the excerpt plus
-        # its escape hatch. Recorded either way, because it changes what the model could reach.
-        include_retrieval_tool = RELEVANCE_RETRIEVAL_TOOL and not (config.graph and config.disclosure)
-        config.extra["_relevance_retrieval_tool"] = include_retrieval_tool
-
-        relevance = RelevanceFilterMiddleware(
-            # File-backed rather than in-memory, so the run can inspect what was cut.
-            store=FileStore(str(storage_root)),
-            include_retrieval_tool=include_retrieval_tool,
-            max_result_tokens=THRESHOLDS.max_result_tokens,
-            config={
-                "reranker": reranker,
-                "relevance_threshold": THRESHOLDS.relevance_threshold,
-                "chunk_tokens": THRESHOLDS.chunk_tokens,
-                "preview_tokens": THRESHOLDS.preview_tokens,
-            },
-        )
-        config.extra["_relevance"] = relevance
+        config.extra["_graph_stash"] = relevance is not None
 
     if config.disclosure:
         disclosure = ProgressiveToolDisclosureMiddleware(

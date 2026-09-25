@@ -292,6 +292,23 @@ class LineRange(TypedDict):
     end: int
 
 
+class _RelevanceStash:
+    """Read-only view of the filter's store in the shape a reference resolver reads: ``retrieve -> text``.
+
+    The store answers ``(bytes, content_type)``; a resolver wants the text. Text and JSON decode to a string,
+    anything else (images, files) to ``None``, which the resolver reports as non-textual content.
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    async def retrieve(self, reference: str) -> str | None:
+        content_bytes, content_type = await self._store.retrieve(reference)
+        if content_type.startswith("text/") or content_type == "application/json":
+            return content_bytes.decode("utf-8")
+        return None
+
+
 class RelevanceFilterMiddleware(AgentMiddleware):
     """Relevance-filter oversized tool results on the LangChain v1 middleware surface.
 
@@ -386,6 +403,16 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         self.retrieval_tool_name = _RETRIEVAL_TOOL_NAME
         # LangGraph reads ``tools`` at compile time; an empty sequence registers nothing.
         self.tools: Sequence[BaseTool] = [self._build_retrieval_tool()] if include_retrieval_tool else []
+
+    @property
+    def stash(self) -> _RelevanceStash | None:
+        """This filter's store, readable by another plugin's reference resolution.
+
+        Pass it as ``ContextGraphMiddleware(stash=...)`` so a ``[ref: mem_N_...]`` the filter minted resolves
+        through ``expand_artifact`` too. It plays the role the Strands ``ContextManager`` Stash plays for the
+        Strands graph plugin, which LangGraph has no equivalent of. ``None`` when nothing is stored.
+        """
+        return None if self._store is None else _RelevanceStash(self._store)
 
     # ------------------------------------------------------------------ preview / query
 

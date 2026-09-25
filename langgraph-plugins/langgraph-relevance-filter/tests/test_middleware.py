@@ -657,3 +657,10 @@ async def test_sync_wrap_tool_call_also_works_inside_a_running_loop():
     result = ToolMessage(content=_payload(), tool_call_id="tc1", name="query_ledger")
     rewritten = middleware.wrap_tool_call(_request(), lambda request: result)
     assert rewritten.content.startswith("[Relevance: tool result, ~")
+
+
+async def test_stash_reads_the_filters_store_as_text():
+    middleware = _middleware(store=InMemoryStore())
+    reference = await middleware._store.store("tc1_0", b"line one\nline two", "text/plain")
+    assert await middleware.stash.retrieve(reference) == "line one\nline two"
+    assert RelevanceFilterMiddleware(include_retrieval_tool=False).stash is None

@@ -296,14 +296,17 @@ class ContextGraphMiddleware(AgentMiddleware):
             the turn that fed it back.
         max_retrieval_cycles: Retrieval calls one turn may spend before the tools refuse and tell the model
             to answer from what it has. Defaults to ``8``. ``None`` restores unbounded retrieval.
-        include_artifact_tool: Register ``expand_artifact``. Defaults to ``True``. Pass ``False`` when a
-            middleware that offloads tool results is installed beside this one -- typically
-            ``RelevanceFilterMiddleware`` -- because each then ships a retrieval tool over a store the other
-            cannot read, and the model has two plausible tools for one job. Measured on this repository's
-            Strands benchmark, excluding it took the three-plugin stack from 84.5% to 94.4% weighted
-            accuracy. ``expand_card`` and ``find_context`` are unaffected and have no switch: they reach
-            back into the conversation's own turns, which is a job no offloader does.
+        include_artifact_tool: Register ``expand_artifact``. Defaults to ``True``. Beside a middleware that
+            offloads tool results -- typically ``RelevanceFilterMiddleware`` -- pass that middleware's
+            ``stash`` so both retrieval tools read the same content; without it each ships a tool over a store
+            the other cannot read. ``expand_card`` and ``find_context`` are unaffected and have no switch: they
+            reach back into the conversation's own turns, which is a job no offloader does.
         rarity_weight: How much rarity counts when Tags are selected. Defaults to ``0.70``.
+        stash: Second layer for ``expand_artifact``, asked for a reference this binding's own store does not
+            hold -- anything with an awaitable ``retrieve(reference)`` answering text. Pass
+            ``RelevanceFilterMiddleware.stash`` so the ``[ref: mem_N_...]`` the filter mints resolves here
+            too; this is the role the ``ContextManager`` Stash plays for the Strands plugin. ``None`` (the
+            default) keeps the own store as the only layer, as in a Strands agent with no manager.
         matcher: Similarity matcher, or ``None`` for the default embedding matcher. Checked by member, so an
             implementation inherits from nothing, and resolved on first need, so construction opens no
             client.
@@ -340,6 +343,7 @@ class ContextGraphMiddleware(AgentMiddleware):
         max_retrieval_cycles: int | None = _DEFAULT_MAX_RETRIEVAL_CYCLES,
         rarity_weight: float = _DEFAULT_RARITY_WEIGHT,
         include_artifact_tool: bool = True,
+        stash: object | None = None,
         matcher: SimilarityMatcher | None = None,
         middleware: Iterable[object] | None = None,
     ) -> None:
@@ -370,10 +374,13 @@ class ContextGraphMiddleware(AgentMiddleware):
         _validate_optional_count(max_retrieval_cycles, "max_retrieval_cycles")
         if not isinstance(include_artifact_tool, bool):
             raise ValueError(f"include_artifact_tool=<{include_artifact_tool!r}> | must be True or False")
+        if stash is not None and not callable(getattr(stash, "retrieve", None)):
+            raise ValueError(f"stash=<{stash!r}> | must be None or have a retrieve(reference) method")
         _validate_matcher(matcher)
 
         super().__init__()
 
+        self._stash = stash
         self._collapse_floor = float(collapse_floor)
         self._neighbors_per_candidate = int(neighbors_per_candidate)
         self._body_budget = body_budget
@@ -984,11 +991,10 @@ class ContextGraphMiddleware(AgentMiddleware):
 
         state.retrieval_cycles += 1
 
-        # ``agent=None``: the second layer of the core's resolution order is the Strands ``ContextManager``
-        # Stash, and this binding registers no ``"context_manager"`` host symbol because LangGraph has no
-        # equivalent. The store this binding fills is therefore the only layer, and a reference it does not
-        # hold resolves as ``"absent"``.
-        resolved = await resolve_artifact(store, None, reference)
+        # ``agent=None``: the core's own second-layer discovery is the Strands ``ContextManager`` Stash, which
+        # LangGraph has no equivalent of. The second layer is therefore the explicit ``stash`` -- typically the
+        # relevance filter's store -- and with none a reference the own store does not hold is ``"absent"``.
+        resolved = await resolve_artifact(store, None, reference, stash=self._stash)
         if resolved.outcome == "absent":
             return absent_message(reference)
         if resolved.outcome == "unknown":

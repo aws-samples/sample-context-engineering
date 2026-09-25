@@ -39,7 +39,8 @@ remaining differences are the ones LangChain imposes:
   It flips at the same size as Strands unless a Strands model opts into native token counting.
 - **D — artifact content.** Strands stores a reference name and reads the content back through the
   SDK's context-manager Stash, which LangGraph lacks; this binding stores the return's own text blocks
-  under `<tool_call_id>_<index>` instead, so `expand_artifact` can answer. Line/pattern reads use
+  under `<tool_call_id>_<index>` instead, so `expand_artifact` can answer, and takes an explicit `stash`
+  (the relevance filter's store) as the second resolution layer. Line/pattern reads use
   `context_core.relevance.search` (registered in `HOST_SYMBOLS`).
 
 ### The D caveats (documented compromises, not silent losses)
@@ -82,8 +83,9 @@ Verified against `langchain` 1.4.2.
 
 Install order is outermost-first (LangChain nests `wrap_*` hooks, first in the list is the outermost
 layer). D wraps B (disjoint `ModelRequest` fields: D rewrites `messages`, B rewrites `tools` +
-`system_message`); A is on the tool surface. In the combined stack, A's retrieval tool is turned **off**
-so D owns retrieval — the model is never shown two retrieval tools over two stores.
+`system_message`); A is on the tool surface. Hand D the filter's `stash`, so a `[ref: mem_N_…]` the filter
+mints resolves through `expand_artifact` as well as through `retrieve_all_context` — the role the
+`ContextManager` Stash plays for the Strands graph plugin.
 
 ```python
 from langchain.agents import create_agent
@@ -91,13 +93,14 @@ from langgraph_context_graph import ContextGraphMiddleware
 from langgraph_progressive_tool_disclosure import ProgressiveToolDisclosureMiddleware
 from langgraph_relevance_filter import RelevanceFilterMiddleware
 
+relevance = RelevanceFilterMiddleware()
 agent = create_agent(
     model="bedrock:us.anthropic.claude-opus-4-8",
     tools=[...],  # all tools registered upfront; disclosure controls what the model *sees*
     middleware=[
-        ContextGraphMiddleware(),                          # outermost: projects messages
-        ProgressiveToolDisclosureMiddleware(),             # then rewrites tools + catalog + folds
-        RelevanceFilterMiddleware(include_retrieval_tool=False),  # tool surface; D owns retrieval
+        ContextGraphMiddleware(stash=relevance.stash),  # outermost: projects messages
+        ProgressiveToolDisclosureMiddleware(),          # then rewrites tools + catalog + folds
+        relevance,                                      # tool surface
     ],
 )
 result = await agent.ainvoke({"messages": [...]})  # or agent.invoke(...): every hook has both twins

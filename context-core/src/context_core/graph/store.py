@@ -281,8 +281,10 @@ class ResolvedArtifact:
     source: Literal["own", "stash"] | None = None
 
 
-async def resolve_artifact(store: ReferenceStore, agent: object, reference: str) -> ResolvedArtifact:
-    """Resolve ``reference`` in the plugin's own store, then across the optional ``ContextManager`` bridge.
+async def resolve_artifact(
+    store: ReferenceStore, agent: object, reference: str, *, stash: object | None = None
+) -> ResolvedArtifact:
+    """Resolve ``reference`` in the plugin's own store, then across the optional second layer.
 
     The order is the inverted coupling (Requirements 15.2, 15.3): the store the plugin owns is always present and always
     asked first, and the Stash is consulted only for what the store does not hold. Never raises — every failure of every
@@ -294,6 +296,8 @@ async def resolve_artifact(store: ReferenceStore, agent: object, reference: str)
         agent: The agent of the call, for the optional bridge. Read only, and typed loosely on purpose: the bridge is
             found by walking a private registry that may not exist at all.
         reference: The reference as it was shown to the model.
+        stash: The second layer, given explicitly -- anything with an awaitable ``retrieve(reference)``. A binding
+            whose host has no manager to discover on ``agent`` passes it here; ``None`` falls back to the discovery.
 
     Returns:
         The resolution. ``"absent"`` and ``"unknown"`` both mean "no content", and the caller words them differently
@@ -303,7 +307,8 @@ async def resolve_artifact(store: ReferenceStore, agent: object, reference: str)
     if block is not None:
         return _resolved(block, "own")
 
-    stash = _stash_of(agent)
+    if stash is None:
+        stash = _stash_of(agent)
     if stash is None:
         return ResolvedArtifact(outcome="absent")
 
