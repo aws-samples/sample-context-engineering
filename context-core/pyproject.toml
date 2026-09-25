@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "context-core"
+version = "0.1.0"
+description = "Framework-agnostic core for context-engineering practices (relevance filtering, progressive tool disclosure, context graph). No agent-framework dependency."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+# NO agent framework here: neither strands-agents nor langchain/langgraph.
+# Only the remote-scoring backends the default reranker/embedder/S3 store need.
+dependencies = [
+    "boto3>=1.34",
+    "botocore>=1.34",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6",
+    # Mocked AWS for the S3Store contract tests: no live call ever leaves the test process.
+    "moto>=5.0.0,<6.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/context_core"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
