@@ -246,6 +246,56 @@ SYSTEM_PROMPT = (
 
 PHASES = ("line-a", "line-b", "line-c", "return")
 
+# --- memory probes -------------------------------------------------------------------------
+#
+# The return turns test recall only at the very end. These test it at several depths, and they are
+# built so the answer can only come from the conversation itself:
+#
+# * Two facts are stated by the USER in a seed turn and returned by no tool, so the only place they
+#   exist is the history (the baseline's session) or the graph. No tool call can recover them.
+# * Two facts were returned by a tool in line B. A tool call CAN recover those, so each such probe asks
+#   "without looking it up again", and the scorer records whether the turn called a domain tool. A
+#   correct answer with no domain call is recall; a correct answer after re-calling the tool is not.
+#
+# Probes are scored turns and count toward the "half the script is scored" budget.
+
+MEMORY_SEED = Turn(
+    label="M0-seed",
+    phase="memory-seed",
+    prompt=(
+        "Before we go on, note two things for later -- no need to look anything up: my emergency-fund "
+        "target is R$ 18.500,00, and my financial advisor is Ricardo Tavares."
+    ),
+    rationale="Plants two facts that exist only in the conversation. The memory probes ask for them later.",
+)
+
+MEMORY_PROBES: tuple[Turn, ...] = (
+    Turn(
+        label="M1-seed-target",
+        phase="memory-probe",
+        prompt="Quick one: what emergency-fund target did I give you earlier?",
+        rationale="User-stated fact, no tool returns it: answerable from memory only.",
+    ),
+    Turn(
+        label="M2-sync-job",
+        phase="memory-probe",
+        prompt="Without looking it up again: what was the job id of the connector sync you forced earlier?",
+        rationale="Tool fact from B3. Recall if answered with no domain tool call.",
+    ),
+    Turn(
+        label="M3-seed-advisor",
+        phase="memory-probe",
+        prompt="Remind me, what is my financial advisor's name?",
+        rationale="User-stated fact, no tool returns it: answerable from memory only.",
+    ),
+    Turn(
+        label="M4-case-id",
+        phase="memory-probe",
+        prompt="Without looking it up again: what was the number of the support case you opened for the connector?",
+        rationale="Tool fact from B4. Recall if answered with no domain tool call.",
+    ),
+)
+
 # --- the long script ---------------------------------------------------------------------
 #
 # The eighteen hand-written turns above are the spine: the same order, the same expectations, so
@@ -268,42 +318,52 @@ PHASES = ("line-a", "line-b", "line-c", "return")
 # duplicating one identifier and mislabelling two institutions. Unscored turns cannot fail, so that
 # drift was invisible -- which is exactly why half the script is scored now.
 
-SCORED_FILLER_SPECS: tuple[tuple[str, str], ...] = (
-    (
-        "allocation",
-        "What does the asset class allocation look like on account {account}?",
-    ),
+SCORED_FILLER_SPECS: tuple[tuple[str, str, frozenset[str] | None], ...] = (
     (
         "projection",
         "Project the yield of account {account} over 12 months in the base scenario.",
+        frozenset({"investment"}),
     ),
     (
         "connector",
-        "Is the FinBank Invest connector syncing account {account} normally?",
+        "Is the {institution} connector syncing account {account} normally?",
+        None,
     ),
     (
         "logs",
-        "Pull the error logs of the NeoBank connector while it syncs account {account}.",
+        "Pull the error logs of the {institution} connector, which syncs account {account}.",
+        None,
     ),
     (
         "metrics",
         "What are the duration metrics of the Lambda that processes account {account}?",
+        None,
     ),
     (
         "iam",
-        "Describe the IAM role that account {account} uses to write to S3.",
+        "Describe the IAM role statement-writer, which account {account} uses to write to S3.",
+        None,
     ),
     (
         "objects",
-        "What objects exist in the statements bucket for account {account}?",
+        "What objects exist in the S3 bucket octank-statements for account {account}?",
+        None,
     ),
 )
-"""``(kind, prompt)`` pairs whose answers the mocked tools return identically for every account.
+"""``(kind, prompt, account types)`` triples whose answers the mocked tools return identically.
 
 That independence is the whole selection criterion: it is what lets one static expectation in
 ``accuracy.FILLER_CHECKS`` be correct for every turn built from the pair, without the harness having
 to derive a per-account expectation at runtime. The ``kind`` is what the label carries and what the
 expectation is looked up by.
+
+Every prompt must also be TRUE of the account it is asked about. They used to pair any account with a
+fixed premise -- "the NeoBank connector" for a SampleBank account, the yield of a savings account, a
+bucket and a role nobody had named -- and a careful model answered by correcting the premise without
+calling a tool, which scored as a critical failure. Measured on Opus 4.8, those turns failed in every
+arm, so the arms differed by which run happened to push back, not by the plugin. The fix is in the
+prompt: ``{institution}`` is the account's own, the third element restricts the kind to the account
+types it makes sense for (``None`` means any), and the resource a tool needs is named in the question.
 
 Phrased like the spine's turns -- no hint about which tool to call -- so tool selection stays the
 model's job and the disclosure strategy is tested rather than bypassed.
@@ -359,7 +419,7 @@ def long_script(total: int = 100) -> tuple[Turn, ...]:
     Returns:
         The turns, in order: the opening scored lines, then the filler, then the return.
     """
-    from .tools import account_ids
+    from .tools import account_ids, account_records
 
     spine = SCENARIO
     opening = tuple(turn for turn in spine if turn.phase != "return")
@@ -369,9 +429,20 @@ def long_script(total: int = 100) -> tuple[Turn, ...]:
     if filler_count <= 0:
         return spine
 
+    # Memory turns come out of the filler budget so the script stays exactly ``total`` long. Skipped when
+    # there is too little filler to put distance between the seed and the probes.
+    memory = filler_count >= 2 * (1 + len(MEMORY_PROBES))
+    if memory:
+        filler_count -= 1 + len(MEMORY_PROBES)
+        # The seed goes right after A2, early in line A, so the probes ask for it from deep in the run.
+        seed_at = next(i for i, turn in enumerate(opening) if turn.label == "A2-positions") + 1
+        opening = (*opening[:seed_at], MEMORY_SEED, *opening[seed_at:])
+
     accounts = account_ids()
-    # The spine is the floor: never negative, so a short run scores the spine and nothing more.
-    scored_needed = max(0, total // 2 - len(spine))
+    records = account_records()
+    # The spine is the floor: never negative, so a short run scores the spine and nothing more. The
+    # probes are scored turns too, so they come out of the same half.
+    scored_needed = max(0, total // 2 - len(spine) - (len(MEMORY_PROBES) if memory else 0))
     scored_positions = _scored_filler_positions(filler_count, scored_needed)
 
     filler: list[Turn] = []
@@ -379,14 +450,17 @@ def long_script(total: int = 100) -> tuple[Turn, ...]:
     for position in range(filler_count):
         account = accounts[position % len(accounts)]
         if position in scored_positions:
-            kind, template = SCORED_FILLER_SPECS[scored_seen % len(SCORED_FILLER_SPECS)]
+            kind, template, types = SCORED_FILLER_SPECS[scored_seen % len(SCORED_FILLER_SPECS)]
+            # Only accounts the prompt is true of; the rotation still walks the fixture in order.
+            eligible = [r for r in records if types is None or r["type"] in types]
+            record = eligible[position % len(eligible)]
             # The kind travels in the label, which is how accuracy.score_turn finds the expectation
             # without a dictionary entry per generated turn.
             filler.append(
                 Turn(
                     label=f"S{scored_seen:03d}-{kind}",
                     phase="filler-scored",
-                    prompt=template.format(account=account),
+                    prompt=template.format(account=record["id"], institution=record["institution"]),
                     rationale=(
                         "Scored mass: a real tool result and a checkable answer, asked at this depth "
                         "of the conversation."
@@ -404,6 +478,12 @@ def long_script(total: int = 100) -> tuple[Turn, ...]:
                     rationale="Unscored mass: a real tool result, and no expectation of its own.",
                 )
             )
+
+    if memory:
+        # Evenly spaced through the filler, so recall is asked at several depths rather than once.
+        for k, probe in enumerate(MEMORY_PROBES):
+            at = round((k + 1) * len(filler) / (len(MEMORY_PROBES) + 1)) + k
+            filler.insert(at, probe)
 
     return (*opening, *tuple(filler), *closing)
 

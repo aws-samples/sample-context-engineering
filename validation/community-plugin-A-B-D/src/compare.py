@@ -32,7 +32,7 @@ from statistics import median
 from typing import Any
 
 from . import config
-from .config import AGENT_MODEL_ID, PRICING, RESULTS_DIR, RUN_CONFIGS
+from .config import AGENT_MODEL_ID, RESULTS_DIR, RUN_CONFIGS
 
 _ORDER = ("baseline", "disclosure", "relevance", "graph", "all", "graph-all")
 """Reading order: the reference first, then one strategy at a time, then the two stacks.
@@ -102,7 +102,7 @@ class Row:
     token_spread_pct: float
     weighted_accuracy: float
     materially_correct: float
-    turns_scored: int
+    turns_scored: float
     accuracy_spread_pct: float
     wall_seconds: float
     turn_seconds_mean: float
@@ -131,7 +131,21 @@ def _cost(tokens: float, per_mtok: float) -> float:
     return tokens / 1_000_000.0 * per_mtok
 
 
-def _cache_cost(tokens: dict[str, Any]) -> tuple[float, bool]:
+def _run_model(entry: dict[str, Any]) -> str:
+    """The agent model a stored run was measured on, falling back to the environment's.
+
+    Read from the run's own ``meta`` so a ``--report-only`` re-render bills the model that produced
+    the tokens, not whatever ``VALIDATION_AGENT_MODEL_ID`` happens to say in the shell doing the render.
+    """
+    return (entry.get("meta") or {}).get("agent_model") or AGENT_MODEL_ID
+
+
+def _run_pricing(entry: dict[str, Any]) -> config.Pricing:
+    """The rates for the model this run was measured on."""
+    return config.pricing_for(_run_model(entry))
+
+
+def _cache_cost(tokens: dict[str, Any], pricing: config.Pricing) -> tuple[float, bool]:
     """Return what this run's prompt-cache traffic cost, and whether that figure is a bound.
 
     Bedrock reports cached input separately from ``inputTokens``, so cache traffic contributes
@@ -160,10 +174,10 @@ def _cache_cost(tokens: dict[str, Any]) -> tuple[float, bool]:
     if not read and not write:
         return 0.0, False
 
-    write_rate = PRICING.cache_write_1h_per_mtok if config.CACHE_TTL == "1h" else PRICING.cache_write_5m_per_mtok
-    read_rate = PRICING.cache_read_per_mtok
+    write_rate = pricing.cache_write_1h_per_mtok if config.CACHE_TTL == "1h" else pricing.cache_write_5m_per_mtok
+    read_rate = pricing.cache_read_per_mtok
     if read_rate is None or write_rate is None:
-        fallback = PRICING.agent_input_per_mtok
+        fallback = pricing.agent_input_per_mtok
         return _cost(read + write, fallback), True
 
     return _cost(read, read_rate) + _cost(write, write_rate), False
@@ -182,13 +196,21 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
     embedding = counters.get("embedding_cost", {})
     embed_tokens = float(embedding.get("input_tokens", 0) or 0)
 
-    # Both rerank users are summed here and broken out in the notes below the table: the
-    # offloader's relevance preview and, when enabled, the graph's selection refinement.
-    offloader_units = int(counters.get("offloader", {}).get("search_units", 0) or 0)
-    graph_units = int(counters.get("rerank_cost", {}).get("search_units", 0) or 0)
-    search_units = offloader_units + graph_units
+    # One rerank user in this harness: the relevance filter. The graph scores with an embedding matcher,
+    # whose spend is the embedding column. Prefer the harness's own metered count (``rerank_observed``,
+    # counted at the Reranker contract boundary) over the plugin's private tally, which reads 0 when the
+    # private attribute moves.
+    observed_units = counters.get("rerank_observed", {}).get("search_units")
+    offloader_units = counters.get("offloader", {}).get("search_units", 0)
+    search_units = int((observed_units if observed_units is not None else offloader_units) or 0)
 
-    agent_tokens = agent_input + agent_output
+    cache_read = float(tokens.get("cache_read_total", 0) or 0)
+    cache_write = float(tokens.get("cache_write_total", 0) or 0)
+
+    # Bedrock reports cached input outside ``inputTokens``. Leaving it out made a cached call read as a
+    # ~2-token call and inverted the token delta on any model that caches (implicitly or not); the
+    # prompt mass is the three summed, and each bucket is still priced at its own rate below.
+    agent_tokens = agent_input + cache_read + cache_write + agent_output
     # The disclosure catalog is summarized by the agent's own model, outside the agent's `usage`, so
     # it is billed here at the agent's rates rather than silently left out of the arm that spent it.
     catalog_usage = counters.get("disclosure", {}).get("summary_usage", {}) or {}
@@ -196,7 +218,8 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
     summary_output = float(catalog_usage.get("outputTokens", 0) or 0)
     aux_tokens = embed_tokens + summary_input + summary_output
 
-    cache_cost, cache_bounded = _cache_cost(tokens)
+    pricing = _run_pricing(entry)
+    cache_cost, cache_bounded = _cache_cost(tokens, pricing)
 
     return Row(
         name=name,
@@ -211,19 +234,19 @@ def _row(name: str, entry: dict[str, Any]) -> Row:
         token_spread_pct=float(tokens.get("usage_input_total_spread_pct", 0.0) or 0.0),
         weighted_accuracy=float(accuracy.get("weighted_accuracy", 0.0) or 0.0),
         materially_correct=float(accuracy.get("turns_materially_correct", 0) or 0),
-        turns_scored=int(accuracy.get("turns_scored", 0) or 0),
+        turns_scored=float(accuracy.get("turns_scored", 0) or 0),
         accuracy_spread_pct=float(accuracy.get("weighted_accuracy_spread_pct", 0.0) or 0.0),
         wall_seconds=float(summary.get("wall_seconds", 0.0) or 0.0),
         turn_seconds_mean=float(timing.get("turn_seconds_mean", 0.0) or 0.0),
         turn_seconds_spread_pct=float(timing.get("turn_seconds_mean_spread_pct", 0.0) or 0.0),
-        agent_cost=_cost(agent_input + summary_input, PRICING.agent_input_per_mtok)
-        + _cost(agent_output + summary_output, PRICING.agent_output_per_mtok)
+        agent_cost=_cost(agent_input + summary_input, pricing.agent_input_per_mtok)
+        + _cost(agent_output + summary_output, pricing.agent_output_per_mtok)
         + cache_cost,
-        cache_read=float(tokens.get("cache_read_total", 0) or 0),
-        cache_write=float(tokens.get("cache_write_total", 0) or 0),
+        cache_read=cache_read,
+        cache_write=cache_write,
         cache_cost_is_bound=cache_bounded,
-        embedding_cost=_cost(embed_tokens, PRICING.embedding_per_mtok),
-        rerank_cost=search_units / 1_000.0 * PRICING.rerank_per_ksearchunit,
+        embedding_cost=_cost(embed_tokens, pricing.embedding_per_mtok),
+        rerank_cost=search_units / 1_000.0 * pricing.rerank_per_ksearchunit,
         embed_calls=int(embedding.get("calls", 0) or 0),
         search_units=search_units,
     )
@@ -330,7 +353,7 @@ def build_comparison(payload: dict[str, Any]) -> str:
             f"| {'—' if is_base else _signed(token_delta_pct)} "
             f"| {'—' if is_base else _resolved(token_delta_pct, row.token_spread_pct)} "
             f"| {row.weighted_accuracy * 100:.1f}% "
-            f"| {row.materially_correct:.1f}/{row.turns_scored} "
+            f"| {row.materially_correct:.1f}/{row.turns_scored:g} "
             f"| {row.turn_seconds_mean:.1f} "
             f"| {row.wall_seconds:.0f} "
             f"| {row.cost:.2f} "
@@ -387,22 +410,30 @@ def build_comparison(payload: dict[str, Any]) -> str:
         "the units do not change."
     )
     lines.append("")
-    lines.append(
-        f"`{AGENT_MODEL_ID}` at ${PRICING.agent_input_per_mtok:.2f}/${PRICING.agent_output_per_mtok:.2f} "
-        f"per Mtok in/out, embedding ${PRICING.embedding_per_mtok:.2f} per Mtok, "
-        f"rerank ${PRICING.rerank_per_ksearchunit:.2f} per 1k search units. "
-        + (
-            f"Prompt caching ON at TTL {config.CACHE_TTL}, billed at ${PRICING.cache_read_per_mtok:.2f} read / "
-            f"${(PRICING.cache_write_1h_per_mtok if config.CACHE_TTL == '1h' else PRICING.cache_write_5m_per_mtok) or 0:.2f} "
-            "write per Mtok."
-            if config.CACHE_TTL
-            else "Prompt caching OFF."
+    run_model = _run_model(payload[_BASELINE])
+    pricing = _run_pricing(payload[_BASELINE])
+    cache_write_rate = pricing.cache_write_1h_per_mtok if config.CACHE_TTL == "1h" else pricing.cache_write_5m_per_mtok
+    if not config.CACHE_TTL:
+        cache_note = "Prompt caching OFF."
+    elif pricing.cache_read_per_mtok is None or cache_write_rate is None:
+        cache_note = (
+            f"Prompt caching ON at TTL {config.CACHE_TTL}; this model declares no cache rates, so cache "
+            "traffic is billed at the uncached input rate (an upper bound)."
         )
+    else:
+        cache_note = (
+            f"Prompt caching ON at TTL {config.CACHE_TTL}, billed at ${pricing.cache_read_per_mtok:.2f} read / "
+            f"${cache_write_rate:.2f} write per Mtok."
+        )
+    lines.append(
+        f"`{run_model}` at ${pricing.agent_input_per_mtok:.2f}/${pricing.agent_output_per_mtok:.2f} "
+        f"per Mtok in/out, embedding ${pricing.embedding_per_mtok:.2f} per Mtok, "
+        f"rerank ${pricing.rerank_per_ksearchunit:.2f} per 1k search units. " + cache_note
     )
     lines.append("")
     lines.append(
-        "One search unit is one query against up to 100 documents. Both rerank users are summed in the "
-        "column: the offloader's relevance preview, and the graph's selection refinement when enabled."
+        "One search unit is one query against up to 100 documents. The only rerank user is the relevance "
+        "filter; the graph scores with an embedding matcher, whose spend is the embedding column."
     )
     lines.append("")
 

@@ -13,7 +13,8 @@ That gives both a provider-reported figure and an independently computed one, an
 two are reported side by side so a discrepancy is visible rather than hidden.
 
 Timing is captured at three granularities, because they answer different questions:
-``model_seconds`` isolates provider latency, ``turn_seconds`` includes tool execution and
+``model_seconds`` runs from the call to the provider's stop event (it includes the consumer's
+per-event work, so it is not isolated provider latency), ``turn_seconds`` includes tool execution and
 the plugins' critical path, and ``wall_seconds`` covers the whole run.
 """
 
@@ -60,6 +61,16 @@ class _CallTag:
 
 
 _CALL_TAG: contextvars.ContextVar[_CallTag | None] = contextvars.ContextVar("validation_call_tag", default=None)
+
+
+RETRIEVAL_TOOLS = ("retrieve_context", "expand_artifact", "expand_card", "find_context")
+"""Tools whose result brings stored content back into the history, in this harness.
+
+``retrieve_context`` is the relevance filter's (only registered when its retrieval tool is on); the
+other three are the context graph's. ``find_tools`` is excluded: it returns tool specs, not content.
+The earlier count keyed off ``retrieve_offloaded_content``, a vended-SDK tool that never exists here,
+so the column read 0 on every run.
+"""
 
 
 def _sanitize_tag(value: Any) -> str:
@@ -328,16 +339,23 @@ class RunCollector:
 
             record.started_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             started = time.perf_counter()
+            # Stopped at the provider's stop event rather than in ``finally``: the generator stays
+            # suspended at each ``yield`` while the consumer works, and ``finally`` only runs when the
+            # stream is exhausted or closed, so the old figure absorbed post-stop consumption and could
+            # exceed the turn's own time. Events before the stop still include the consumer's per-event
+            # work, so this is "time until the model finished", not isolated provider latency.
+            stopped_at: float | None = None
             try:
                 async for event in next_fn(context):
-                    _absorb_usage(record, event)
+                    if _absorb_usage(record, event) and stopped_at is None:
+                        stopped_at = time.perf_counter()
                     yield event
             except Exception as error:  # noqa: BLE001 - record and re-raise
                 record.error = f"{type(error).__name__}: {error}"
                 self.errors.append(record.error)
                 raise
             finally:
-                record.model_seconds = time.perf_counter() - started
+                record.model_seconds = (stopped_at or time.perf_counter()) - started
                 record.ended_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
                 record.request_ids = list(tag.request_ids)
 
@@ -369,7 +387,7 @@ class RunCollector:
             "model_calls": len(self.calls),
             "tool_uses_total": sum(tool_uses.values()),
             "tool_uses": dict(sorted(tool_uses.items(), key=lambda item: -item[1])),
-            "retrievals": tool_uses.get("retrieve_offloaded_content", 0),
+            "retrievals": sum(tool_uses.get(name, 0) for name in RETRIEVAL_TOOLS),
             # Retrieval count is the variable that explains the token totals: every
             # retrieval appends a large result to the history, which then rides along on
             # every subsequent call. A strategy that invites retrieval pays for it twice.
@@ -427,31 +445,35 @@ def _json_chars(payload: Any) -> int:
         return len(str(payload))
 
 
-def _absorb_usage(record: ModelCallRecord, event: Any) -> None:
+def _absorb_usage(record: ModelCallRecord, event: Any) -> bool:
     """Pull usage off a ``ModelStopReason`` event if this is one.
 
     The event carries a 4-tuple under the ``"stop"`` key: (stop_reason, message, usage,
     metrics). Everything is defensive because an event shape change should degrade the
     measurement, not the run.
+
+    Returns:
+        True when ``event`` was the stop event, so the caller can stop the model clock there.
     """
     try:
         payload = event if isinstance(event, dict) else getattr(event, "_data", None)
         if not isinstance(payload, dict) or "stop" not in payload:
-            return
+            return False
         stop = payload["stop"]
         if not isinstance(stop, tuple) or len(stop) < 3:
-            return
+            return False
         record.stop_reason = str(stop[0])
         usage = stop[2]
         if not isinstance(usage, dict):
-            return
+            return True
         record.usage_input_tokens = usage.get("inputTokens")
         record.usage_output_tokens = usage.get("outputTokens")
         record.usage_total_tokens = usage.get("totalTokens")
         record.cache_read_tokens = usage.get("cacheReadInputTokens")
         record.cache_write_tokens = usage.get("cacheWriteInputTokens")
+        return True
     except Exception:  # noqa: BLE001
-        return
+        return False
 
 
 def _safe(fn: Any, values: list[Any], digits: int = 1) -> float:
@@ -477,16 +499,32 @@ def aggregate(collectors: list[RunCollector]) -> dict[str, Any]:
     """
     if not collectors:
         return {}
+
+    # A replay that raised before measuring anything (run_all's placeholder collector) carries only an
+    # error. Averaging it in as a zero-token, zero-turn replay halved every total while accuracy, which
+    # skipped it, stayed intact -- so the row read as twice as cheap for the same correctness. It is
+    # kept for its errors and excluded from every mean.
+    measured = [collector for collector in collectors if collector.turns or collector.calls]
+    crashed_errors = [error for collector in collectors if collector not in measured for error in collector.errors]
+    if not measured:
+        measured = collectors[:1]
+        crashed_errors = [error for collector in collectors[1:] for error in collector.errors]
+    replays_failed = len(collectors) - len(measured)
+    collectors = measured
+
     if len(collectors) == 1:
         entry = collectors[0].to_dict()
         entry["repeats"] = 1
+        entry["summary"]["errors"] = [*entry["summary"]["errors"], *crashed_errors]
+        entry["summary"]["replays_failed"] = replays_failed
         return entry
 
     summaries = [collector.summary() for collector in collectors]
     merged: dict[str, Any] = {
         "config": summaries[0]["config"],
         "repeats": len(summaries),
-        "errors": [error for summary in summaries for error in summary["errors"]],
+        "replays_failed": replays_failed,
+        "errors": [*(error for summary in summaries for error in summary["errors"]), *crashed_errors],
     }
 
     for key in ("wall_seconds", "turns", "model_calls", "tool_uses_total", "retrievals"):
@@ -515,8 +553,16 @@ def aggregate(collectors: list[RunCollector]) -> dict[str, Any]:
             "weighted_accuracy_spread_pct": _spread_pct([item["weighted_accuracy"] for item in scored]),
             "material_correctness": _mean_of([item["material_correctness"] for item in scored]),
             "turns_materially_correct": _mean_of([item["turns_materially_correct"] for item in scored]),
-            "turns_scored": scored[0]["turns_scored"],
+            # Averaged like its numerator: a replay that overflowed scores fewer turns, and taking replay
+            # 0's count against a mean numerator could print a fraction above one.
+            "turns_scored": _mean_of([item["turns_scored"] for item in scored]),
+            "turns_scored_per_replay": [item["turns_scored"] for item in scored],
             "critical_failures_total": _mean_of([item["critical_failures_total"] for item in scored]),
+            "memory": {
+                "probes": (scored[0].get("memory") or {}).get("probes", 0),
+                "correct": _mean_of([(item.get("memory") or {}).get("correct", 0) for item in scored]),
+                "recalled": _mean_of([(item.get("memory") or {}).get("recalled", 0) for item in scored]),
+            },
             "per_turn": _mean_per_turn_accuracy(scored),
         }
 
@@ -552,7 +598,8 @@ def _spread_pct(values: list[Any]) -> float:
     average = mean(numeric)
     if not average:
         return 0.0
-    return round((max(numeric) - min(numeric)) / average * 100.0, 1)
+    # Absolute: a quantity that can be negative (overhead_seconds) would otherwise flip the spread's sign.
+    return round((max(numeric) - min(numeric)) / abs(average) * 100.0, 1)
 
 
 def _merge_counters(counter_sets: list[dict[str, Any]]) -> dict[str, Any]:

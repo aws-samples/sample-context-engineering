@@ -17,8 +17,8 @@ one metered reranker covered everything. Here ``RelevanceFilter`` owns a ``Reran
 *public* class -- ``BedrockReranker`` and ``EmbeddingSimilarityMatcher`` -- rather than the SDK's
 private ones.
 
-**No referenced-source bridge.** ``ProgressiveToolDisclosure`` releases a loaded tool once it has
-returned and no longer keeps the tools the history references, so a Card that steps down has no
+**No referenced-source bridge.** ``ProgressiveToolDisclosure`` releases a loaded tool after
+``ttl_cycles`` idle cycles and no longer keeps the tools the history references, so a Card that steps down has no
 schema to keep resident: its tools are catalog names like any other, loaded again with
 ``get_tool_details`` when the model needs them. ``premature_cancellations`` is reported so a call
 made off the catalog without loading stays visible.
@@ -34,7 +34,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
+import uuid
 from typing import Any
 
 import boto3
@@ -42,6 +44,7 @@ from botocore.config import Config as BotocoreConfig
 from strands import Agent
 from strands.agent.conversation_manager import NullConversationManager
 from strands.models import BedrockModel, CacheConfig
+from strands.session import FileSessionManager
 
 # The three community packages. Imported at module scope, not lazily: a missing package is a broken
 # installation and should fail at import with the package's own name, rather than midway through a
@@ -61,6 +64,8 @@ from .config import (
     REGION,
     RERANK_MODEL_ID,
     RUN_CONFIGS,
+    SESSION_MANAGER,
+    SESSIONS_DIR,
     THRESHOLDS,
     RunConfig,
     estimate_tokens,
@@ -192,12 +197,14 @@ records it, so a result can never be read without knowing which scorer produced 
 """
 
 
-RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL") == "1"
-"""Whether the relevance filter registers its own ``retrieve_context`` tool, read once at import.
+RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"
+"""Whether the relevance filter stores the raw content and registers ``retrieve_all_context``.
 
-Off by default, matching the plugin's own default: the filter's contract ends at the tool result, so
-the arm measures preview quality alone. Set ``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=1`` to reproduce
-the published figures, which were all measured with the tool present.
+On by default, matching the plugin's own default. The tool is for the questions an excerpt cannot
+answer -- those needing every row -- and the plugin removes its exchanges from the history when the
+turn ends, so a retrieval is paid for once. It is deliberately NOT in the disclosure arm's
+``always_available``: it is loaded from the catalog only when such a question comes up. Set
+``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0`` to measure the excerpt alone.
 """
 
 
@@ -254,9 +261,11 @@ the miss" -- which is exactly what happened, and the vended stack never hit it b
 lived *inside* the ContextManager whose stash the graph bridged to.
 
 So with both installed there were two plausible tools for one job and only one could resolve the
-reference, and dropping the graph's left exactly one artifact path. That collision is gone:
-``RelevanceFilter`` now defaults to ``include_retrieval_tool=False``, mints no reference and writes
-no store, so ``expand_artifact`` is the only artifact path there is and dropping it leaves none.
+reference, and dropping the graph's left exactly one artifact path. The filter's tool has since been
+narrowed and renamed: ``retrieve_all_context`` loads a whole result for a question that needs every
+row, the filter's disclaimer names it, and it is kept out of the disclosure arm's ``always_available``,
+so ``expand_artifact`` and it no longer present as the same job. Whether the model still confuses
+them is measured by the ``all`` arm, not assumed here.
 The graph's two other tools -- ``expand_card`` and ``find_context`` -- were never part of this:
 they reach back into the conversation's own turns, a different job the relevance filter does not do.
 """
@@ -284,7 +293,7 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         # Namespaced by run tag as well as configuration: the tag is what keeps two runs that
         # execute at the same time -- a benchmark sweeping one model per process, say -- from
         # writing into each other's stored sub-blocks and serving the wrong content back through
-        # retrieve_context. Configuration alone was enough only while one run existed at a time.
+        # retrieve_all_context. Configuration alone was enough only while one run existed at a time.
         storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
@@ -297,14 +306,12 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         config.extra["_reranker"] = reranker
 
         relevance = RelevanceFilter(
-            # File-backed rather than in-memory: kept for the run's own inspection of what was cut.
-            # With the retrieval tool off the plugin writes nothing here, so the directory stays
-            # empty unless VALIDATION_RELEVANCE_RETRIEVAL_TOOL turns the tool back on.
+            # File-backed rather than in-memory, so the run can inspect what was cut. Written unless
+            # VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0 turns the retrieval tool off.
             store=FileStore(str(storage_root)),
-            # The filter's job ends at the tool result: llm -> tool -> filtered result -> llm. A
-            # retrieval tool would put every recovered chunk into the history as a message that is
-            # re-sent on every later call, which is what made this arm cost MORE than no plugin on
-            # Haiku 4.5 (+21.6%) while saving on Opus.
+            # The tool loads a whole result for an aggregate question. Its exchanges leave the history
+            # when the turn ends, which removes the cost that once made this arm dearer than no plugin
+            # on Haiku 4.5 (+21.6%): every retrieval re-sent on every later call.
             include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL,
             max_result_tokens=THRESHOLDS.max_result_tokens,
             config={
@@ -317,8 +324,8 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         config.extra["_relevance"] = relevance
         plugins.append(relevance)
 
-    # Built before the disclosure plugin, because the disclosure plugin needs the bridge as its
-    # supplemental referenced source.
+    # Built before the disclosure plugin, because the disclosure plugin exempts the graph's retrieval
+    # tools from discovery (``graph.retrieval_tool_names``).
     graph: ContextGraph | None = None
     if config.graph:
         matcher = _MeteredMatcher(EMBED_MODEL_ID, boto_session=session)
@@ -343,9 +350,9 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             tags_per_card=tuning.tags_per_card,
             neighbors_per_candidate=tuning.neighbors_per_candidate,
             # Always on. This used to be ``not config.relevance``, to leave exactly one artifact
-            # path when the filter shipped a competing ``retrieve_context`` over a store of its own.
-            # The filter no longer registers a retrieval tool at all, so there is no second path to
-            # disambiguate from and the condition only took the capability away.
+            # path when the filter's retrieval tool competed with this one over another store. The
+            # filter's tool is now retrieve_all_context, for whole results only, and it is named in
+            # the filter's own disclaimer, so the two no longer present as one job.
             # See _GRAPH_ARTIFACT_TOOL for the measurement that motivated the old drop.
             include_artifact_tool=True,
             matcher=matcher,
@@ -362,7 +369,9 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                 top_k=THRESHOLDS.top_k,
                 # A retrieval tool must never need discovery: the model is told to use it in the
                 # guidance text that replaces the payload, and a cycle spent loading it would be an
-                # artefact of the harness rather than of the strategy.
+                # artefact of the harness rather than of the strategy. The relevance filter's
+                # retrieve_all_context is the exception on purpose: it is for the rare question that
+                # needs a whole result, so it stays in the catalog and is loaded only then.
                 #
                 # Derived from the plugins rather than hard-coded, so excluding the graph's artifact
                 # tool or renaming one cannot leave a stale name here. `list_accounts` is the one
@@ -375,6 +384,33 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         )
 
     return plugins
+
+
+def _session_manager(config: RunConfig) -> FileSessionManager | None:
+    """Return a ``FileSessionManager`` for the baseline agent, or ``None``.
+
+    Only the baseline gets one: it stands for the agent as it ships, and an agent as it ships persists
+    its messages. The plugin arms measure what a strategy changes on top of that and run without it.
+    ``VALIDATION_SESSION=off`` removes it from the baseline too.
+
+    The session id is fresh for every agent -- configuration and a random suffix, under the run tag --
+    because an existing id is *restored*: the agent would start with that session's whole history, and
+    a repeat would inherit the previous replay's messages and be measured on a context it did not build.
+    With a fresh id the manager records, and the tokens sent are the ones the conversation produced.
+
+    Args:
+        config: The configuration being built.
+
+    Returns:
+        The manager, stored under ``SESSIONS_DIR/<run tag>/``, or ``None`` for a plugin arm.
+    """
+    is_baseline = not (config.relevance or config.graph or config.disclosure)
+    if SESSION_MANAGER == "off" or not is_baseline:
+        return None
+    tag = re.sub(r"[^A-Za-z0-9_.-]", "-", metrics.RUN_TAG or "untagged")
+    session_id = f"{config.name}-{uuid.uuid4().hex[:8]}"
+    config.extra["_session_id"] = session_id
+    return FileSessionManager(session_id=session_id, storage_dir=str(SESSIONS_DIR / tag))
 
 
 def build_agent(config: RunConfig, session: boto3.Session, collector: RunCollector) -> Agent:
@@ -390,6 +426,8 @@ def build_agent(config: RunConfig, session: boto3.Session, collector: RunCollect
     """
     from strands._middleware.stages import InvokeModelStage
 
+    session_manager = _session_manager(config)
+
     agent = Agent(
         model=_agent_model(session),
         tools=tools.all_tools(),
@@ -399,6 +437,7 @@ def build_agent(config: RunConfig, session: boto3.Session, collector: RunCollect
         conversation_manager=NullConversationManager(),
         plugins=build_plugins(config, session),
         callback_handler=None,
+        **({"session_manager": session_manager} if session_manager is not None else {}),
     )
 
     # Registered after construction, so it runs last in the stage and observes the projection the
@@ -534,6 +573,9 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
         }
 
     counters["live_messages_at_end"] = len(agent.messages)
+    if "_session_id" in config.extra:
+        # Where this arm's messages were persisted: SESSIONS_DIR/<run tag>/session_<id>/.
+        counters["session_id"] = config.extra["_session_id"]
     counters["registered_tools"] = len(agent.tool_names)
     if "_graph_tuning" in config.extra:
         # Which of the two measured tunings this arm ran under. Without it, two graph runs are

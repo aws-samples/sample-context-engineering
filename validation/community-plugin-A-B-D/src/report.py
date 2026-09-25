@@ -71,11 +71,10 @@ def build_report(results: dict[str, dict[str, Any]], *, baseline: str = "baselin
         ),
         f"- Tools registered: {results.get(baseline, {}).get('summary', {}).get('plugin_counters', {}).get('registered_tools', 'n/a')}",
         "",
-        "All configurations include the ContextOffloader. Without it the oversized tool",
-        "payloads overflow the window and the baseline fails rather than merely costing more,",
-        "which would make this a report about crashing instead of about tokens. The baseline is",
-        "therefore the offloader with its default positional prefix preview, and the `relevance`",
-        "configuration changes only the preview strategy.",
+        "The baseline installs no plugin at all: every tool payload enters the history whole and",
+        "stays there. That is the honest control -- it measures the cost of doing nothing -- and a",
+        "turn that exceeds the model's context window is recorded as an error rather than hidden.",
+        "Each other configuration adds one community plugin, or all three.",
         "",
         "## 1. Accuracy",
         "",
@@ -113,6 +112,7 @@ def build_report(results: dict[str, dict[str, Any]], *, baseline: str = "baselin
         )
 
     lines += _accuracy_detail(results, order)
+    lines += _memory_section(results, order)
 
     lines += [
         "## 2. Wall-clock and turn timing",
@@ -238,9 +238,9 @@ def build_report(results: dict[str, dict[str, Any]], *, baseline: str = "baselin
         "### Tool activity",
         "",
         "Retrieval count is the variable that explains most of the token totals: every",
-        "`retrieve_offloaded_content` call appends a large result to the history, and that",
-        "result then rides along on every subsequent call. A strategy that makes retrieval more",
-        "attractive pays for it twice.",
+        "retrieval call (`retrieve_context`, `expand_artifact`, `expand_card`, `find_context`) appends",
+        "a result to the history, and that result then rides along on every subsequent call. A",
+        "strategy that makes retrieval more attractive pays for it twice.",
         "",
         "| Configuration | Model calls | Tool uses | Retrievals |",
         "|---|---:|---:|---:|",
@@ -632,6 +632,35 @@ def _critical_of(turn: dict[str, Any]) -> list[str]:
     from single-replay reports.
     """
     return turn.get("critical_failures_seen") or turn.get("critical_failures") or []
+
+
+def _memory_section(results: dict[str, dict[str, Any]], order: list[str]) -> list[str]:
+    """Render whether each configuration's memory held, from the memory probes.
+
+    Empty when the run carried no probes (a short script, or a run recorded before they existed).
+    """
+    rows = []
+    for name in order:
+        memory = ((results[name]["summary"].get("accuracy") or {}).get("memory")) or {}
+        if memory.get("probes"):
+            rows.append(
+                f"| {RUN_CONFIGS[name].label} | {memory['probes']} | {memory['correct']:g} | {memory['recalled']:g} |"
+            )
+    if not rows:
+        return []
+    return [
+        "### Memory probes",
+        "",
+        "Questions whose answer is only in the conversation: two facts the user stated (no tool returns",
+        "them) and two ids a tool returned earlier. *Recalled* counts correct answers given without calling",
+        "a domain tool again -- re-fetching the id proves the tool works, not the memory. The graph's",
+        "retrieval tools count as memory.",
+        "",
+        "| Configuration | Probes | Correct | Recalled |",
+        "|---|---:|---:|---:|",
+        *rows,
+        "",
+    ]
 
 
 def _accuracy_detail(results: dict[str, dict[str, Any]], order: list[str]) -> list[str]:

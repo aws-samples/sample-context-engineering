@@ -10,7 +10,7 @@ answers so they can be compared against the expectations in ``accuracy.py``:
     .venv/bin/python -m src.ground_truth
 """
 
-from .tools import _POSITIONS, _synthetic_statement
+from .tools import _POSITIONS, _allocation_of, _synthetic_statement
 
 
 def brl(value: float) -> str:
@@ -62,7 +62,8 @@ print(f"  mean: {sum(points) / len(points):.2f} ms   min {min(points)}  max {max
 
 print()
 print("=== T2: allocation + projection ===")
-print("  fixed_income 42,1% / treasury 35,8% / fund 22,1%")
+allocation = _allocation_of("0001/12345-6")
+print("  " + " / ".join(f"{row['bucket']} {row['share']}" for row in allocation))
 print("  projected 12m base: R$ 51.204,77 at 7,06%")
 
 print()
