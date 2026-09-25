@@ -45,7 +45,7 @@ All line references are into one of three trees, named per reference:
 > exposes this filter's store as `retrieve(reference) -> text`, so another plugin's reference
 > resolution can answer a `[ref: mem_N_...]` this filter minted. It is the layer the Strands
 > `ContextManager` Stash provides there and LangGraph has no equivalent of; the harness passes it to
-> the context-graph binding (`runner.py:549`), which hands it to
+> the context-graph binding (`runner.py:550`), which hands it to
 > `context_core.graph.store.resolve_artifact` as the second resolution layer (`graph/store.py:284-286`).
 
 ---
@@ -125,7 +125,7 @@ middleware's store, whose single `retrieve(reference)` (`middleware.py:305`) dec
 `application/json` to a string and answers `None` for anything else (`middleware.py:307-309`). It is
 `None` when no store exists — the opt-out (`middleware.py:415`). Nothing in LangChain reads it: the
 consumer is another plugin's reference resolution, which the harness wires by passing it to the
-context-graph middleware (`runner.py:549`), where it becomes the `stash=` second layer of
+context-graph middleware (`runner.py:550`), where it becomes the `stash=` second layer of
 `context_core.graph.store.resolve_artifact` (`graph/store.py:284-286`, consulted only for what that
 plugin's own store does not hold, `graph/store.py:306-317`).
 
@@ -183,8 +183,9 @@ sequenceDiagram
         Store-->>MW: reference like mem_1_call-123_0  store.py:156
     end
 
-    MW->>Ad: to_neutral_list(state messages)  middleware.py:465 and _adapter.py:128
-    Ad-->>MW: neutral messages
+    MW->>Ad: to_neutral_list(state messages)  middleware.py:465 and _adapter.py:134
+    Ad->>Ad: to_neutral_list_with_sources folds a HumanMessage marked<br/>ATTACHED_TEXT_KEY back onto the tool-result message before it<br/>_adapter.py:139, :98 and :159-167
+    Ad-->>MW: neutral messages, one per source group  _adapter.py:171
     MW->>MW: latest_user_text(neutral) plus json args, tail-capped  message.py:80 and middleware.py:475-476
 
     MW->>Prev: await build_with_stats(full_text, query)  middleware.py:844 and preview.py:504
@@ -230,11 +231,44 @@ identical.
 | Step | Band | Why it sits there |
 |------|------|-------------------|
 | `awrap_tool_call`, `wrap_tool_call`, the six guards, `after_agent`/`aafter_agent`, `self.tools` | 1 | Pure LangChain/LangGraph attachment. `ToolMessage`, `AIMessage`, `RemoveMessage`, `REMOVE_ALL_MESSAGES`, `BaseTool`, `@tool` are the only framework types imported (`middleware.py:43-45`). |
-| `tool_message_to_result_block`, `to_neutral`, `to_neutral_list`, `_content_to_text_blocks` | 2 | The single place both worlds are touched (`_adapter.py:3-5`). Maps `ToolMessage` to a neutral `{"toolResult": ...}` block carried on a user-role message (`_adapter.py:19`, `_adapter.py:102-103`). For an `AIMessage` it also drops the provider's content-part copies of a tool call — `tool_use`, `tool_call`, `function_call` (`_CALL_PART_TYPES`, `_adapter.py:88`; `_is_call_part`, `_adapter.py:92`; applied at `_adapter.py:113`) — because `tool_calls` is the canonical form and becomes the `toolUse` block (`_adapter.py:114-123`); a kept copy would survive as an opaque `json` block when a core drops the `toolUse` (`_adapter.py:108-112`). |
+| `tool_message_to_result_block`, `to_neutral`, `to_neutral_list`, `to_neutral_list_with_sources`, `_content_to_text_blocks` | 2 | The single place both worlds are touched (`_adapter.py:3-5`). Maps `ToolMessage` to a neutral `{"toolResult": ...}` block carried on a user-role message (`_adapter.py:19`, `_adapter.py:108-109`). For an `AIMessage` it also drops the provider's content-part copies of a tool call — `tool_use`, `tool_call`, `function_call` (`_CALL_PART_TYPES`, `_adapter.py:88`; `_is_call_part`, `_adapter.py:92`; applied at `_adapter.py:119`) — because `tool_calls` is the canonical form and becomes the `toolUse` block (`_adapter.py:120-129`); a kept copy would survive as an opaque `json` block when a core drops the `toolUse` (`_adapter.py:114-118`). Reading a *list* back is not one-to-one: `to_neutral_list` delegates to `to_neutral_list_with_sources` (`_adapter.py:134-136`), which folds an `ATTACHED_TEXT_KEY`-marked `HumanMessage` onto the tool-result message before it (`_adapter.py:98`, condition at `_adapter.py:159-165`). |
 | Marker, disclaimer, reference token, history surgery | 1 | Model-facing *text* and state surgery are binding concerns, named as such at `middleware.py:16-18`. |
 | `_chunk_text`, `score`, `_validate_scores`, `_select_chunks`, `_assemble_preview`, `PreviewStats` | 3 | Every decision about *content*. Framework-agnostic by construction — plain strings and dataclasses (`preview.py:8-9`). |
 | `Store` / `InMemoryStore` / `FileStore` / `S3Store`, `_search_content`, `_is_searchable_content` | 3 | Offload backends and retrieval search helpers (`relevance/__init__.py:4-5`). |
 | `latest_user_text` | 3 | Operates on the neutral shape, so the binding converts first (`message.py:80`, called at `middleware.py:465`). |
+
+### 3b. Reading a list back is not one-to-one — `ATTACHED_TEXT_KEY`
+
+One neutral message can stand for more than one LangChain message, and the adapter says which:
+`to_neutral_list` is a thin wrapper over `to_neutral_list_with_sources` (`_adapter.py:134-136`), which
+returns the neutral list **and**, for each entry, the LangChain messages it stands for
+(`_adapter.py:139-141`, returned at `_adapter.py:171`).
+
+The one case where the mapping collapses is text attached to a tool result. A neutral `user` message
+may carry a `toolResult` block *and* text; rendered to LangChain that is `ToolMessage` objects followed
+by a `HumanMessage`, and the writer marks that `HumanMessage` with
+`ATTACHED_TEXT_KEY = "context_core_attached_to_tool_result"` in `additional_kwargs` (`_adapter.py:98`).
+`to_neutral_list_with_sources` folds a marked message back: when the previous neutral message is
+`user`-role and carries a `toolResult` block, the marked message's text blocks are appended to it and
+its source group gains the `HumanMessage` (`_adapter.py:159-167`). An unmarked `HumanMessage` is left
+as a turn of its own (the two conditions at `_adapter.py:160-161`), so a real question is never
+absorbed into the tool result before it.
+
+**This binding only reads the mark, never writes one.** The constant is declared identically in all
+three `_adapter.py` files precisely so a message one middleware split is rejoined by the next
+(`_adapter.py:99-101`); the `to_langchain` the docstring names lives in the sibling adapters, not here —
+this module has no message writer at all. The marked message is produced by the context-graph binding,
+whose collapsed-turns digest attaches to the latest user-role message, which mid-turn is a tool result.
+
+**What the fold changes for this filter: nothing, by construction.** `latest_user_text` scans backwards
+for the newest `user` message with at least one text block (`message.py:83-85`); folded, the tool-result
+message itself gains that text block, so `_build_query` (`middleware.py:444`) derives the same query
+string either way. The mark cannot reach this filter's own read in the first place under the harness
+stack: the graph projects per call with `request.override(messages=...)` and never writes
+`state["messages"]`, while `wrap_tool_call` reads `request.state` (`middleware.py:842`, `_state_messages`
+at `middleware.py:909`). The fold exists for the middleware *inside* the graph — without it the
+disclosure fold read the digest as a fresh user turn, treated the turn's own `get_tool_details`
+exchange as closed and folded it away, so the model never saw its load and loaded again every cycle.
 
 Two core privates are imported directly because re-deriving them in the binding would be a second
 implementation of core logic: `_assemble_preview`/`_chunk_text` (`middleware.py:62`, rationale at
@@ -424,6 +458,20 @@ persisted state, and it only ever removes its own closed retrieval exchanges
 returns `None` in that case (`middleware.py:899-900`), so a turn with no retrieval produces no state
 update at all — the `REMOVE_ALL_MESSAGES` sentinel is never emitted on a clean turn.
 
+**The cleanup shortens the history another middleware counts cycles in.** Progressive tool disclosure
+derives its cycle number by counting `AIMessage` objects in the persisted history, so dropping a closed
+`retrieve_all_context` exchange lowers that count for every later turn of the same conversation. A tool
+whose load was recorded against the longer history then reads as loaded on a cycle *after* the one being
+decided, fails the "loaded on an earlier cycle" test and stays uncallable until the count catches up —
+and the model reloads it cycle after cycle. The disclosure binding absorbs that in `_last_used`, which
+maps such a load to the cycle just before the one being decided — `used if used <= before else before - 1`
+(`langgraph-plugins/langgraph-progressive-tool-disclosure/src/langgraph_progressive_tool_disclosure/middleware.py:312`,
+rationale at
+`langgraph-plugins/langgraph-progressive-tool-disclosure/src/langgraph_progressive_tool_disclosure/middleware.py:307-311`).
+A load *on* the decided cycle is left alone, so the same-batch guard still refuses a tool the model only
+guessed at. Nothing changes on this side of the boundary: the cleanup remains the only persisted state
+this middleware writes and removes only its own closed exchanges (`middleware.py:885-886`).
+
 ---
 
 ## 5. Expected model behaviour and where the assumption can fail
@@ -492,9 +540,9 @@ rather than inventing a reference.
 - **Either invocation style works.** `awrap_tool_call` (`middleware.py:682`) and `wrap_tool_call`
   (`middleware.py:701`) share one body, so `.invoke()` filters as `.ainvoke()` does; the sync path
   pays for a private event loop per filtered result (`middleware.py:108`, `:717`). The harness still
-  drives `ainvoke` (`runner.py:845`), because the reranker protocol is genuinely `async`
+  drives `ainvoke` (`runner.py:846`), because the reranker protocol is genuinely `async`
   (`reranker.py:104`) and an `await` at the top of the run is cheaper than a loop per tool call
-  (`runner.py:276-282`).
+  (`runner.py:277-283`).
 - **The `messages` reducer honours `REMOVE_ALL_MESSAGES`.** The cleanup's correctness rests on it
   (`middleware.py:883-886`).
 - **The adapter's neutral shape matches what the core expects.** `_adapter.py:7-19` documents the
@@ -502,7 +550,14 @@ rather than inventing a reference.
   `latest_user_text` (`message.py:80`) and `_split_content_blocks` (`middleware.py:925`, whose
   neutral indexing is at `middleware.py:942`). The query path reads the history through the same
   adapter (`middleware.py:465`), which drops a provider's content-part copy of a tool call
-  (`_adapter.py:113`) — it carries no scorable question text, so the query is unaffected either way.
+  (`_adapter.py:119`) — it carries no scorable question text, so the query is unaffected either way.
+- **The list read is one neutral message per *source group*, not per LangChain message.**
+  `to_neutral_list` delegates to `to_neutral_list_with_sources` (`_adapter.py:134-136`), so a
+  `HumanMessage` marked `ATTACHED_TEXT_KEY` folds onto the tool-result message before it
+  (`_adapter.py:159-167`). The assumption is that only a writer that split such a message sets the mark;
+  a caller that set it on an ordinary question would have that question absorbed into the preceding tool
+  result. This binding never sets it — it has no message writer — and the folded text still satisfies
+  `latest_user_text` (`message.py:83-85`), so §7's query is the same folded or not. §3b has the detail.
 
 ---
 
@@ -810,9 +865,12 @@ out (`middleware.py:476`, rationale at `middleware.py:452-455`); arguments that 
 are kept as a head (`middleware.py:472-473`); unserializable arguments leave the question tail alone,
 falling back to the literal `"{}"` so the reranker never receives an empty query
 (`middleware.py:469-470`). The history is converted through the adapter first
-(`to_neutral_list`, `middleware.py:465`, `_adapter.py:128`) and read by the core's
+(`to_neutral_list`, `middleware.py:465`, `_adapter.py:134`, which delegates to
+`to_neutral_list_with_sources`, `_adapter.py:139`) and read by the core's
 `latest_user_text` (`message.py:80`), which counts only `user` messages carrying at least one text
-block (`message.py:83-85`).
+block (`message.py:83-85`). The fold that delegation performs leaves the query unchanged: an
+`ATTACHED_TEXT_KEY`-marked message's text lands on the tool-result message before it
+(`_adapter.py:159-166`), and that message then carries the text block `latest_user_text` looks for.
 
 ### `BedrockReranker.__init__` — `def __init__` (`reranker.py:160`)
 
@@ -865,16 +923,17 @@ References in this section are into `validation/plugins-langgraph/src/`.
 
 | What | Value | Source |
 |------|-------|--------|
-| Retrieval-tool switch | `RELEVANCE_RETRIEVAL_TOOL` = `os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"`, read once at import — **on unless explicitly disabled** | `runner.py:211` |
-| Passed to the middleware | `include_retrieval_tool = RELEVANCE_RETRIEVAL_TOOL` — **on in every arm**, the combined one included | `runner.py:504`, passed at `runner.py:510` |
-| Middleware construction | `RelevanceFilterMiddleware(...)` | `runner.py:507` |
-| Store | `FileStore` under `.artifacts/<run tag>/<config>`, namespaced by tag so two concurrent runs cannot serve each other's sub-blocks | `runner.py:509`, `storage_root` at `runner.py:491`, `ARTIFACTS_DIR` at `config.py:575` |
-| Thresholds | `max_result_tokens=4_000`, `chunk_tokens=500`, `relevance_threshold=0.02`, `preview_tokens` from the window regime | `runner.py:511-516`; values at `config.py:425`, `config.py:427`, `config.py:428`, `config.py:426` |
-| Reference resolution shared with the graph | `stash=relevance.stash` on `ContextGraphMiddleware`, so a `[ref: mem_N_...]` this filter minted resolves through `expand_artifact` as well | `runner.py:549`, recorded at `runner.py:554` |
-| Middleware order | outermost first, `[graph, disclosure, relevance]`, a `None` simply absent | `runner.py:574` |
-| Disclosure passthrough | `retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's own tool names plus the literal `list_accounts` | `runner.py:566-569`, rationale at `runner.py:561-565` |
-| Invocation style | `await agent.ainvoke(...)`, one per turn against one `thread_id` | `runner.py:845`, reasoning at `runner.py:276-282` |
-| Where the end-of-run write lands | the run's `InMemorySaver` (`_checkpointer`), which is what makes the turns one conversation and therefore what receives this middleware's `RemoveMessage(REMOVE_ALL_MESSAGES)` update | `runner.py:255`, stated at `runner.py:258-260`; its serde allowlist is built from the graph state classes rather than a module name (`runner.py:270`, `_graph_state_types` at `runner.py:236`) |
+| Retrieval-tool switch | `RELEVANCE_RETRIEVAL_TOOL` = `os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"`, read once at import — **on unless explicitly disabled** | `runner.py:212` |
+| Passed to the middleware | `include_retrieval_tool = RELEVANCE_RETRIEVAL_TOOL` — **on in every arm**, the combined one included | `runner.py:505`, passed at `runner.py:511` |
+| Middleware construction | `RelevanceFilterMiddleware(...)` | `runner.py:508` |
+| Store | `FileStore` under `.artifacts/<run tag>/<config>`, namespaced by tag so two concurrent runs cannot serve each other's sub-blocks | `runner.py:510`, `storage_root` at `runner.py:492`, `ARTIFACTS_DIR` at `config.py:575` |
+| Thresholds | `max_result_tokens=4_000`, `chunk_tokens=500`, `relevance_threshold=0.02`, `preview_tokens` from the window regime | `runner.py:512-517`; values at `config.py:425`, `config.py:427`, `config.py:428`, `config.py:426` |
+| Reference resolution shared with the graph | `stash=relevance.stash` on `ContextGraphMiddleware`, so a `[ref: mem_N_...]` this filter minted resolves through `expand_artifact` as well | `runner.py:550`, recorded at `runner.py:555` |
+| Middleware order | outermost first, `[graph, disclosure, relevance]`, a `None` simply absent | `runner.py:575` |
+| Disclosure passthrough | `retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's own tool names plus the literal `list_accounts` | `runner.py:567-570`, rationale at `runner.py:562-566` |
+| Invocation style | `await agent.ainvoke(...)`, one per turn against one `thread_id` | `runner.py:846`, reasoning at `runner.py:277-283` |
+| Where the end-of-run write lands | the run's `InMemorySaver` (`_checkpointer`), which is what makes the turns one conversation and therefore what receives this middleware's `RemoveMessage(REMOVE_ALL_MESSAGES)` update | `runner.py:256`, stated at `runner.py:259-261`; its serde allowlist is built from the graph state classes rather than a module name (`runner.py:271`, `_graph_state_types` at `runner.py:237`) |
+| Loop tripwire in the log | any turn over 20 tool calls is logged as a `long turn` with the five most-called tool names, so a repeated `retrieve_all_context` names itself in the log rather than only in the run JSON | `runner.py:885-890` |
 | Arm description | "RelevanceFilter alone: an oversized tool result is stored and replaced by a reranker-scored, verbatim preview plus a reference the model can load in full through retrieve_all_context when a question needs every row" | `config.py:630-632`, arm at `config.py:625-628` |
 
 Three consequences for reading results:
@@ -887,17 +946,25 @@ Three consequences for reading results:
 2. **The `all` arm keeps the retrieval tool, matching the Strands harness.** With disclosure
    installed the tool sits in the catalog and is loaded only for the rare question that needs a whole
    result, which is how the Strands harness leaves it too, and the environment switch is the only way
-   to turn it off (`runner.py:501-504`). The choice is recorded on the run either way
-   (`runner.py:505`). The graph arm additionally receives this filter's store as its second
-   resolution layer (`runner.py:546-549`), so the two strategies no longer mint references the other
+   to turn it off (`runner.py:502-505`). The choice is recorded on the run either way
+   (`runner.py:506`). The graph arm additionally receives this filter's store as its second
+   resolution layer (`runner.py:547-550`), so the two strategies no longer mint references the other
    cannot resolve.
 3. **The harness drives `ainvoke` for the pipeline's sake, not for a missing hook.** This middleware
    implements both `wrap_tool_call` and `awrap_tool_call` (`middleware.py:701`, `middleware.py:682`)
    and the context-graph binding ships a native `awrap_model_call`, so the harness installs the real
-   `ContextGraphMiddleware` with no async wrapper around it (`runner.py:276-282`). `ainvoke`
+   `ContextGraphMiddleware` with no async wrapper around it (`runner.py:277-283`). `ainvoke`
    remains the invocation style because the reranker protocol is genuinely `async def`
    (`reranker.py:104`), which the sync hook would otherwise pay for with a private event loop per
    filtered result (`middleware.py:717`).
+
+**Measured once in this configuration.** The `relevance` arm of run tag `lg03`
+(`validation/plugins-langgraph/results/run-lg03.json`, rendered to `run-lg03.md`) answered 60/60 turns
+with 0 errors on `us.anthropic.claude-opus-4-8`, at -19.9% total tokens against the heaviest arm
+(the no-plugin baseline) and 30/30 scored turns correct, having fired 7 rerank search units against
+`cohere.rerank-v3-5:0` — the model whose score distribution note 1 above is calibrated to. It is a
+single replica, so read it as one observation of the wiring working end to end rather than as a
+separation between strategies.
 
 ---
 
@@ -907,7 +974,7 @@ Three consequences for reading results:
 |---|-----------|---------|-----------|--------|-------------|
 | 1 | **Token count recomputed rather than asked of the model** | wraps the result as a message and calls the agent model's `count_tokens`, which a provider may answer natively | `_approximate_tokens` reproduces that method's default heuristic over the neutral blocks: `ceil(chars / 4)` per text block, `ceil(len(json.dumps(payload)) / 2)` per JSON block, binaries not counted | declared `middleware.py:20-25`, implemented `middleware.py:125-151`, applied `middleware.py:744` | The gate flips at the same size as a Strands gate on a model that uses the default heuristic. `wrap_tool_call` exposes no tokenizer — `request` carries the tool, the state and the runtime, not the model — so a Strands model configured with `use_native_token_count` would count exactly where this binding still estimates (`middleware.py:23-25`). A caller needing an exact gate lowers `max_result_tokens`. |
 | 2 | **Delegation guard reads `tool.return_direct`** | guards on the private `_AgentAsTool` class, degrading to `None` if the SDK moves it | `getattr(request.tool, "return_direct", False)` | declared `middleware.py:26-28`, guard `middleware.py:737` | LangGraph has no `_AgentAsTool`. `return_direct` carries the same meaning — this result becomes the final answer, so no later model call could retrieve what the filter cut (`middleware.py:735-736`). A tool object missing the attribute degrades to *not delegating*, so its result is filtered. |
-| 3 | **`after_agent` returns `RemoveMessage(REMOVE_ALL_MESSAGES)` + the reduced list** | mutates `agent.messages` in place with `messages[:] = kept` | returns a state update the reducer applies | rationale `middleware.py:883-886`, emitted `middleware.py:902`, import `middleware.py:45` | The `messages` reducer *merges* a returned list rather than replacing it, so a plain list could never drop a message: the sentinel clears first and the reduced list is appended. This is the only place the middleware writes persisted state, and only its own closed retrieval exchanges. On a turn with no retrieval nothing is emitted at all (`middleware.py:899-900`). |
+| 3 | **`after_agent` returns `RemoveMessage(REMOVE_ALL_MESSAGES)` + the reduced list** | mutates `agent.messages` in place with `messages[:] = kept` | returns a state update the reducer applies | rationale `middleware.py:883-886`, emitted `middleware.py:902`, import `middleware.py:45` | The `messages` reducer *merges* a returned list rather than replacing it, so a plain list could never drop a message: the sentinel clears first and the reduced list is appended. This is the only place the middleware writes persisted state, and only its own closed retrieval exchanges. On a turn with no retrieval nothing is emitted at all (`middleware.py:899-900`). Because the reduced list is shorter, a co-installed progressive-tool-disclosure middleware afterwards counts fewer `AIMessage` cycles in the same conversation, which its `_last_used` absorbs — §4c. |
 | 4 | **The sync hook drives the async pipeline itself** | one `@hook` handler, which the SDK drives under either a sync or an async agent call | `awrap_tool_call` awaits the pipeline directly (`middleware.py:698-699`); `wrap_tool_call` runs the same `_process_result` coroutine through `_run_to_completion` | declared `middleware.py:702-707`, hooks `middleware.py:682` and `middleware.py:701`, helper `middleware.py:108` | The core's preview and every `Store` are async — `Reranker.score` is `async def` (`reranker.py:104`) because the boto3 call runs on a worker thread (`reranker.py:244`) — and LangChain does not bridge a sync run to an async hook, so the bridge lives here: `asyncio.run` on the calling thread when it has no running loop (`middleware.py:117-120`), on a one-worker thread pool when it does (`middleware.py:121-122`). `invoke` and `ainvoke` therefore filter identically, the sync path paying for one private event loop per filtered result. The cleanup needs no such bridge and is plain delegation (`middleware.py:904-906`). |
 
 Three further, smaller divergences worth recording because they change observable behaviour:
@@ -925,6 +992,6 @@ Three further, smaller divergences worth recording because they change observabl
 - **The Stash equivalent is passed by hand.** In Strands the second layer of a reference resolution is
   discovered on the agent — a `ContextManager` Stash the SDK exposes. LangGraph has nothing to
   discover, so this middleware publishes its store as `stash` (`middleware.py:407-415`) and whoever
-  composes the stack hands it over (`runner.py:549`); `resolve_artifact` falls back to host discovery
+  composes the stack hands it over (`runner.py:550`); `resolve_artifact` falls back to host discovery
   only when no `stash` is given, which is what leaves the Strands path unchanged
   (`graph/store.py:310-311`).

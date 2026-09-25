@@ -114,11 +114,38 @@ same scenario, mocked tools, deterministic ground-truth and accuracy (no LLM jud
 and the same five arms (baseline / A / B / D / all-three). It targets `us.anthropic.claude-opus-4-8` — the
 model the Strands published table was measured on — so the two tables can be read side by side.
 
-The harness is verified offline (all five arms build and run through a mocked model; the relevance filter
-engages, disclosure trims 87 → 3 tool specs) and a `--live` run is gated behind an explicit acknowledgement
-flag. **The live benchmark figures are not yet recorded** — the paid Bedrock run is pending. Once run, its
-table (same columns as the Strands `README`/`BENCHMARK.md`, one replay, labeled as such) will be added
-here; Strands and LangGraph figures are only presented together with matched conditions stated.
+The harness is verified offline (all five arms build and run through a mocked model) and a `--live` run
+is gated behind an explicit acknowledgement flag.
+
+### Result: Opus 4.8, caching off, 60 turns, one replay
+
+Run `lg03`, commit `d71310e`, `us.anthropic.claude-opus-4-8` in `us-east-1`, $5.00/$25.00 per Mtok (the
+run JSON is written to `validation/plugins-langgraph/results/`, which is not versioned, as in the Strands harness).
+Every arm answered 60/60 turns with 0 errors and 0 empty answers.
+
+| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) | 15,216,594 | — | 99.2% | 29/30 | 218,153 | 9.4s | $76.57 |
+| Progressive Tool Disclosure only | 9,213,572 | −39.5% | 97.6% | 29/30 | 136,279 | 9.3s | $46.70 |
+| Relevance Filtering only | 12,195,342 | −19.9% | 99.2% | 30/30 | 178,473 | 9.7s | $61.59 |
+| Context Graph only | 10,317,603 | −32.2% | 96.1% | 28/30 | 133,233 | 10.2s | $52.18 |
+| **All three combined** | **2,511,113** | **−83.5%** | 97.6% | 29/30 | **39,871** | **9.2s** | **$13.18** |
+
+Read Δ tokens and Correct: the combined stack spends 83.5% less at the same accuracy, and its largest
+single call is under a fifth of the baseline's.
+
+Against the Strands plugins on the same model and conditions ([`BENCHMARK.md`](../BENCHMARK.md) §4.1,
+caching off), the combined stack lands in the same place: −83.5% here, −83.9% there, 29/30 against
+30/30. Disclosure alone saves less here (−39.5% against −62.4%) at a higher score (29/30 against 26/30),
+and the baseline itself spent 15.2M tokens against 17.9M. With one replay per arm, a difference of one
+or two turns, or of some tens of percent in a single arm's tokens, is within run-to-run variance.
+
+Reaching a clean run took four fixes the live runs exposed and no offline test had: a provider
+`tool_use` part surviving a fold as an orphan call; the harness checkpointer blocking the graph's state
+on restore; disclosure counting cycles on the graph's projection instead of the persisted history; and
+the graph's collapsed-turns digest, attached to a mid-turn tool result, reading as a new user turn to
+the disclosure fold, which folded away the turn's own `get_tool_details` exchange and made the model
+reload forever. Each has a regression test.
 
 ## Provenance and scope
 
