@@ -1,8 +1,8 @@
 """awrap_model_call: the async twin must project and wrap state exactly like the sync hook.
 
 Regression test for the sync/async gap the benchmark harness surfaced: LangChain raises
-``NotImplementedError`` when a sync ``wrap_model_call`` runs under ``ainvoke``, so a stack that also
-carries an async-only middleware (the relevance filter) needs the graph to offer ``awrap_model_call``.
+``NotImplementedError`` when a sync ``wrap_model_call`` runs under ``ainvoke``, so a stack driven with
+``ainvoke`` (as the harness drives it) needs the graph to offer ``awrap_model_call``.
 """
 
 from __future__ import annotations

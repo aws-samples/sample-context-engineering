@@ -322,9 +322,9 @@ class RelevanceFilterMiddleware(AgentMiddleware):
     reranker is built on the first scoring call, so a middleware that never fires costs nothing and
     needs no AWS credentials or region merely to be declared.
 
-    Asynchrony: the core's preview and every ``Store`` are async, so the tool-call hook is implemented
-    as ``awrap_tool_call`` and the agent must be driven with ``ainvoke``/``astream``. The end-of-run
-    cleanup is pure list surgery and is available on both ``after_agent`` and ``aafter_agent``.
+    Asynchrony: the core's preview and every ``Store`` are async. The tool-call hook ships both twins --
+    ``awrap_tool_call``, and ``wrap_tool_call``, which drives the same pipeline to completion -- so the agent
+    runs under ``invoke`` or ``ainvoke``. The end-of-run cleanup is on ``after_agent`` and ``aafter_agent``.
 
     Args:
         store: Optional backend for the raw sub-blocks, used only by the retrieval tool. Filtering

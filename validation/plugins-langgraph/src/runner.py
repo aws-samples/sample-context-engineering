@@ -211,10 +211,10 @@ class _MeteredMatcher(EmbeddingSimilarityMatcher):
 RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"
 """Whether the relevance filter stores raw content and registers ``retrieve_all_context``.
 
-On by default, matching the middleware's own default, EXCEPT in the ``all`` arm -- see
-:func:`build_middleware`, where the combined stack turns it off deliberately. Set
-``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0`` to measure the excerpt alone in the single-strategy arm
-too.
+On by default, matching the middleware's own default, in EVERY arm -- the combined one included, as
+in the Strands harness (see :func:`build_middleware`, where the graph also gets the filter's stash).
+Set ``VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0`` to measure the excerpt alone, in every arm that
+carries the filter.
 """
 
 

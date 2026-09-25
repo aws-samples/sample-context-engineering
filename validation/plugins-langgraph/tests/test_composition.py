@@ -6,12 +6,12 @@ reranker, or embedder:
 - B (disclosure) and D (context graph) both hook ``wrap_model_call`` but touch **disjoint** fields of the
   same ``ModelRequest`` (D: messages; B: tools + system prompt + a further message fold), so nesting them
   is safe.
-- A (relevance) is on the tool surface (``awrap_tool_call`` + ``after_agent``), a different surface from
+- A (relevance) is on the tool surface (``wrap_tool_call`` + ``after_agent``), a different surface from
   the model-call layer.
-- The A+D retrieval collision is resolved by constructing A with ``include_retrieval_tool=False`` in the
-  combined arm, so only D's retrieval tools (``find_context`` / ``expand_card``) are visible to the model
-  — never two retrieval tools over two stores.
-- The whole stack runs under ``ainvoke`` (A is async-only), which is why D needs ``awrap_model_call``.
+- As in the Strands harness, the combined arm keeps A's ``retrieve_all_context`` and D's three tools, and
+  D gets ``stash=relevance.stash`` so a reference A mints resolves through ``expand_artifact`` too --
+  both retrieval tools read the same content.
+- Every hook has sync and async twins, so the stack runs under ``invoke`` and ``ainvoke``.
 """
 
 from __future__ import annotations

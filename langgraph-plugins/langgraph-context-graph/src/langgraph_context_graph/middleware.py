@@ -472,8 +472,8 @@ class ContextGraphMiddleware(AgentMiddleware):
         """Async twin of :meth:`wrap_model_call`, for an agent run under ``ainvoke``/``astream``.
 
         LangChain does not bridge a sync ``wrap_model_call`` to an async run — it raises
-        ``NotImplementedError`` — so a stack that also carries an async-only middleware (the relevance
-        filter's ``awrap_tool_call``) forces the whole run async and needs this twin to exist. The
+        ``NotImplementedError`` — so a stack run under ``ainvoke`` (the harness does, since the relevance
+        reranker protocol is async) needs this twin to exist, and every hook here has both. The
         projection (:func:`context_core.graph.project`) is pure and synchronous, so the only difference
         from the sync hook is that the model handler is awaited; the state writes and the response wrapping
         are the same synchronous helpers.
