@@ -2,8 +2,10 @@
 
 Attaches to the SDK's public extension surface only. The hook guards a tool result through the
 cancelled-call, own-tool, delegation, size, ``should_filter``, and emptiness checks, then stores the raw
-sub-blocks and rewrites ``event.result`` into the marker plus a verbatim, budget-bounded preview plus
-reference tokens. The ``retrieve_context`` ``@tool`` reads those references back by span or pattern.
+sub-blocks and rewrites ``event.result`` into the marker, a disclaimer carrying the processing metadata,
+a verbatim, budget-bounded preview, and reference tokens. The ``retrieve_all_context`` ``@tool`` reads those
+references back by span, pattern, chunk count or token budget, and its exchanges are removed from the
+history when the invocation ends.
 """
 
 from __future__ import annotations
@@ -17,11 +19,11 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 # Imported at runtime, not under TYPE_CHECKING: @hook resolves the handler's type hints at decoration
 # time to infer which event it subscribes to.
 from strands import tool
-from strands.hooks.events import AfterToolCallEvent
+from strands.hooks.events import AfterInvocationEvent, AfterToolCallEvent
 from strands.plugins import Plugin, hook
 from strands.types.tools import ToolContext, ToolResult, ToolResultContent
 
-from .preview import RelevancePreview
+from .preview import PreviewStats, RelevancePreview, _assemble_preview, _chunk_text
 from .reranker import BedrockReranker, Reranker, RerankerError
 from .search import _is_searchable_content, _search_content
 from .store import InMemoryStore, Store
@@ -90,6 +92,99 @@ def _latest_question(messages: Sequence[Message]) -> str:
     return ""
 
 
+def _disclaimer(token_count: int, stats: PreviewStats, references: Sequence[str], retrieval_tool: str) -> str:
+    """Tell the model that it sees an excerpt, how much of the result it covers, and what to do about it.
+
+    A relevance excerpt answers "where does the result mention X" and cannot answer anything that needs
+    every row: a maximum, a total, a count. Without being told, a model computes the aggregate over the
+    excerpt and is confidently wrong, or distrusts the sample and refuses. So the processing metadata
+    travels with the excerpt, and with the retrieval tool registered the text names the call and the
+    budgets that reach the rest -- a pattern for the rows to aggregate, or chunks and tokens enough for
+    all of it.
+
+    Args:
+        token_count: Estimated tokens of the original result.
+        stats: What the selection did.
+        references: References issued for the stored content; empty when the retrieval tool is off.
+        retrieval_tool: Registered name of the retrieval tool.
+
+    Returns:
+        The disclaimer, a few lines of plain text.
+    """
+    spans = ", ".join(f"{start}-{end}" if start != end else f"{start}" for start, end in stats.shown_spans)
+    head = (
+        f"[Filtered: this is an EXCERPT, not the whole result | original: {stats.total_lines:,} lines, "
+        f"{stats.total_chunks} chunks | shown: {len(stats.shown)} chunk(s), lines {spans or 'none'}]\n"
+        "An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any "
+        "comparison across the whole result -- cannot be computed from this excerpt."
+    )
+    if not references:
+        return f"{head} Say that the result was filtered instead of computing it from the excerpt."
+
+    named = f'reference "{references[0]}"' if len(references) == 1 else f"references {', '.join(references)}"
+    return (
+        f"{head} For such an answer, call `{retrieval_tool}` with {named} and either a `pattern` (regex) "
+        f"that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole "
+        f"result ({stats.total_chunks} chunks, ~{token_count:,} tokens). What you retrieve is removed from "
+        "the conversation once you have answered, so state the figures you relied on in the answer."
+    )
+
+def _drop_tool_exchanges(messages: list[Message], tool_name: str) -> list[Message]:
+    """Return ``messages`` without the closed exchanges of ``tool_name``.
+
+    An exchange is a ``toolUse`` block in an assistant message and its ``toolResult`` in the message
+    right after. An assistant message whose tool calls are all ``tool_name`` goes whole, together with
+    the user message carrying their results, so roles keep alternating; its interim text goes with it.
+    In a message that mixes them with other tool calls only the ``tool_name`` blocks go. An unclosed
+    call -- a turn that ended on an error -- is left as it is.
+
+    Args:
+        messages: The conversation, oldest first. Read only.
+        tool_name: The tool whose exchanges are removed.
+
+    Returns:
+        ``messages`` itself when nothing is removed; otherwise a new list.
+    """
+    dropped_ids: set[str] = set()
+    dropped_messages: set[int] = set()
+    for position in range(len(messages) - 1):
+        message = messages[position]
+        if message.get("role") != "assistant":
+            continue
+        uses = [block["toolUse"] for block in message.get("content") or () if "toolUse" in block]
+        ids = {use.get("toolUseId") for use in uses if use.get("name") == tool_name}
+        if not ids:
+            continue
+        answer_content = messages[position + 1].get("content") or ()
+        answered = {block["toolResult"].get("toolUseId") for block in answer_content if "toolResult" in block}
+        if not ids <= answered:
+            continue
+        dropped_ids |= ids
+        if len(ids) == len(uses) and answered == ids:
+            dropped_messages |= {position, position + 1}
+
+    if not dropped_ids:
+        return messages
+
+    kept: list[Message] = []
+    for position, message in enumerate(messages):
+        if position in dropped_messages:
+            continue
+        content = message.get("content") or []
+        filtered = [
+            block
+            for block in content
+            if block.get("toolUse", {}).get("toolUseId") not in dropped_ids
+            and block.get("toolResult", {}).get("toolUseId") not in dropped_ids
+        ]
+        if len(filtered) != len(content) and message.get("role") == "assistant":
+            # A provider verifies reasoning against the message it was signed with; a rewritten
+            # assistant message of a closed turn drops it, which earlier turns are allowed to do.
+            filtered = [block for block in filtered if "reasoningContent" not in block]
+        kept.append(message if len(filtered) == len(content) else {**message, "content": filtered})
+    return kept
+
+
 class RelevanceConfig(TypedDict, total=False):
     """Tuning for the relevance preview.
 
@@ -142,7 +237,7 @@ class RelevanceFilter(Plugin):
 
     When a tool result exceeds ``max_result_tokens``, its raw sub-blocks are written to ``store`` and
     the in-context result is replaced with a marker, a verbatim relevance preview scored against the
-    query in progress, and reference tokens the model can pass to ``retrieve_context``. Selection is
+    query in progress, and reference tokens the model can pass to ``retrieve_all_context``. Selection is
     verbatim — chosen chunks reach the model character-for-character — so numeric, monetary, and
     tabular content stays exact.
 
@@ -158,11 +253,14 @@ class RelevanceFilter(Plugin):
             Defaults to ``8_000``.
         config: Preview tuning (reranker, threshold, chunk and preview budgets). Every key is
             optional; see :class:`RelevanceConfig` for the defaults.
-        include_retrieval_tool: Whether to register the ``retrieve_context`` tool so the model can
-            read the raw content back. Defaults to False: the filter's job ends at the tool result,
-            and a retrieval cycle's own result becomes a conversation message that rides along on
-            every later call, so reading a cut chunk back is paid for repeatedly. Off, no raw
-            sub-block is stored and no reference token is emitted -- nothing could resolve one.
+        include_retrieval_tool: Whether to store the raw content and register the
+            ``retrieve_all_context`` tool that reads it back. Defaults to True. The tool is for the one
+            question an excerpt cannot answer -- one that needs every row -- and its exchanges are
+            removed from the history when the invocation ends, so a retrieval is paid for in the turn
+            that asked for it and not on every later call. With progressive tool disclosure, leave it
+            OUT of ``always_available``: it is reachable from the catalog like any other tool, and
+            loading it only when an aggregate question comes up keeps its schema off every call. Off,
+            no raw sub-block is stored and no reference token is emitted -- nothing could resolve one.
         should_filter: Callback deciding whether a specific oversized result is filtered. Called only
             once the result is over threshold. Defaults to None (every oversized result is filtered).
 
@@ -185,7 +283,7 @@ class RelevanceFilter(Plugin):
         store: Store | None = None,
         max_result_tokens: int = _DEFAULT_MAX_RESULT_TOKENS,
         config: RelevanceConfig | None = None,
-        include_retrieval_tool: bool = False,
+        include_retrieval_tool: bool = True,
         should_filter: ShouldFilter | None = None,
     ) -> None:
         """Initialize the plugin without building any scoring or network dependency.
@@ -196,9 +294,9 @@ class RelevanceFilter(Plugin):
             max_result_tokens: Filter only results above this estimated token count.
             config: Preview tuning; read key by key with the documented defaults at use time, so a
                 partial config is as valid as a full one.
-            include_retrieval_tool: Register the ``retrieve_context`` tool. Defaults to False, which
-                also suppresses the store write and the reference token: with no tool to resolve it,
-                a reference would be a promise nothing can keep.
+            include_retrieval_tool: Store the raw content and register ``retrieve_all_context``.
+                Defaults to True. False also suppresses the store write and the reference token: with
+                no tool to resolve it, a reference would be a promise nothing can keep.
             should_filter: Callback ``(tool_name, token_count, **kwargs) -> bool``, sync or async.
 
         Raises:
@@ -214,6 +312,9 @@ class RelevanceFilter(Plugin):
         self._should_filter = should_filter
         # Built on first use, never here: constructing a reranker would reach for AWS credentials.
         self._preview: RelevancePreview | None = None
+        # Chunk ranking of each stored reference, by descending relevance, so ``retrieve_all_context`` can
+        # hand back more chunks in relevance order without scoring the text again.
+        self._rankings: dict[str, tuple[int, ...]] = {}
         # The base scans this instance for @hook and @tool methods, so it runs last.
         super().__init__()
 
@@ -235,7 +336,7 @@ class RelevanceFilter(Plugin):
             self._store._bind(id(agent))
         if not self._include_retrieval_tool:
             # Drop the auto-discovered retrieval tool, matched by tool_name rather than a literal.
-            retrieval_tool_name = self.retrieve_context.tool_name
+            retrieval_tool_name = self.retrieve_all_context.tool_name
             self._tools = [t for t in self._tools if t.tool_name != retrieval_tool_name]
 
     def _resolve_preview(self) -> RelevancePreview:
@@ -299,54 +400,78 @@ class RelevanceFilter(Plugin):
         return query[-_MAX_QUERY_CHARS:]
 
     @tool(context=True)
-    async def retrieve_context(
+    async def retrieve_all_context(
         self,
         reference: str,
         tool_context: ToolContext,
         pattern: str | None = None,
         line_range: LineRange | None = None,
         context_lines: int | None = None,
+        max_chunks: int | None = None,
+        max_tokens: int | None = None,
     ) -> dict | str:
-        """Read back content that the relevance filter replaced with a preview.
+        """Load the WHOLE of a tool result that the relevance filter cut down to an excerpt.
+
+        Use it ONLY when the answer needs every row of that result -- a maximum, minimum, total, count,
+        average, ranking or a comparison across all of it -- which the excerpt cannot answer. Do NOT use
+        it to read a passage the excerpt already shows, or when the excerpt answers the question.
 
         When a tool result was too large to keep in context, its raw content was stored and the result
-        was rewritten into a preview plus a reference. Use this tool with that reference to reach the
-        parts the preview left out.
+        was rewritten into an excerpt, a disclaimer with its size, and a reference. Pass that reference
+        here, with a ``pattern`` that matches only the rows you need to aggregate (the cheapest way),
+        or ``max_chunks``/``max_tokens`` large enough for all of it.
 
         Returns:
           - With line_range: exactly that span of lines, with line numbers
-          - With pattern: only the matching lines, with line numbers and surrounding context
-          - Without pattern/line_range/context_lines: the full original content (use sparingly — this
-            re-injects every token the filter removed)
+          - With pattern: only the matching lines, with line numbers and surrounding context. Best for
+            aggregates: a pattern matching the rows to aggregate returns just those rows
+          - With max_chunks: the max_chunks most relevant chunks, in document order, with markers for
+            the lines left out. A max_chunks at least the result's chunk count returns all of it
+          - Without any of these: the full original content, cut at max_tokens when given
+
+        What this tool returns is removed from the conversation once the answer is given, so state the
+        figures you relied on in the answer itself.
 
         Constraints:
-          - pattern/line_range/context_lines only work on text content. For binary content, omit them.
-          - Line numbers are 1-indexed and are the same ones the preview's gap markers report, so a
+          - pattern/line_range/context_lines/max_chunks/max_tokens only work on text content. For
+            binary content, omit them.
+          - Line numbers are 1-indexed and are the same ones the excerpt's gap markers report, so a
             "[... N lines omitted ...]" marker can be turned straight into a follow-up line_range.
-          - A valid line_range wins over a pattern: the span is returned and the pattern is ignored.
+          - Precedence: line_range, then pattern, then max_chunks.
+          - max_tokens bounds the response in every mode. Without it, line_range, pattern and
+            max_chunks answer within the filter's own size threshold, and a full read is unbounded.
 
         Examples:
           {"reference": "mem_1_tool-123_0", "pattern": "error"} -> matches with 5 lines of context
-          {"reference": "mem_1_tool-123_0", "pattern": "error|warning", "context_lines": 3} -> regex
+          {"reference": "mem_1_tool-123_0", "pattern": "REFUND", "context_lines": 0, "max_tokens": 20000}
+            -> every matching row, no context, up to ~20k tokens
+          {"reference": "mem_1_tool-123_0", "max_chunks": 3} -> the 3 most relevant chunks
+          {"reference": "mem_1_tool-123_0", "max_chunks": 1000, "max_tokens": 50000} -> everything
           {"reference": "mem_1_tool-123_0", "line_range": {"start": 10, "end": 25}} -> lines 10-25
 
         Args:
             reference: The reference string from the filtered block (e.g. "mem_1_tool-123_0").
             tool_context: Injected by the framework. Not user-facing.
-            pattern: Regex or keyword to grep for. Returns only matching lines with context — never the
-                full content.
+            pattern: Regex or keyword to grep for. Returns only matching lines with context.
             line_range: Return only this span of lines; a dict with 1-indexed inclusive ``start`` and
                 ``end`` keys. Takes precedence over ``pattern``.
             context_lines: Lines before AND after each match, like ``grep -C``. Defaults to 5.
+            max_chunks: Number of chunks to return, most relevant first, rendered in document order.
+                At least 1.
+            max_tokens: Approximate size limit of the response, in tokens. At least 1.
 
         Raises:
-            ValueError: If the reference is unknown, the content is binary and
-                ``pattern``/``line_range``/``context_lines`` were supplied, or ``line_range`` *starts*
+            ValueError: If the reference is unknown, ``max_chunks`` or ``max_tokens`` is below 1, the
+                content is binary and any read option was supplied, or ``line_range`` *starts*
                 outside the content — its ``start`` is below 1, above ``end``, or past the last line.
                 An ``end`` past the last line is **not** an error: the span is clamped to the content,
                 the way ``sed -n 'start,$p'`` behaves, so asking for more lines than exist returns
                 everything from ``start`` onwards.
         """
+        for name, value in (("max_chunks", max_chunks), ("max_tokens", max_tokens)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+                raise ValueError(f"{name} must be an integer >= 1, got {value!r}")
+
         store = self._store
         if store is None:  # No store configured: nothing was ever stored, so nothing resolves.
             raise ValueError(f"reference not found: {reference}")
@@ -356,20 +481,29 @@ class RelevanceFilter(Plugin):
         except KeyError as error:
             raise ValueError(f"reference not found: {reference}") from error
 
-        if pattern is None and line_range is None and context_lines is None:
+        options = (pattern, line_range, context_lines, max_chunks, max_tokens)
+        if all(option is None for option in options):
             return self._decode_full_content(content_bytes, content_type, reference)
 
         if not _is_searchable_content(content_type):
             raise ValueError(
                 f"cannot search binary content ({content_type}). "
-                "Omit pattern/line_range/context_lines to retrieve the full content."
+                "Omit pattern/line_range/context_lines/max_chunks/max_tokens to retrieve the full content."
             )
 
         text = content_bytes.decode("utf-8")
         ctx_lines = context_lines if context_lines is not None else _DEFAULT_CONTEXT_LINES
-        # A retrieval response is bounded by the same threshold that made the result oversized, so
-        # reading content back can never cost more context than keeping the original would have.
-        max_chars = self._max_result_tokens * _CHARS_PER_TOKEN
+        # By default a read is bounded by the same threshold that made the result oversized, so reading
+        # content back never costs more than keeping the original would have. max_tokens is the model's
+        # explicit choice to pay for more.
+        max_chars = (max_tokens or self._max_result_tokens) * _CHARS_PER_TOKEN
+
+        if line_range is None and pattern is None:
+            if max_chunks is not None:
+                return self._read_chunks(reference, text, max_chunks, max_chars)
+            if context_lines is None:
+                # max_tokens alone: the whole content, cut to that budget.
+                return _search_content(text, line_range=(1, max(1, text.count("\n") + 1)), max_chars=max_chars)
 
         span: tuple[int, int] | None = None
         if line_range is not None:
@@ -382,6 +516,41 @@ class RelevanceFilter(Plugin):
             span = (1, max(1, ctx_lines))
 
         return _search_content(text, pattern=pattern, line_range=span, context_lines=ctx_lines, max_chars=max_chars)
+
+    def _read_chunks(self, reference: str, text: str, max_chunks: int, max_chars: int) -> str:
+        """Render the ``max_chunks`` most relevant chunks of ``text`` in document order.
+
+        The ranking is the one the filter computed when it built the excerpt, so no second scoring call
+        is made. A reference with no recorded ranking -- several sub-blocks scored together, or a store
+        that outlived this process -- is read in document order instead.
+
+        Args:
+            reference: The reference the text came from, the key of its ranking.
+            text: The stored text.
+            max_chunks: How many chunks to render.
+            max_chars: Size limit of the rendering, gap markers included.
+
+        Returns:
+            A header naming what was returned, then the chunks with a marker for every omitted span.
+        """
+        chunks = _chunk_text(text, self._config.get("chunk_tokens", _DEFAULT_CHUNK_TOKENS))
+        if not chunks:
+            return "Content is empty (0 lines)."
+
+        ranking = self._rankings.get(reference)
+        if ranking is None or len(ranking) != len(chunks):
+            ranking = tuple(range(len(chunks)))
+            order = "document order"
+        else:
+            order = "most relevant first"
+
+        chosen = sorted((chunks[i] for i in ranking[:max_chunks]), key=lambda chunk: chunk.index)
+        body = _assemble_preview(chunks, chosen, max_chars)
+        header = (
+            f"[{len(chosen)} of {len(chunks)} chunks ({order}), lines 1-{chunks[-1].end_line} in total, "
+            f"limit ~{max_chars // _CHARS_PER_TOKEN:,} tokens]"
+        )
+        return f"{header}\n{body}"
 
     @staticmethod
     def _decode_full_content(content_bytes: bytes, content_type: str, reference: str) -> dict | str:
@@ -417,6 +586,28 @@ class RelevanceFilter(Plugin):
         return content_bytes.decode("utf-8", errors="replace")
 
     @hook  # type: ignore[call-overload]  # bound method; the @hook overloads describe a one-arg callback
+    async def _on_after_invocation(self, event: AfterInvocationEvent) -> None:
+        """Remove this plugin's ``retrieve_all_context`` exchanges from the history once the turn has ended.
+
+        A retrieval is for the answer in flight. Kept, its result -- possibly the whole of a large tool
+        result, since the model may ask for all of it -- would ride along on every later call and be
+        carded by a context graph as evidence of the turn. It is removed here, at the end of the
+        invocation, which is before the next user message closes the turn: a graph deriving that
+        turn's Card never sees it. What stays is the excerpt with its reference, so the content can
+        still be retrieved again later, and the answer, which carries the figures the retrieval served.
+
+        Args:
+            event: The finished invocation. Only ``event.agent.messages`` is written.
+        """
+        if not self._include_retrieval_tool:
+            return
+        messages = event.agent.messages
+        kept = _drop_tool_exchanges(messages, self.retrieve_all_context.tool_name)
+        if kept is not messages:
+            logger.debug("messages=<%d->%d> | retrieval exchanges removed from the history", len(messages), len(kept))
+            messages[:] = kept
+
+    @hook  # type: ignore[call-overload]  # bound method; the @hook overloads describe a one-arg callback
     async def _on_after_tool_call(self, event: AfterToolCallEvent) -> None:
         """Relevance-filter an oversized textual tool result before it enters the conversation.
 
@@ -433,7 +624,7 @@ class RelevanceFilter(Plugin):
 
         # (2) Recursion guard: the retrieval tool's own (possibly large) output must stay intact,
         # otherwise retrieving content would re-filter it. Matched by tool_name, never a literal.
-        if event.tool_use.get("name") == self.retrieve_context.tool_name:
+        if event.tool_use.get("name") == self.retrieve_all_context.tool_name:
             return
 
         # (3) A delegation result becomes the final user-facing answer, and no later model call could
@@ -482,7 +673,7 @@ class RelevanceFilter(Plugin):
         await self._filter_and_rewrite(event, token_count, full_text)
 
     async def _store_raw(self, event: AfterToolCallEvent) -> list[str] | None:
-        """Optionally store the raw scorable sub-blocks so ``retrieve_context`` can read them back.
+        """Optionally store the raw scorable sub-blocks so ``retrieve_all_context`` can read them back.
 
         This is an add-on to filtering, never a precondition of it. With the retrieval tool off, or
         no store configured, nothing is stored and an empty list is returned.
@@ -543,14 +734,21 @@ class RelevanceFilter(Plugin):
 
         query = self._build_query(event)
         try:
-            preview = await self._resolve_preview().build(full_text, query)
+            preview, stats = await self._resolve_preview().build_with_stats(full_text, query)
         except RerankerError:
             # Abstaining is safer than a positional slice: a wrong cut drops the passage the
             # question needed. The result stays as it came, and is never scored a second time.
             logger.debug("tool_use_id=<%s> | relevance scoring failed, keeping original", tool_use_id)
             return
 
-        marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n\n{preview}"
+        # The ranking indexes chunks of ``full_text``, so it is only valid for a reference holding
+        # exactly that text: one scorable sub-block, stored whole.
+        scorable = [block for block in content if block.get("text") or "json" in block]
+        if len(references) == 1 and len(scorable) == 1:
+            self._rankings[references[0]] = stats.ranking
+
+        disclaimer = _disclaimer(token_count, stats, references, self.retrieve_all_context.tool_name)
+        marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n{disclaimer}\n\n{preview}"
         if references:
             token = f"[ref: {references[0]}]" if len(references) == 1 else f"[refs: {', '.join(references)}]"
             marker = f"{marker}\n\n{token}"

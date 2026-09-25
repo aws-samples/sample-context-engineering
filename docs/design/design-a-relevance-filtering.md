@@ -144,16 +144,62 @@ sequenceDiagram
     A->>A: scores against the query
     A->>A: keeps score >= threshold, up to preview_tokens
 
-    A->>AG: rewrites the block in place: verbatim chunks + [ref: ...]
+    A->>AG: rewrites the block in place: disclaimer + verbatim chunks + [ref: ...]
     AG->>M: call with the filtered result
 
-    opt the filter cut something needed
-        M-->>AG: retrieve_context(reference, ...)
-        AG->>S: queries by pattern or line range
-        S-->>AG: chunk
+    opt the question needs every row
+        M-->>AG: retrieve_all_context(reference, pattern/max_chunks/max_tokens)
+        AG->>S: queries by pattern, line range or chunk count
+        S-->>AG: rows, span or chunks
         AG->>M: call — costs one cycle
     end
+
+    Note over A,AG: end of the invocation — the retrieval exchanges are<br/>removed from agent.messages, so no later call re-sends them
 ```
+
+### The disclaimer
+
+The excerpt is headed by a disclaimer carrying the selection's **processing metadata**: the original's
+line and chunk count, how many chunks are shown, and the line spans they cover. It then states the one
+thing the excerpt cannot do — an answer that needs every row, a maximum, minimum, total, count, average,
+ranking or any comparison across the whole result, cannot be computed from a sample.
+
+That sentence exists because the two failure modes without it are both silent. A model that is not told
+it holds a sample computes the aggregate over the sample and is confidently wrong; a model that suspects
+a sample but has no instruction refuses. With the retrieval tool registered, the disclaimer names the
+call and the budgets that reach the rest, and says the retrieved content leaves the conversation once
+the answer is given — so the answer has to carry the figures it relied on. With the tool off, no
+reference exists to name, and the disclaimer instead tells the model to say that the result was
+filtered rather than compute from the excerpt.
+
+### Retrieving what the excerpt cannot answer
+
+`retrieve_all_context` is scoped to that one case: load the whole of a result the filter cut down.
+It is not for re-reading a passage the excerpt already shows. It takes the reference plus one way of
+bounding the read — precedence `line_range`, then `pattern`, then `max_chunks`, with `max_tokens`
+bounding the response in every mode:
+
+| Argument | Returns |
+|---|---|
+| `pattern` (regex) | only the matching lines, numbered, with `context_lines` around each. The cheapest aggregate: match the rows to sum and nothing else |
+| `line_range` | exactly that span, 1-indexed inclusive. A `[... N lines omitted ...]` marker's numbers go straight back in here |
+| `max_chunks` | the N most relevant chunks in document order, from the ranking the selection already computed — no second rerank. At or above the chunk count, all of it |
+| `max_tokens` | approximate response budget. Alone, the whole content cut to it |
+| none | the full original content, unbounded |
+
+Without `max_tokens`, a bounded read answers within the filter's own size threshold, so reading
+content back never costs more than keeping the original would have.
+
+Its exchanges are then **removed from the history at the end of the invocation** — before the next
+user message closes the turn, so a context graph deriving that turn's Card never sees them. What
+stays is the excerpt with its reference, which can be retrieved again, and the answer. This is what
+keeps a retrieval paid for in the turn that asked for it rather than re-sent on every later call.
+
+In the community `RelevanceFilter` packaging the tool is registered by `include_retrieval_tool`,
+which defaults to `True` (storage on). Off, nothing is stored and no reference is minted, so nothing
+could resolve one. Under progressive tool disclosure it belongs in the catalog rather than
+`always_available`: a whole-result question is rare, and loading the schema only when one arrives
+keeps it off every other call.
 
 ### The scoring query
 
@@ -227,7 +273,7 @@ number be rewritten.
 ## 7. Deterministic guards
 
 - The result of the retrieval tool itself is never filtered (avoids recursion). The guard is in the
-  base strategy: with a stash present, a `toolResult` whose tool name is `retrieve_context` matches no
+  base strategy: with a stash present, a `toolResult` whose tool name is `retrieve_all_context` matches no
   target. With `stash=False` there is no stash and no retrieval tool either, so there is nothing to
   recurse into.
 - Non-textual content is not scorable. The strategy concatenates only the `text` and `json` blocks
@@ -253,17 +299,21 @@ Two guards the offloader has, the strategy does not, and both are worth stating 
 |---|---|---|
 | Scoring is wrong and cuts what was needed | poor answer | query by the reference, costs one cycle |
 | Minified JSON | line search is useless, it is a single line | handled in `_chunk_text`: a line longer than the chunk budget is cut by character, so it does not degenerate into one giant chunk. Every fragment inherits that line's own line numbers |
-| Aggregation query | there is no relevant chunk, they are all relevant | out of scope: fix it in the tool |
-| Full retrieval | the whole content comes back and stays resident | keep as a last resort, it is already the guidance text |
+| Aggregation query | there is no relevant chunk, they are all relevant | the disclaimer says so, and `retrieve_all_context` reaches the rest — a `pattern` matching the rows to aggregate, or `max_chunks`/`max_tokens` for all of it |
+| Full retrieval | the whole content comes back | it is bounded by `max_tokens` and removed from the history at the end of the invocation, so it is not resident on later calls |
 
 The aggregation case deserves to be written down: "sum all the transactions of the year" has no
-cut. The rerank returns the 5 most similar to the question and loses the other 35. The fix is
-for the tool to paginate or aggregate at the source.
+cut. The rerank returns the 5 most similar to the question and loses the other 35. Two answers,
+and they compose: the excerpt's disclaimer states that no aggregate can come from it, and the
+retrieval tool's budgets make reading the rows cheap enough to be the normal path. Having the tool
+paginate or aggregate at the source is still the better fix where the tool is yours to change.
 
 ## 9. How to verify
 
 - Size of the `ToolResult` that enters the conversation, before and after, per tool.
-- Frequency of `retrieve_context` calls — measures how much the filter is getting wrong.
+- Frequency of `retrieve_all_context` calls, split by whether the turn asked for an aggregate. A call
+  on an aggregate question is the tool working as scoped; a call on a question the excerpt covered
+  measures how much the filter is getting wrong.
 - Search units consumed per session, against the tokens saved. `RelevancePreview.search_units`
   counts them, incremented before the call and never reset, so it is the session total.
 - Regression test: swapping `Offload.relevance(...)` for `Offload.truncate(...)` at the same

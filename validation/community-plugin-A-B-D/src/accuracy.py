@@ -14,7 +14,7 @@ introduce its own variance into the thing being measured. Ground truth here is d
 the tool implementations, not written by hand, so it cannot drift from what the tools return.
 
 **Exact numeric strings.** Expectations match values as the tools formatted them
-("R$ 24.143,12"), which also tests the offloader's protected-content guard: a preview that
+("R$ 24.143,12"), which also tests every strategy that rewrites a payload: a preview or Card that
 paraphrased or reformatted a number would fail the check even if the figure were arithmetically
 right. That is intended. A financial assistant that restates values in its own format has
 introduced an error class, whether or not the arithmetic survived.
@@ -29,6 +29,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
+
+from .metrics import RETRIEVAL_TOOLS
 
 
 def _normalize(text: str) -> str:
@@ -118,7 +120,8 @@ CHECKS: dict[str, tuple[Check, ...]] = {
     "A3-allocation": (
         Check(
             name="allocation-shares",
-            all_of=("42,1", "35,8", "22,1"),
+            # Derived from _POSITIONS: 14.454,00 / 24.143,12 / 9.235,03 of R$ 47.832,15.
+            all_of=("30,2", "50,5", "19,3"),
             weight=2.0,
             critical=True,
         ),
@@ -214,15 +217,18 @@ CHECKS: dict[str, tuple[Check, ...]] = {
         # reasoning is acceptable; both is better.
         Check(
             name="addresses-dots",
-            any_of=("dot", "period", "dots", "."),
+            any_of=("dot", "period", "dots"),
             weight=1.0,
         ),
         Check(
             name="reasoned-verdict",
+            # "valid" alone is a substring of "invalid", so the verdict is matched in phrase form and the
+            # opposite verdict is forbidden outright.
             any_of=(
                 "not recommended", "discouraged", "avoid", "should not",
-                "valid", "permitted", "allowed", "invalid",
+                "is valid", "a valid", "technically valid", "permitted", "allowed",
             ),
+            none_of=("is invalid", "is not valid", "not a valid"),
             weight=2.0,
             critical=True,
         ),
@@ -331,7 +337,9 @@ CHECKS: dict[str, tuple[Check, ...]] = {
         ),
         Check(
             name="answers-the-comparison",
-            any_of=("smaller", "larger", "less", "more", "greater"),
+            # The redemption (R$ 907,35) is smaller than the fund position (R$ 9.235,03). Only forms that
+            # state that direction count; bare "less"/"more" matched inside "unless"/"moreover".
+            any_of=("smaller", "less than", "lower than", "a fraction of"),
             weight=2.0,
             critical=True,
         ),
@@ -360,6 +368,21 @@ CHECKS: dict[str, tuple[Check, ...]] = {
             critical=True,
         ),
     ),
+    # --- memory probes (see scenario.MEMORY_PROBES) ---------------------------------------------
+    # One critical literal each. The seed facts exist only in the conversation; the tool facts can be
+    # re-fetched, which score_run reports separately as "not from memory".
+    "M1-seed-target": (
+        Check(name="recalls-target", any_of=("18.500,00", "18,500.00", "18.500"), weight=2.0, critical=True),
+    ),
+    "M2-sync-job": (
+        Check(name="recalls-sync-job", any_of=("sync-7f3a9c21",), weight=2.0, critical=True),
+    ),
+    "M3-seed-advisor": (
+        Check(name="recalls-advisor", any_of=("Ricardo Tavares",), weight=2.0, critical=True),
+    ),
+    "M4-case-id": (
+        Check(name="recalls-case-id", any_of=("CASE-20260826-0042",), weight=2.0, critical=True),
+    ),
 }
 
 
@@ -373,14 +396,9 @@ FILLER_CHECKS: dict[str, tuple[Check, ...]] = {
     # A grounding check, deliberately: what it asks is "did the answer come from the tool", which is
     # the question a long conversation puts at risk. Computation is the spine's job -- C3 is where the
     # agent has to average the datapoint series rather than quote it.
-    "allocation": (
-        Check(
-            name="allocation-shares",
-            all_of=("42,1", "35,8", "22,1"),
-            weight=2.0,
-            critical=True,
-        ),
-    ),
+    #
+    # No "allocation" kind: the allocation is derived from each account's positions, so it differs per
+    # account and no single static string can be its expectation.
     "projection": (
         Check(
             name="projection-values",
@@ -534,7 +552,18 @@ def score_turn(label: str, answer: str) -> TurnScore:
         return TurnScore(label=label, scored=False)
 
     score = TurnScore(label=label)
-    for check in (*checks, *UNIVERSAL_CHECKS):
+    all_checks = (*checks, *UNIVERSAL_CHECKS)
+
+    # A turn that produced no answer (e.g. context-window overflow) earns nothing. Without this, every
+    # none_of check passes on "" -- nothing forbidden is present in nothing -- and the arm that
+    # overflows most collects the most free weight.
+    if not (answer or "").strip():
+        score.total = sum(check.weight for check in all_checks)
+        score.failures.append("no-answer: the turn produced no text")
+        score.critical_failures.append("no-answer")
+        return score
+
+    for check in all_checks:
         score.total += check.weight
         ok, reason = check.evaluate(answer or "")
         if ok:
@@ -567,5 +596,42 @@ def score_run(turns: list[dict[str, Any]]) -> dict[str, Any]:
         "turns_materially_correct": len(correct),
         "material_correctness": round(len(correct) / len(scored), 4) if scored else 0.0,
         "critical_failures_total": sum(len(score.critical_failures) for score in scored),
+        "memory": _memory_summary(turns, scores),
         "per_turn": [score.to_dict() for score in scores],
+    }
+
+
+_MEMORY_TOOLS = frozenset(RETRIEVAL_TOOLS) | {"find_tools", "get_tool_details"}
+"""Tools that read the conversation or the tool catalog back, not the outside world.
+
+A memory probe answered through one of these still counts as recall -- the graph's ``expand_card`` or
+``find_context`` IS its memory. Any other tool call means the fact was fetched again from its source.
+"""
+
+
+def _memory_summary(turns: list[dict[str, Any]], scores: list[TurnScore]) -> dict[str, Any]:
+    """Score the memory probes: correct, and correct without fetching the fact again.
+
+    ``recalled`` is the figure that answers "is the memory working": the probe was right AND the turn
+    called no domain tool. A right answer after re-calling ``force_connector_sync`` proves the tool
+    works, not the memory.
+    """
+    probes = []
+    for turn, score in zip(turns, scores):
+        if not turn["label"].startswith("M") or turn["label"] == "M0-seed" or not score.scored:
+            continue
+        refetched = sorted({name for name in turn.get("tool_calls") or [] if name not in _MEMORY_TOOLS})
+        probes.append(
+            {
+                "label": turn["label"],
+                "correct": score.materially_correct,
+                "refetched_with": refetched,
+                "recalled": score.materially_correct and not refetched,
+            }
+        )
+    return {
+        "probes": len(probes),
+        "correct": sum(probe["correct"] for probe in probes),
+        "recalled": sum(probe["recalled"] for probe in probes),
+        "per_probe": probes,
     }

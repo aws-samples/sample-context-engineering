@@ -480,7 +480,7 @@ class GraphTuning:
     tags_per_card: int = 5
     """Tags derived per Card, which is what ``find_context`` matches on. Reachable from a sweep
     because the graph's discovery path is only as good as the tags it searches."""
-    neighbors_per_candidate: int = 3
+    neighbors_per_candidate: int = 0
     """``similar`` neighbours ``find_context`` lists under each candidate. ``0`` lists none.
 
     The edge had no reader before this: measured on the write path, stored with its similarity as the
@@ -489,8 +489,8 @@ class GraphTuning:
     the QUESTION and never against another Description, so two turns covering the same ground in
     different words are invisible to each other in it.
 
-    Unmeasured: every published figure was produced with the edge unread, so a run with this above zero
-    is not comparable to them on tokens. ``VALIDATION_GRAPH_NEIGHBORS=0`` reproduces them."""
+    Unmeasured: every published figure was produced with the edge unread, so the default is ``0`` to
+    stay comparable with them. ``VALIDATION_GRAPH_NEIGHBORS=3`` turns the edge on for a sweep."""
 
 
 GRAPH_TUNING = GraphTuning(
@@ -502,7 +502,7 @@ GRAPH_TUNING = GraphTuning(
     max_retrieval_cycles=_env_opt_int("VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES", BUDGETS.graph_max_retrieval_cycles),
     reuse_ttl_cycles=_env_int("VALIDATION_GRAPH_REUSE_TTL", 5),
     tags_per_card=_env_int("VALIDATION_GRAPH_TAGS", 5),
-    neighbors_per_candidate=_env_int("VALIDATION_GRAPH_NEIGHBORS", 3),
+    neighbors_per_candidate=_env_int("VALIDATION_GRAPH_NEIGHBORS", 0),
 )
 """The graph's tuning, for every arm it appears in. Raised off the package's defaults.
 
@@ -567,11 +567,23 @@ ARTIFACTS_DIR = ROOT / ".artifacts"
 """Where the relevance filter's FileStore keeps the raw sub-blocks it replaced with a preview."""
 
 SESSIONS_DIR = ROOT / ".sessions"
-"""Unused by this harness, kept so the reused modules that reference a path find one.
+"""Where Strands' ``FileSessionManager`` persists each agent's messages, one directory per run tag.
 
-The community graph is ephemeral -- its state reaches neither ``agent.state`` nor disk -- so there
-is no load path to exercise and no resume to measure.
+The session manager writes every message of ``agent.messages`` to disk as it is added. Within a run it
+does not change what reaches the model: it only records. It changes the context only on *restore* --
+an agent created with an existing ``session_id`` reloads that whole history -- which is why every agent
+gets a fresh ``session_id`` (see :func:`src.runner.build_agent`) and no arm can inherit another's history.
+
+What lands on disk is the live history: the relevance filter's cuts are in it (it rewrites the tool
+result before it enters the history), the context graph's folds are not (it projects per call and never
+edits ``agent.messages``).
 """
+
+SESSION_MANAGER = (os.environ.get("VALIDATION_SESSION") or "file").lower()
+"""``file`` (default) attaches a ``FileSessionManager`` to the baseline agent -- the agent as it ships
+persists its messages -- while the plugin arms run without one; ``off`` removes it from the baseline too."""
+if SESSION_MANAGER not in ("file", "off"):
+    raise ValueError(f"VALIDATION_SESSION=<{SESSION_MANAGER}> | must be 'file' or 'off'")
 
 # --- Run control -------------------------------------------------------------------
 
@@ -607,8 +619,8 @@ RUN_CONFIGS = {
         label="Relevance Filtering only",
         notes=(
             "RelevanceFilter alone: an oversized tool result is stored and replaced by a "
-            "reranker-scored, verbatim preview plus a reference the model reads back through "
-            "retrieve_context."
+            "reranker-scored, verbatim preview plus a reference the model can load in full through "
+            "retrieve_all_context when a question needs every row."
         ),
     ),
     "disclosure": RunConfig(
@@ -638,10 +650,8 @@ RUN_CONFIGS = {
         graph=True,
         label="All three combined",
         notes=(
-            "The full stack, and the only configuration that exercises the harness's own "
-            "referenced-source bridge: the community graph publishes no accessor for the tools a "
-            "stepped-down Card still mentions, so without the bridge the model reads about a "
-            "tool whose inputSchema left the call."
+            "The full stack: the graph folds the history by Card resolution, then disclosure folds "
+            "the exchanges of every tool the call does not carry in its tool_specs."
         ),
     ),
     "no-disclosure": RunConfig(

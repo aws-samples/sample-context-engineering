@@ -33,7 +33,9 @@ Status: **draft for discussion**
 
 Instead of sending the full description of every tool on every call, it lists every tool as one
 summarized line in the system prompt and sends only the schemas that are actually in use. The model
-loads the schemas it needs by name, uses them — and the detail is forgotten through inactivity.
+loads the schemas it needs by name, uses them — and the detail is forgotten through inactivity. When a
+schema leaves, the exchanges that used it are folded to plain sentences, so the call keeps the evidence
+without a call shape for the model to repeat.
 
 ## 2. The problem
 
@@ -65,7 +67,7 @@ plugins=[
         catalog_chars=80,         # character limit of each catalog line's summary
                                   # None = no catalog, the two plugin tools only
         summarizer=None,          # None = the agent's own model, once per tool, cached
-        ttl_cycles=5,             # how many cycles the schema stays after last use
+        ttl_cycles=3,             # how many cycles the schema stays after last use
         always_available=[...],   # tools that never go through the cycle
     )
 ]
@@ -75,7 +77,7 @@ plugins=[
 
 | Value | Resident | Risk |
 |---|---|---|
-| full (today) | ~63,000 | none |
+| full (no plugin) | ~63,000 | none |
 | ~80 characters | ~2,500 | low |
 | `None` | ~200 | the model may not know it has tools |
 
@@ -97,8 +99,9 @@ has to carry an `inputSchema` — providers reject a spec without one — and th
 entry can carry is `{"type": "object", "properties": {}}`, which reads as "takes no arguments". The
 model believes it, calls the tool by name, and the call has to be cancelled and retried: a full round
 trip carrying no information. In the system prompt the name makes no claim about its arguments, and
-the rule governing it ("load it with `get_tool_details` before calling") sits in the same block as the
-name, not in a sibling tool's description. `tool_specs` carries only what is callable on the call.
+the rule governing it arrives in the same block: the listed tools must not be called directly, a
+direct call is rejected, and the road to one is `get_tool_details` with the names as a list, then the
+call itself on the next model call. `tool_specs` carries only what is callable on the call.
 
 ## 4. Hook point
 
@@ -112,9 +115,10 @@ The catalog is appended to the system prompt by that same middleware, so there i
 one place where what the model is told about tools gets decided.
 
 A plugin can register middleware in `init_agent`. The pattern is already used by vended plugins
-and by the memory manager. The middleware writes two fields of the context and nothing else:
-`tool_specs` (the callable tools) and `system_prompt` (the catalog appended after the caller's own
-prompt, so the operator's text keeps its offset).
+and by the memory manager. The middleware writes three fields of the context and nothing else:
+`tool_specs` (the callable tools), `system_prompt` (the catalog appended after the caller's own
+prompt, so the operator's text keeps its offset) and `messages` (the folded copy of § 5). All three
+are per-call defensive copies; `agent.messages` and the `ToolRegistry` are never touched.
 
 ## 5. Mechanism
 
@@ -129,7 +133,7 @@ sequenceDiagram
 
     Note over AG,B: InvokeModelStage.Input middleware
     AG->>B: assembles tool_specs and system_prompt
-    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)
+    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)<br/>messages: exchanges of released tools folded to a sentence
 
     AG->>M: call
     M-->>AG: get_tool_details(["list_investment_transactions"])
@@ -140,7 +144,7 @@ sequenceDiagram
     M-->>AG: calls the tool with the right arguments
     AG->>T: executes
     T-->>AG: result
-    Note over B: use renews the schema TTL
+    Note over B: a call that ran renews the schema TTL
 
     Note over M,B: fallback, when no catalog name fits
     M-->>AG: find_tools("list investment transactions")
@@ -159,17 +163,51 @@ list, so every tool a step needs is loaded in one cycle.
 tool_specs    = find_tools ∪ get_tool_details
               ∪ always_available
               ∪ in_use (TTL, renewed on every use)
-              ∪ referenced_in_retained_history          [guard]
 
 system_prompt = caller's prompt
               + catalog: every other tool as "- name: summary (≤ catalog_chars)"
+
+messages      = the call's messages, with every exchange of a tool NOT in tool_specs
+                folded to one sentence
 ```
 
-The two partition the registry: no tool appears in both, and none is missing from both. Every entry
-of `tool_specs` is a verbatim, callable specification.
+The first two partition the registry: no tool appears in both, and none is missing from both. Every
+entry of `tool_specs` is a verbatim, callable specification.
 
 `in_use` carries most of the load and is deterministic. Seven consecutive calls of the same tool
-trigger no search at all — use renews the deadline, and it leaves through inactivity.
+trigger no search at all — every call that runs renews the deadline, and the tool leaves through
+inactivity.
+
+**Tools the history has used are not kept.** A `toolUse` left in the retained history for a tool that
+is no longer in `tool_specs` is accepted by the Bedrock Converse API — probed on Claude Haiku 4.5,
+Claude Opus 4.8, GLM 4.7 Flash and Qwen3 Next — so releasing a tool never breaks the protocol.
+Keeping every referenced tool was what made `tool_specs` grow monotonically with the conversation
+(3 → 16 tools over one Opus session), which is the cost the strategy exists to remove.
+
+### Folding the exchanges of released tools
+
+A `toolUse` with its arguments, sitting next to a successful result, is a template. The model copies
+it — and once the tool has left `tool_specs`, that copy is a call to a tool the call does not carry.
+So in the messages each call sends, every closed exchange of a tool not callable on that call is
+folded: the `toolUse` block goes, and its result becomes a plain sentence, `The tool X was called and
+the result was: Y` (or `... failed with: Y`). Image and document parts of the result are kept as they
+are. The plugin's own `find_tools` and `get_tool_details` exchanges are dropped with no sentence: they
+matter on the call right after them and are dead weight past it. The evidence survives, the call shape
+does not.
+
+Three constraints shape where the fold is allowed to reach:
+
+- **Only closed turns.** The turn in flight — from the last user message that carries no `toolResult`
+  onward, tool loop included — passes through as the same objects, because reasoning models reject a
+  modified latest assistant message. The one message of it the fold can touch is the user message that
+  opened it, which takes the folded span's trailing content when there is any. An assistant message that
+  the fold does rewrite or merge loses its `reasoningContent`, whose signature no longer matches.
+- **Results before text.** Converse rejects a user message where text precedes the `toolResult`
+  answering the previous assistant message, so a fold sentence is placed after the results.
+- **Pairs stay adjacent.** Emptied messages are dropped and same-role neighbours merged, and the
+  result is checked: if any `toolUse` is no longer answered in the very next message, the original
+  messages are sent and a warning is logged. An unforeseen shape then costs the saving on that call,
+  never the call itself.
 
 ### Why forget instead of accumulate
 
@@ -196,11 +234,15 @@ shortlist.
 - **`tool_specs` is never empty.** The provider rejects an empty `toolConfig` when the history
   has tool blocks — the SDK already works around it by injecting a `noop`. With `find_tools` and
   `get_tool_details` always present, the case does not occur.
-- **The schema of a tool referenced in the history is kept**, so no `toolUse` is left without a
-  matching definition.
-- **A call to a catalog name that skipped the load is recovered.** The name is not in `tool_specs`,
-  so the common path never produces it; if a model calls one anyway and the call reaches the plugin,
-  it is cancelled with "call it again", and the schema is already loaded for the retry.
+- **A released tool leaves no call shape in the history it can be copied from.** Its exchanges are
+  folded to a sentence (§ 5), and the fold's output is validated before it is sent: a broken
+  `toolUse`/`toolResult` adjacency falls back to the messages as received.
+- **A call to a catalog name that skipped the load is cancelled.** The name is not in `tool_specs`,
+  so the common path never produces it. If a model calls one anyway, the call is cancelled with a
+  message pointing at `get_tool_details`, and nothing is loaded on its behalf — a recovery that
+  loaded the tool would teach the model that calling a catalog name directly works. The decision is
+  read off the names the last projection actually carried. A tool whose parameters are all optional
+  is exempt: it is callable with no arguments, so the call is not a guess.
 - **`always_available`** is the escape hatch for a small tool used on every turn, which should
   not go through the discovery cycle.
 
@@ -213,7 +255,9 @@ shortlist.
 | Summarizer fails | none visible | the line falls back to a boundary cut |
 | No catalog name fits the need | one search cycle | `find_tools`, then `get_tool_details` |
 | Need maps to a combination of tools | several tools needed at once | `get_tool_details` takes a list: one load for all of them |
-| Thrash on repeated use | extra cycles | `ttl_cycles`, renewed on every use |
+| Thrash on repeated use | extra cycles | `ttl_cycles`, renewed on every call that runs |
+| Model copies a `toolUse` of a released tool | call to a tool not in `tool_specs` | the exchange is folded to a sentence, leaving no template |
+| Fold produces an unforeseen message shape | the saving on that call | pair check on the fold's output, fall back to the messages as received |
 
 ## 8. What it does not solve
 
@@ -232,9 +276,8 @@ shortlist.
 
 ## 10. Open decisions
 
-1. `ttl_cycles` in cycles or until the end of the turn? Cycles is finer-grained and has precedent in the offloader.
-2. Does similarity pre-loading come back as an optimization? Only after measuring search frequency.
-3. Catalog budget per tool or total? Per tool is predictable; a total would force ranking who
+1. Does similarity pre-loading come back as an optimization? Only after measuring search frequency.
+2. Catalog budget per tool or total? Per tool is predictable; a total would force ranking who
    gets in, reintroducing judgment where it is not necessary.
-4. Some providers have native support for deferred tool loading. Is it worth using when
+3. Some providers have native support for deferred tool loading. Is it worth using when
    available, or keeping a single portable implementation?
