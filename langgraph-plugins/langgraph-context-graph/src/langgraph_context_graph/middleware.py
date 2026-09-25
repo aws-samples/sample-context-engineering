@@ -52,7 +52,7 @@ from collections.abc import Coroutine, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from numbers import Real
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import Annotated, Any, TypeVar
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool, tool
@@ -192,6 +192,19 @@ Held as a constant rather than written as the tool body's docstring because the 
 one sync, one async -- and the text the model sees must not depend on which of them a run reaches."""
 
 
+def _latest_graph(left: GraphState | None, right: GraphState | None) -> GraphState | None:
+    """Reducer for ``context_graph``: the later write wins.
+
+    Parallel retrieval calls (``expand_card`` beside ``find_context``, say) each answer with a
+    ``Command`` carrying the graph, in the same step. Without a reducer LangGraph refuses the second
+    write (``InvalidUpdateError: Can receive only one value per step``) and the whole turn fails. Every
+    tool mutates the one graph object the step's state holds, so the writes are the same object with
+    every call's effect on it, and taking the later one loses nothing -- the Strands plugin mutates its
+    single per-agent graph the same way.
+    """
+    return left if right is None else right
+
+
 class ContextGraphState(AgentState):
     """Agent state plus the serialized context graph.
 
@@ -200,7 +213,7 @@ class ContextGraphState(AgentState):
     exactly as one without the middleware.
     """
 
-    context_graph: NotRequired[GraphState]
+    context_graph: NotRequired[Annotated[GraphState, _latest_graph]]
     """The graph carried over from the previous call. Plain data, so no codec is involved."""
 
 

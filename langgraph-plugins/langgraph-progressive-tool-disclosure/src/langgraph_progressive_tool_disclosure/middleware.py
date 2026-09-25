@@ -57,7 +57,7 @@ from context_core.disclosure import (
     fold_closed_exchanges,
 )
 
-from ._adapter import to_langchain, to_neutral_list
+from ._adapter import to_langchain, to_neutral_list, to_neutral_list_with_sources
 from ._compat import AgentMiddleware, AgentState, ModelRequest, ModelResponse, ToolCallRequest
 
 __all__ = ["DisclosureState", "ProgressiveToolDisclosureMiddleware"]
@@ -434,17 +434,17 @@ def _fold_messages(messages: Sequence[BaseMessage], active: Container[str]) -> l
         ``messages`` as a list when nothing was folded; otherwise the folded messages.
     """
     originals = list(messages)
-    neutral = to_neutral_list(originals)
+    neutral, sources = to_neutral_list_with_sources(originals)
     folded = fold_closed_exchanges(neutral, active)
     if folded is neutral:
         return originals
 
-    by_identity = {id(item): original for item, original in zip(neutral, originals, strict=True)}
+    by_identity = {id(item): group for item, group in zip(neutral, sources, strict=True)}
     out: list[BaseMessage] = []
     for item in folded:
-        original = by_identity.get(id(item))
-        if original is not None:
-            out.append(original)
+        group = by_identity.get(id(item))
+        if group is not None:
+            out.extend(group)
         else:
             out.extend(to_langchain(item))
     return out
@@ -787,11 +787,13 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
             overrides["system_message"] = _with_catalog(request.system_message, block)
 
         logger.debug(
-            "tool disclosure applied | cycle=<%d> | tools=<%d/%d> | catalog_tokens=<%d>",
+            "tool disclosure applied | cycle=<%d> | tools=<%d/%d> | catalog_tokens=<%d> | loaded=<%s> | active=<%s>",
             cycle,
             len(overrides["tools"]),
             len(bound),
             estimate_tokens(block),
+            dict(loaded),
+            sorted(active - PLUGIN_TOOL_NAMES),
         )
         return request.override(**overrides)
 

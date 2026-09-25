@@ -546,3 +546,32 @@ def test_expand_artifact_falls_back_to_the_stash():
     middleware = ContextGraphMiddleware(stash=_Stash())
     answer = asyncio.run(middleware.expand_artifact(GraphState(), middleware._store_for(""), "mem_1_tc1_0"))
     assert "from the stash" in answer
+
+
+def test_two_graph_tools_called_in_parallel_do_not_fail_the_step():
+    """Regression from the live all arm: expand_artifact beside find_context in one AIMessage made two
+    writes to ``context_graph`` in one step, and LangGraph raised InvalidUpdateError for the turn."""
+    from langchain.agents import create_agent
+
+    middleware = ContextGraphMiddleware(matcher=MockMatcher(), min_cards=1)
+    model = ScriptedChatModel(
+        turns=[
+            AIMessage(content="", tool_calls=[{"id": "data-1", "name": "lookup", "args": {"topic": "costs"}}], id="p1"),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "par-1", "name": "expand_artifact", "args": {"reference": "data-1_0"}},
+                    {"id": "par-2", "name": "find_context", "args": {"need": "costs"}},
+                ],
+                id="p2",
+            ),
+            AIMessage(content="done", id="p3"),
+        ],
+        seen=[],
+    )
+    agent = create_agent(model=model, tools=[lookup], middleware=[middleware])
+
+    final = agent.invoke({"messages": [HumanMessage(content="what did topic 1 cost?", id="u1")]})
+
+    answered = {m.tool_call_id for m in final["messages"] if isinstance(m, ToolMessage)}
+    assert {"par-1", "par-2"} <= answered

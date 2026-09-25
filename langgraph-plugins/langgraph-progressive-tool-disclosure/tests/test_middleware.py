@@ -813,3 +813,29 @@ def test_a_load_numbered_before_messages_were_removed_stays_callable():
     )
     seen, _ = run(middleware, request)
     assert "get_balance" in names_of(seen.tools)
+
+
+def test_text_an_outer_middleware_attached_to_a_tool_result_does_not_open_a_new_turn():
+    """Regression from the live all arm: the context graph attaches its collapsed-turns digest to the
+    latest user-role message, which mid-turn is a tool result. The adapter renders that as a ToolMessage
+    followed by a marked HumanMessage. Read back as a fresh user turn, it made this turn's own
+    get_tool_details exchange look closed, the fold removed it, and the model reloaded forever."""
+    from langgraph_progressive_tool_disclosure._adapter import ATTACHED_TEXT_KEY
+    from langgraph_progressive_tool_disclosure.middleware import _fold_messages
+
+    history = [
+        HumanMessage(content="earlier question", id="h1"),
+        AIMessage(content="earlier answer", id="a1"),
+        HumanMessage(content="current question", id="h2"),
+        AIMessage(
+            content="",
+            id="a2",
+            tool_calls=[{"id": "c1", "name": GET_TOOL_DETAILS_NAME, "args": {"names": ["get_balance"]}}],
+        ),
+        ToolMessage(content="Loaded get_balance", tool_call_id="c1", name=GET_TOOL_DETAILS_NAME, id="t1"),
+        HumanMessage(content="<collapsed_turns>digest</collapsed_turns>", additional_kwargs={ATTACHED_TEXT_KEY: True}),
+    ]
+    folded = _fold_messages(history, active={"find_tools", GET_TOOL_DETAILS_NAME, "get_balance"})
+
+    assert any(isinstance(m, ToolMessage) and m.tool_call_id == "c1" for m in folded)
+    assert any(isinstance(m, AIMessage) and m.tool_calls for m in folded)

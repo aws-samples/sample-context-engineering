@@ -95,6 +95,12 @@ def _is_call_part(block: dict[str, Any]) -> bool:
     return isinstance(part, dict) and part.get("type") in _CALL_PART_TYPES
 
 
+ATTACHED_TEXT_KEY = "context_core_attached_to_tool_result"
+"""``additional_kwargs`` flag on a ``HumanMessage`` that is really text attached to the tool-result
+message before it (see :func:`to_langchain`). Shared by the three adapters, so a message split by one
+middleware is joined back by the next."""
+
+
 def to_neutral(msg: BaseMessage) -> NeutralMessage:
     """Convert one LangChain message to a neutral message dict."""
     role = _ROLE_BY_TYPE.get(msg.type, msg.type)
@@ -127,4 +133,39 @@ def to_neutral(msg: BaseMessage) -> NeutralMessage:
 
 def to_neutral_list(messages: list[BaseMessage]) -> list[NeutralMessage]:
     """Convert a list of LangChain messages to neutral messages, in order."""
-    return [to_neutral(m) for m in messages]
+    return to_neutral_list_with_sources(messages)[0]
+
+
+def to_neutral_list_with_sources(
+    messages: Sequence[BaseMessage],
+) -> tuple[list[NeutralMessage], list[list[BaseMessage]]]:
+    """Convert to neutral messages and say which LangChain messages each one came from.
+
+    Usually one to one. The exception undoes :func:`to_langchain`'s split: a neutral ``user`` message
+    carrying tool results AND text renders as ``ToolMessage`` objects followed by a ``HumanMessage``
+    marked with :data:`ATTACHED_TEXT_KEY`. Read back naively, that marked message would be a fresh user
+    turn, and an inner middleware would see the current turn start AT it -- the disclosure fold then
+    treats the turn's own ``get_tool_details`` exchanges as closed and folds them away, so the model
+    never sees its load and reloads forever. The marked text is folded back onto the preceding
+    tool-result message instead, restoring the exact neutral message the outer middleware produced.
+
+    Returns:
+        The neutral messages, and for each one the LangChain messages it stands for.
+    """
+    neutral: list[NeutralMessage] = []
+    sources: list[list[BaseMessage]] = []
+    for message in messages:
+        previous = neutral[-1] if neutral else None
+        if (
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(ATTACHED_TEXT_KEY)
+            and previous is not None
+            and previous.get("role") == "user"
+            and any("toolResult" in block for block in previous.get("content") or ())
+        ):
+            previous["content"] = [*previous["content"], *_content_to_text_blocks(message.content)]
+            sources[-1].append(message)
+            continue
+        neutral.append(to_neutral(message))
+        sources.append([message])
+    return neutral, sources
