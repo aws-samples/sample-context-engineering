@@ -601,7 +601,7 @@ def score_run(turns: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-_MEMORY_TOOLS = frozenset(RETRIEVAL_TOOLS) | {"find_tools"}
+_MEMORY_TOOLS = frozenset(RETRIEVAL_TOOLS) | {"find_tools", "get_tool_details"}
 """Tools that read the conversation or the tool catalog back, not the outside world.
 
 A memory probe answered through one of these still counts as recall -- the graph's ``expand_card`` or
