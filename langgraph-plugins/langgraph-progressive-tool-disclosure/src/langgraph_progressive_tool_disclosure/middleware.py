@@ -304,7 +304,12 @@ def _last_used(messages: Sequence[BaseMessage], loaded: Mapping[str, int], befor
     Returns:
         Tool name to the cycle of its last use, over the keys of ``loaded``. Never mutates ``loaded``.
     """
-    last = dict(loaded)
+    # A load recorded on a cycle LATER than the one being decided cannot be real: it was numbered on a
+    # longer history, before a middleware removed messages from state (the relevance filter drops its
+    # closed retrieval exchanges at the end of a run). Left as is, the tool would stay uncallable until
+    # the count caught up, and the model would reload it cycle after cycle. It is treated as loaded just
+    # before. A load ON the decided cycle is left alone: that is the same-batch case the guard refuses.
+    last = {name: (used if used <= before else before - 1) for name, used in loaded.items()}
     cycle = 0
     for message in messages:
         if not isinstance(message, AIMessage):

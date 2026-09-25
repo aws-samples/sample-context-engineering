@@ -798,3 +798,18 @@ def test_a_projection_by_an_outer_middleware_does_not_reset_the_cycle():
     )
     seen, _ = run(middleware, request)
     assert "get_balance" in names_of(seen.tools)
+
+
+def test_a_load_numbered_before_messages_were_removed_stays_callable():
+    """A middleware that deletes messages from state (the relevance filter's end-of-run cleanup) shrinks
+    the AIMessage count, so a load recorded on the longer history reads as a future cycle. It must still
+    be callable, or the model reloads it until the count catches up."""
+    middleware = ProgressiveToolDisclosureMiddleware(ttl_cycles=3)
+    history = _history(5)  # the next call runs on cycle 5
+    request = make_request(
+        tools=bound_tools(middleware),
+        messages=history,
+        state={"messages": history, "loaded_tools": {"get_balance": 7}},  # numbered before a removal
+    )
+    seen, _ = run(middleware, request)
+    assert "get_balance" in names_of(seen.tools)

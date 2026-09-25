@@ -40,6 +40,7 @@ import logging
 import os
 import time
 import uuid
+from collections import Counter
 from typing import Any
 
 import boto3
@@ -881,8 +882,12 @@ async def run_configuration(
             record.live_message_count,
             len(collector.calls),
         )
-
-    collector.wall_seconds = time.perf_counter() - run_started
+        if len(record.tool_calls) > 20:
+            # A turn this long is a loop until shown otherwise: name what it called, so the log alone
+            # says which tool the model kept reaching for.
+            counts = Counter(record.tool_calls).most_common(5)
+            logger.warning("%-10s %-18s long turn | tool calls=%d | top=%s", config.name, turn.label,
+                           len(record.tool_calls), counts)
 
     state = None
     try:
