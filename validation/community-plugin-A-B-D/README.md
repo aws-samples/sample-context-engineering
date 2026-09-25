@@ -88,6 +88,13 @@ Two environment variables change what the harness does with those credentials:
 | `VALIDATION_AWS_PROFILE` | use this named profile instead of the default chain |
 | `VALIDATION_ACCOUNT_ID` | refuse to run unless the credentials resolve to this account |
 
+Two more change what is measured:
+
+| Variable | Effect |
+|---|---|
+| `VALIDATION_SESSION` | `file` (default) attaches a `FileSessionManager` to the baseline agent; `off` removes it from the baseline too |
+| `VALIDATION_RELEVANCE_RETRIEVAL_TOOL` | `1` (default) stores the raw content and registers the filter's `retrieve_all_context`; `0` measures the excerpt alone |
+
 `VALIDATION_ACCOUNT_ID` is the guard worth setting when more than one account is in play: a run that
 silently used the wrong one would produce numbers attributed to the wrong place. Both are read from the
 environment rather than written into `src/config.py`, so nothing about one workstation's setup is
@@ -156,6 +163,62 @@ per-turn charts, no assets, no server).
 
 ---
 
+## What the script asks
+
+Half of `--total-turns` is scored: at 60 turns that is 30 scored turns — the 18 hand-written spine,
+the memory probes, and generated filler to fill the rest. The other half is unscored mass, and it is
+where the heaviest payloads live (a 30-day statement export is the largest single result in the suite).
+
+### Memory probes
+
+The spine's return turns only test recall at the very end. The long script adds probes at several
+depths, built so the answer can come from nowhere but the conversation.
+
+`M0-seed` is a user turn stating two facts and asking for no lookup — an emergency-fund target and an
+advisor's name. **No tool returns either**, so the only place they exist is the history (the
+baseline's session) or the graph. Four probes follow, spread through the script:
+
+| Probe | Asks for | Source of the fact |
+|---|---|---|
+| `M1-seed-target` | the emergency-fund target | the seed turn only |
+| `M2-sync-job` | the job id of the connector sync, *without looking it up again* | a tool result in line B |
+| `M3-seed-advisor` | the advisor's name | the seed turn only |
+| `M4-case-id` | the support case number, *without looking it up again* | a tool result in line B |
+
+Each probe is a scored turn with one critical literal check, and each is scored twice:
+
+- **Correct** — the literal is in the answer.
+- **Recalled** — correct **and** the turn called no domain tool. A right answer after re-calling
+  `force_connector_sync` proves the tool works, not the memory. A retrieval tool does not disqualify
+  it: the graph's `expand_card` and `find_context` *are* its memory, so they count as memory, as does
+  `find_tools`.
+
+The report renders both in a **Memory probes** table, one row per configuration, with the probe count.
+`Correct` above `Recalled` on a plugin arm is the interesting reading: the fact survived, but the
+answer paid a tool call to get it back. A short script carries no probes, and the table is omitted.
+
+### The scored filler asks only questions that are true
+
+Scored filler turns carry one static expectation each, keyed by the *kind* in the label, which works
+only because the mocked tools return the same answer for every account. It also requires the premise
+to hold. An earlier revision paired any account with a fixed premise — a savings account's yield, one
+institution's connector on another institution's account, a role and bucket nobody had named — and a
+careful model answered by correcting the premise without calling a tool, which scored as a critical
+failure in **every** arm, so the arms differed by which run happened to push back.
+
+What the prompts hold to:
+
+- **projection** is asked only of investment accounts, the account types where a yield projection
+  means anything.
+- **connector** and **logs** name the account's **own** institution.
+- **iam** and **objects** name the IAM role and the S3 bucket **in the question**, so the resource the
+  tool needs exists.
+
+Phrasing gives no hint about which tool to call, so tool selection stays the model's job and the
+disclosure strategy is tested rather than bypassed.
+
+---
+
 ## Three differences that are configuration, not detail
 
 **1. The baseline installs no plugin at all.** The vended harness put its `ContextOffloader` in every
@@ -166,6 +229,14 @@ Measured: it completes, but only just, and only on a large-context model. All 60
 14.4M input tokens with a **peak of 204,439 tokens on a single call** — above Haiku 4.5's entire
 window. The baseline is what makes the comparison honest; it is also the arm that decides which models
 this benchmark can run on.
+
+The baseline is the only arm that gets a **session manager**. An agent as it ships persists its
+messages, so the control does too: Strands' `FileSessionManager`, under `SESSIONS_DIR/<run tag>/`. The
+plugin arms run without one, because what they measure is what a strategy changes on top of that
+agent. The session id is **fresh for every agent** — configuration name plus a random suffix — since
+an existing id is *restored*, and a repeat that reloaded the previous replay's history would be
+measured on a context it did not build. `VALIDATION_SESSION=off` removes the manager from the baseline
+as well; the id a run used is recorded in its counters as `session_id`.
 
 **2. The graph is ephemeral.** The community plugin keeps its state in a weakly-keyed map and writes
 nothing to `agent.state`, so there is no load path and no resume to measure. The sibling harness's
@@ -297,10 +368,15 @@ single-strategy figure should be quoted without naming the model it came from.
 weaker model and it retrieves more — which is what flips relevance filtering from a saving to a cost.*
 
 **Relevance filtering costs 21.6% *more* than doing nothing on Haiku and saves 11.2% on Opus.** Every
-`retrieve_context` result becomes a conversation message and then rides along on every later call, so
-a model that retrieves repeatedly pays for the same content many times. Haiku did exactly that and
+`retrieve_context` result became a conversation message and then rode along on every later call, so
+a model that retrieves repeatedly paid for the same content many times. Haiku did exactly that and
 exceeded the window outright on four calls (201,035 tokens against a 200,000 limit); Opus answered
 from the preview more often and never overflowed.
+
+*That is the mechanism as it was measured.* The tool is `retrieve_all_context` and the plugin
+removes its exchanges from the history at the end of the invocation, which removes the re-send this
+figure is made of. The sign on Haiku has not been re-measured since, so `+21.6%` should be quoted as
+history, not as the current cost of the arm.
 
 Peak input on a single call, Opus: baseline 204,439 — above Haiku's entire window, which is why the
 baseline is only runnable here on a model with more than 200k of context; relevance 174,062;
@@ -355,12 +431,20 @@ conversation's own turns, a different job the relevance filter does not do. See
 `_GRAPH_ARTIFACT_TOOL` in [`src/runner.py`](src/runner.py); the run records
 `graph_artifact_tool_dropped` in its counters so two runs stay distinguishable.
 
-**That drop has since been removed.** `RelevanceFilter` now defaults to
-`include_retrieval_tool=False`: it mints no reference and writes no store, so there is no second
-retrieval path to disambiguate from and `expand_artifact` is the only way to read a stored artifact.
-Keeping the drop would have left the combined arm with no artifact-recovery path at all. Every arm
-with the graph now runs `include_artifact_tool=True`, and `graph_artifact_tool_dropped` is recorded
-as `false`. The figures immediately below were measured with the drop in place.
+**That drop has since been removed, and not because the filter's tool went away.** The tool was
+**renamed and narrowed**: `retrieve_context` is `retrieve_all_context`, scoped to the question an
+excerpt cannot answer — one that needs every row — and the excerpt's disclaimer names it, with the
+reference and the budgets to pass. Every `retrieve_context` on this page belongs to a run as it was
+measured; read it as that tool's earlier name and earlier scope.
+
+`include_retrieval_tool` defaults to `True`, and the harness follows it
+(`VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0` turns it off). So both tools are installed: every arm with
+the graph runs `include_artifact_tool=True` and records `graph_artifact_tool_dropped` as `false`. The
+disambiguation moved from the wiring into the tool — a distinct name, a stated scope, and the
+disclaimer telling the model which call to make — and the filter's tool is kept **out of** the
+disclosure arm's `always_available`, so it is loaded from the catalog only when a whole-result question
+comes up. Whether the model still confuses the two is what the `all` arm measures; it is not assumed.
+The figures immediately below were measured with the drop in place.
 
 Re-measured with that one change, same 60 turns:
 
@@ -387,9 +471,10 @@ retrieval tool. Until they do, installing both means de-duplicating the overlap 
   `strands-relevance-filter` 123, `strands-progressive-tool-disclosure` 81. The relevance filter's
   suite was written against its documented contract after the fact, and writing it surfaced two places
   where the docstring and the code disagree, neither of which is a defect in the behaviour:
-  `retrieve_context` documents `ValueError` when a `line_range` "falls outside the content" but an
-  over-large `end` is silently clamped, grep-style; and a truncated preview's closing gap marker can
-  report the source's whole line count even when part of the first line was rendered.
+  `retrieve_context` — since renamed `retrieve_all_context` — documents `ValueError` when a
+  `line_range` "falls outside the content" but an over-large `end` is silently clamped, grep-style;
+  and a truncated preview's closing gap marker can report the source's whole line count even when part
+  of the first line was rendered.
 - **The model does not search; it guesses and gets corrected.** Across 60 turns on Opus the disclosure
   plugin recorded **1 search against 15 premature cancellations** when run alone, and 3 against 14 in
   the full stack: the catalog names a tool, the model calls it straight away with no arguments, the
@@ -412,6 +497,49 @@ retrieval tool. Until they do, installing both means de-duplicating the overlap 
 A single replay is noise-dominated: the agent picks its own tool path and `temperature` cannot be
 pinned on Opus 4.8. Treat the direction and the large moves as signal, and use `--repeats 3` before
 trusting anything under ~20%.
+
+### Correctness fixes since the runs above were measured
+
+Figures recorded before these landed are not comparable to figures recorded after, so a run tag is
+worth keeping next to any number quoted from this page.
+
+Scoring:
+
+- **An empty answer scores 0.** A turn that produced no text — a context-window overflow, say — used
+  to pass every `none_of` check, because nothing forbidden is present in nothing, so the arm that
+  overflowed most collected the most free weight. It scores as a `no-answer` critical failure worth the
+  full weight of the turn's checks.
+- **`C2` and `R2` no longer accept the opposite needle or match inside a word.** `valid` is a
+  substring of `invalid`, so the verdict is matched in phrase form (`is valid`, `a valid`) with the
+  opposite verdict forbidden outright; and the comparison check no longer counts bare `less`/`more`,
+  which matched inside `unless` and `moreover`.
+- **The allocation is derived from the positions**, so `A3` and `R1` agree instead of expecting shares
+  no account holds. There is no `allocation` kind in the filler for the same reason: each account's
+  allocation differs, so no single static string can be its expectation.
+- **The accuracy denominator is averaged like the numerator** across replays, and `turns_scored` per
+  replay is reported alongside it.
+
+Cost and tokens:
+
+- **Cost is priced from the run's own model**, read out of its `meta`, so a `--report-only`
+  re-render bills the model that produced the run rather than whatever the config currently names.
+- **Cache read and write tokens are counted in the token column** and priced at their own rates,
+  instead of being left out of the prompt mass.
+- **Crashed replays are kept out of the averages**, with their errors still surfaced in the summary.
+- **`model_seconds` stops at the provider's stop event**, so it measures the call rather than the
+  consumer.
+
+Counters:
+
+- **`retrievals` counts the real retrieval tools** — the relevance filter's `retrieve_all_context`
+  plus the graph's `expand_artifact`, `expand_card` and `find_context`. It used to key off
+  `retrieve_offloaded_content`, a vended-SDK tool that never exists in this harness, so the column read
+  0 on every run. The memory probes treat the same four, plus `find_tools` and `get_tool_details`, as
+  not re-fetching a domain value.
+- **The graph's rerank is read from `rerank_observed`** — the harness's own metered count of what the
+  matcher sent — rather than inferred.
+- **`neighbors_per_candidate` defaults to `0`** (`VALIDATION_GRAPH_NEIGHBORS` overrides).
+- Report prose no longer says the baseline includes an offloader. It does not; it installs no plugin.
 
 ### Verifying tokens against Bedrock
 

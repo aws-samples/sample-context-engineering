@@ -14,6 +14,23 @@ row (a maximum, a total, a count). Its exchanges are removed from the history wh
 
 No private SDK surface is used: no `ContextManager`, no `_middleware`, no `Stash`.
 
+## Retrieving the rest of a result
+
+`retrieve_all_context` takes the `reference` from the excerpt plus one way of bounding the read.
+Precedence is `line_range`, then `pattern`, then `max_chunks`; `max_tokens` bounds the response in
+every mode.
+
+| Argument | Returns |
+|---|---|
+| `pattern` (regex) | only the matching lines, numbered, with `context_lines` around each (default 5). The cheapest way to aggregate: match the rows to sum and nothing else |
+| `line_range` `{start, end}` | exactly that span, 1-indexed inclusive. The line numbers a `[... N lines omitted ...]` marker reports are the ones to pass here. An `end` past the last line is clamped, `sed`-style |
+| `max_chunks` | the N most relevant chunks, rendered in document order with markers for the lines left out. The ranking is the one the filter already computed, so no second rerank is charged. A value at or above the result's chunk count returns all of it |
+| `max_tokens` | approximate size limit of the response. Alone, it returns the whole content cut to that budget |
+| none of them | the full original content, unbounded |
+
+Without `max_tokens`, a bounded read answers within `max_result_tokens`, so reading content back
+never costs more than keeping the original would have.
+
 ## Install
 
 ```bash
