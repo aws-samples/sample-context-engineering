@@ -751,3 +751,34 @@ def test_a_caller_summarizer_replaces_the_model():
     assert model.summary_calls == []
     assert "reconcile_ledger" in lines
     assert custom.summary_usage == {}
+
+
+def test_a_fold_leaves_no_provider_tool_use_part_behind():
+    """Regression from the first live run: Bedrock carries each call twice, in ``tool_calls`` and as a
+    ``tool_use`` content part. Folding the call must drop both, or Converse rejects the orphan."""
+    from langgraph_progressive_tool_disclosure.middleware import _fold_messages
+
+    load = AIMessage(
+        content=[
+            {"type": "text", "text": "Loading."},
+            {"type": "tool_use", "id": "c2", "name": GET_TOOL_DETAILS_NAME, "input": {"names": ["get_balance"]}},
+        ],
+        id="a2",
+        tool_calls=[{"id": "c2", "name": GET_TOOL_DETAILS_NAME, "args": {"names": ["get_balance"]}}],
+    )
+    history = [
+        HumanMessage(content="first", id="h1"),
+        load,
+        ToolMessage(content="loaded get_balance", tool_call_id="c2", name=GET_TOOL_DETAILS_NAME, id="t2"),
+        AIMessage(content="done", id="a3"),
+        HumanMessage(content="second", id="h4"),
+    ]
+    folded = _fold_messages(history, active={"find_tools"})
+
+    call_ids = set()
+    for message in folded:
+        if isinstance(message, AIMessage):
+            call_ids |= {call["id"] for call in message.tool_calls}
+            call_ids |= {p.get("id") for p in message.content if isinstance(p, dict) and p.get("type") == "tool_use"} if isinstance(message.content, list) else set()
+    answered = {m.tool_call_id for m in folded if isinstance(m, ToolMessage)}
+    assert call_ids <= answered

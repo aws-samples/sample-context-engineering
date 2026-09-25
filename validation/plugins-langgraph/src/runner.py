@@ -219,7 +219,7 @@ too.
 
 
 _GRAPH_STATE_MODULES = ("context_core.graph.state",)
-"""Modules whose dataclasses the checkpointer is told to accept.
+"""Module whose dataclasses the checkpointer is told to accept (the classes, via :func:`_graph_state_types`).
 
 **A future-breakage fix, not cosmetics.** The graph middleware persists its state as
 ``context_core.graph.state`` dataclasses -- ``_GraphState``, ``Card``, ``Link``, ``ToolPair``,
@@ -231,6 +231,25 @@ conversation that starts from scratch every turn.
 Named here rather than inside the middleware package because this is the CHECKPOINTER's allowlist:
 it belongs to whoever constructs the saver, which is this harness.
 """
+
+
+def _graph_state_types() -> tuple[type, ...]:
+    """Every class ``context_core.graph.state`` defines -- what a checkpoint of the graph holds.
+
+    The serde's allowlist is keyed by ``(module, class name)``: a bare module name matches nothing, so
+    passing one makes the allowlist strict AND empty, and every graph type is then blocked on restore
+    (the graph arm would silently restart from scratch each turn). Passing the classes themselves lets
+    the serde normalize them to the right keys.
+    """
+    import inspect as _inspect
+
+    from context_core.graph import state as graph_state
+
+    return tuple(
+        each
+        for each in vars(graph_state).values()
+        if _inspect.isclass(each) and each.__module__ == graph_state.__name__
+    )
 
 
 def _checkpointer() -> InMemorySaver:
@@ -248,7 +267,7 @@ def _checkpointer() -> InMemorySaver:
     try:
         from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-        return InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=_GRAPH_STATE_MODULES))
+        return InMemorySaver(serde=JsonPlusSerializer(allowed_msgpack_modules=_graph_state_types()))
     except Exception:  # noqa: BLE001 - an allowlist is an optimisation, not a requirement
         logger.debug("could not register the graph state modules with the serde", exc_info=True)
         return InMemorySaver()

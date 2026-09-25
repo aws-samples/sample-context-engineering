@@ -93,6 +93,16 @@ def result_block_to_content(result_block: dict[str, Any]) -> Any:
     return parts
 
 
+_CALL_PART_TYPES = frozenset({"tool_use", "tool_call", "function_call"})
+"""Content-part types that restate a tool call ``AIMessage.tool_calls`` already carries."""
+
+
+def _is_call_part(block: dict[str, Any]) -> bool:
+    """Whether a neutral block is a provider's content-part copy of a tool call."""
+    part = block.get("json")
+    return isinstance(part, dict) and part.get("type") in _CALL_PART_TYPES
+
+
 def to_neutral(msg: BaseMessage) -> NeutralMessage:
     """Convert one LangChain message to a neutral message dict."""
     role = _ROLE_BY_TYPE.get(msg.type, msg.type)
@@ -103,6 +113,12 @@ def to_neutral(msg: BaseMessage) -> NeutralMessage:
     content = _content_to_text_blocks(msg.content)
 
     if isinstance(msg, AIMessage):
+        # A provider such as Bedrock also carries each call as a ``tool_use`` part of ``content``.
+        # ``tool_calls`` is the canonical form and becomes the ``toolUse`` block below, so the content
+        # copy is dropped: kept, it survives as an opaque ``json`` block when a core removes the
+        # ``toolUse`` (the disclosure fold does), and the provider then receives a toolUse with no
+        # toolResult.
+        content = [block for block in content if not _is_call_part(block)]
         for call in msg.tool_calls or []:
             content.append(
                 {

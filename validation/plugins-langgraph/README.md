@@ -1,7 +1,7 @@
 # LangGraph A/B/D validation harness
 
 Measures the same three context-engineering strategies as
-[`validation/community-plugin-A-B-D`](../../../validation/community-plugin-A-B-D), on the same
+[`validation/community-plugin-A-B-D`](../community-plugin-A-B-D), on the same
 script, against the same deterministic ground truth — but driving a LangChain v1 `create_agent`
 graph with `AgentMiddleware` instead of a Strands `Agent` with plugins.
 
@@ -23,10 +23,10 @@ it constructs every arm, prints the middleware nesting and the tool-suite size, 
 cd validation/plugins-langgraph
 
 # free: build every arm, invoke nothing
-../../../.venv/bin/python -m src.run --dry-run
+../../.venv/bin/python -m src.run --dry-run
 
 # free: re-render a recorded run from its JSON
-../../../.venv/bin/python -m src.run --report-only results/run-lg01.json
+../../.venv/bin/python -m src.run --report-only results/run-lg01.json
 ```
 
 The live benchmark needs credentials and **two** flags, neither with a short form:
@@ -35,7 +35,7 @@ The live benchmark needs credentials and **two** flags, neither with a short for
 isengardcli assume 045096474033        # us-east-1
 export AWS_REGION=us-east-1
 
-../../../.venv/bin/python -m src.run \
+../../.venv/bin/python -m src.run \
     --live --i-understand-this-spends-money \
     --total-turns 60 --tag lg01
 ```
@@ -54,7 +54,7 @@ Every figure the table prints was measured during the run and written into
 credentials:
 
 ```bash
-../../../.venv/bin/python -m src.report results/run-lg01.json
+../../.venv/bin/python -m src.report results/run-lg01.json
 ```
 
 Correcting a rate is therefore an edit to `config.MODEL_PRICING` plus a re-render, never a re-run.
