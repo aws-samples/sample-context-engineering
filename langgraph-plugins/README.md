@@ -65,7 +65,17 @@ LangChain does **not** bridge a sync hook to an async run, or an async hook to a
 `NotImplementedError`). Every hook in the three packages therefore ships both twins, so the combined
 stack runs under `invoke` and under `ainvoke`.
 
-## Install (from a clone of this repository)
+## Install
+
+From PyPI:
+
+```bash
+pip install langgraph-relevance-filter langgraph-progressive-tool-disclosure langgraph-context-graph
+```
+
+Each binding pulls in the shared core, published as `agent-context-core` (import name `context_core`).
+
+From a clone of this repository:
 
 ```bash
 uv venv --python 3.12 .venv
