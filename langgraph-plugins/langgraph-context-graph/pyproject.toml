@@ -1,19 +1,41 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "langgraph-context-graph"
 version = "0.1.0"
-description = "LangGraph binding (Practice D): short-term memory as a graph of Cards via a create_agent middleware over context-core."
+description = "LangGraph binding (Practice D): short-term memory as a graph of Cards via a create_agent middleware over agent-context-core."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cristiano Scandura" }]
+keywords = ["langgraph", "langchain", "middleware", "llm", "agents", "context-engineering", "memory"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
-    "context-core",
+    "agent-context-core>=0.1.0,<0.2",
     "langchain>=1.0,<2",
     "langgraph>=1.0,<2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+Source = "https://github.com/aws-samples/sample-context-engineering/tree/main/langgraph-plugins/langgraph-context-graph"
+Issues = "https://github.com/aws-samples/sample-context-engineering/issues"
 
 [project.optional-dependencies]
 test = [
@@ -23,6 +45,9 @@ test = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/langgraph_context_graph"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/langgraph_context_graph", "tests", "README.md", "LICENSE", "NOTICE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
