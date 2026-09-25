@@ -686,7 +686,10 @@ class ContextGraph(Plugin):
         correct when ``include_artifact_tool`` is false or a tool is renamed::
 
             graph = ContextGraph(include_artifact_tool=False)
-            disclosure = ProgressiveToolDisclosure(always_available=[*graph.retrieval_tool_names, "retrieve_context"])
+            disclosure = ProgressiveToolDisclosure(always_available=[*graph.retrieval_tool_names])
+
+        ``RelevanceFilter``'s ``retrieve_all_context`` is deliberately NOT listed: it is for the rare question that
+        needs a whole result, so it is left in the catalog and loaded only when one comes up.
 
         Read at call time rather than fixed at construction, so it reflects a de-registration that has already happened.
         Reading it BEFORE the plugin is wired to an agent reports the full set, since the exclusion is applied in

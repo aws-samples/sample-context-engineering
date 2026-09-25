@@ -123,9 +123,9 @@ def test_the_names_are_what_the_disclosure_wiring_needs() -> None:
     plugin = ContextGraph(matcher=_Matcher(), include_artifact_tool=False)
     registered(plugin)
 
-    always_available = [*plugin.retrieval_tool_names, "retrieve_context"]
+    always_available = [*plugin.retrieval_tool_names]
 
-    assert always_available == ["expand_card", "find_context", "retrieve_context"]
+    assert always_available == ["expand_card", "find_context"]
 
 
 def test_the_names_are_read_at_call_time_not_fixed_at_construction() -> None:
