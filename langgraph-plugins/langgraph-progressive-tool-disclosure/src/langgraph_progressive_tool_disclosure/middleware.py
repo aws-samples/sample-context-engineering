@@ -761,10 +761,16 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
         self._ensure_index(specs)
 
         messages = list(request.messages or ())
-        cycle = _cycle(messages)
+        # The cycle and the renewals are read off the PERSISTED history, not off ``request.messages``: a
+        # middleware wrapping this one (the context graph) may have projected the call's messages down,
+        # and counting cycles on a projection puts the current cycle behind the one ``get_tool_details``
+        # recorded from state -- the load then never becomes callable and the model reloads forever.
+        # The Strands plugin reads ``event_loop_metrics.cycle_count``, which no projection touches either.
+        history = list((request.state or {}).get("messages") or messages)
+        cycle = _cycle(history)
         loaded = request.state.get("loaded_tools") or {}
         active = _active_names(
-            _last_used(messages, loaded, cycle), cycle, self._ttl_cycles, self._always_available, catalog_names
+            _last_used(history, loaded, cycle), cycle, self._ttl_cycles, self._always_available, catalog_names
         )
 
         overrides: dict[str, Any] = {

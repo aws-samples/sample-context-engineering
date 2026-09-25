@@ -782,3 +782,19 @@ def test_a_fold_leaves_no_provider_tool_use_part_behind():
             call_ids |= {p.get("id") for p in message.content if isinstance(p, dict) and p.get("type") == "tool_use"} if isinstance(message.content, list) else set()
     answered = {m.tool_call_id for m in folded if isinstance(m, ToolMessage)}
     assert call_ids <= answered
+
+
+def test_a_projection_by_an_outer_middleware_does_not_reset_the_cycle():
+    """Regression from the live run: the context graph wraps this middleware and projects the call's
+    messages down. The cycle must come from the persisted history, or a tool loaded on cycle 9 (read
+    from state) is never callable on a projected cycle 4 and the model reloads it forever."""
+    middleware = ProgressiveToolDisclosureMiddleware(ttl_cycles=3)
+    full = _history(10)
+    projected = [full[0], *full[-4:]]  # an outer middleware collapsed the older turns
+    request = make_request(
+        tools=bound_tools(middleware),
+        messages=projected,
+        state={"messages": full, "loaded_tools": {"get_balance": 9}},
+    )
+    seen, _ = run(middleware, request)
+    assert "get_balance" in names_of(seen.tools)
