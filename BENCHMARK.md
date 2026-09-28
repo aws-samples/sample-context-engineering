@@ -67,13 +67,13 @@ history, the graph on a history that already exists.**
 | A | `preview_tokens` | *regime* — 800 / 2,000 | `VALIDATION_PREVIEW_TOKENS` |
 | A | `relevance_threshold` | 0.02 | `VALIDATION_RELEVANCE_THRESHOLD` |
 | A | `include_retrieval_tool` | **True** | `VALIDATION_RELEVANCE_RETRIEVAL_TOOL` |
-| B | `catalog_tokens` / `ttl_cycles` / `top_k` | 20 / 5 / 4 | `VALIDATION_CATALOG_TOKENS`, … |
-| B | `catalog_in_system_prompt` | False | `VALIDATION_CATALOG_IN_SYSTEM_PROMPT` |
+| B | `catalog_chars` / `ttl_cycles` / `top_k` | 80 / 3 / 4 | `VALIDATION_CATALOG_CHARS`, `VALIDATION_TTL_CYCLES`, `VALIDATION_TOP_K` |
 | D | `expand_threshold` / `collapse_floor` / `link_threshold` | 0.62 / 0.45 / 0.50 | `VALIDATION_GRAPH_EXPAND`, … |
 | D | `description_tokens` | *regime* — 100 / 250 | `VALIDATION_GRAPH_DESCRIPTION_TOKENS` |
 | D | `body_budget` | **40,000** | `VALIDATION_GRAPH_BODY_BUDGET` |
 | D | `max_retrieval_cycles` | *regime* — 8 / 4 | `VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES` |
-| D | `reuse_ttl_cycles` / `tags_per_card` / `neighbors_per_candidate` / `min_cards` | 5 / 5 / 3 / 3 | `VALIDATION_GRAPH_REUSE_TTL`, … |
+| D | `reuse_ttl_cycles` / `tags_per_card` / `min_cards` | 5 / 5 / 3 | `VALIDATION_GRAPH_REUSE_TTL`, `VALIDATION_GRAPH_TAGS`, `VALIDATION_MIN_CARDS` |
+| D | `neighbors_per_candidate` | **0** — similar-Card edge off | `VALIDATION_GRAPH_NEIGHBORS` |
 | D | `include_artifact_tool` | True, every arm | — |
 
 Two values that look wrong and are not. `relevance_threshold=0.02` is a position in a distribution:
