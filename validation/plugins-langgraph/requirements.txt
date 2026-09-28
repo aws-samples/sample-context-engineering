@@ -1,0 +1,30 @@
+# The three strategies under test are LANGGRAPH MIDDLEWARE: standalone packages attaching to
+# LangChain v1's AgentMiddleware surface, installed alongside an unmodified langchain / langgraph.
+# This is the difference from validation/community-plugin-A-B-D, which installs the Strands plugin
+# form of the same three strategies.
+#
+# Installed editable from the repository so a run measures the code in this checkout, which is the
+# code a reader can read. The paths are relative to this file's directory.
+-e ../../langgraph-relevance-filter
+-e ../../langgraph-progressive-tool-disclosure
+-e ../../langgraph-context-graph
+
+# The framework-neutral core the three bindings share. Pulled in transitively by each of them; named
+# here so the resolved version is visible in one place rather than inferred from three.
+-e ../../../context-core
+
+# The unmodified framework. The three packages each pin these ranges themselves; restated for the
+# same reason.
+langchain>=1.0,<2
+langgraph>=1.0,<2
+
+# The Bedrock chat model. ChatBedrockConverse rather than init_chat_model("bedrock:…") because the
+# harness passes its own boto3 client, so log tagging, timeouts and credential resolution are shared
+# with the reranker and the embedder.
+langchain-aws>=1.7,<2
+
+# The web tool and the harness's own dependencies. Pinned to the versions the Strands harness uses,
+# so the cached corpus and the rendered pages are byte-identical between the two.
+playwright==1.55.0
+html2text==2024.2.26
+boto3==1.40.0
