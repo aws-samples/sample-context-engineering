@@ -1,7 +1,7 @@
 # The three strategies under test are COMMUNITY PLUGINS: standalone packages that attach to the
-# SDK's extension surface, installed alongside an unmodified strands-agents from PyPI. This is the
-# difference from validation/01-designA-B-D, which installs a forked SDK and uses its vended
-# plugins.
+# SDK's extension surface, installed alongside an unmodified strands-agents from PyPI. No SDK
+# patch is involved, but the plugins couple to a private middleware seam of the SDK, so stay
+# within the supported strands-agents range below.
 #
 # Installed editable from the repository so a run measures the code in this checkout, which is the
 # code a reader can read. The paths are relative to this file's directory; run.sh cd's there first.

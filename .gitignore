@@ -16,6 +16,6 @@ venv/
 tmp/
 .kiro/
 
-# Local backup of retired material (the forked-SDK path, discarded worktree patches). Kept on disk, never
+# Local backup of retired material and discarded worktree patches. Kept on disk, never
 # versioned.
 bkp/

@@ -806,7 +806,7 @@ def filler_schema_tokens() -> int:
 
 
 _CORE_SCHEMA_TOKENS = 4_000
-"""Measured contribution of the core tools plus the vended retrieval and search tools.
+"""Measured contribution of the core tools plus the plugin-provided retrieval and search tools.
 
 Subtracted from the budget so the filler targets only the remainder and the total lands on
 TARGET_SCHEMA_TOKENS rather than overshooting it.

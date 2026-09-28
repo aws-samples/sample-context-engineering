@@ -4,35 +4,35 @@ Everything that touches AWS or that a run depends on is declared here, so a run 
 reproducible from a single file. Model ids were verified against the target account with
 ``bedrock list-inference-profiles`` and ``bedrock list-foundation-models``.
 
-This harness is the sibling of ``validation/01-designA-B-D``, which measures the same three
-strategies as **vended plugins of a forked SDK**. Here they are the three **community
-packages** installed alongside an unmodified ``strands-agents``:
+This harness measures the three strategies as **community packages**, installed alongside an
+unmodified ``strands-agents`` from PyPI. The plugins attach through the SDK's own extension
+surface, so no SDK patch and no pinned SDK commit is involved:
 
-======================  ==========================================  ===============================
-Strategy                Vended (01-designA-B-D)                     Community (here)
-======================  ==========================================  ===============================
-Relevance filtering     ``ContextManager`` + ``Offload.relevance``   ``strands_relevance_filter.RelevanceFilter``
-Progressive disclosure  ``strands.vended_plugins…``                  ``strands_progressive_tool_disclosure…``
-Context graph           ``ContextStrategy(strategy="graph")``        ``strands_context_graph.ContextGraph``
-======================  ==========================================  ===============================
+======================  ==============================================================
+Strategy                Package entry point
+======================  ==============================================================
+Relevance filtering     ``strands_relevance_filter.RelevanceFilter``
+Progressive disclosure  ``strands_progressive_tool_disclosure.ProgressiveToolDisclosure``
+Context graph           ``strands_context_graph.ContextGraph``
+======================  ==============================================================
 
-Three consequences of that swap are configuration, not detail, and are recorded here because
+Three properties of that setup are configuration, not detail, and are recorded here because
 they change what a run means:
 
-1. **The baseline installs no plugin at all.** The vended harness put its offloader in every
-   configuration, the baseline included, so nothing could overflow the window. Here the
-   baseline is the unmodified agent: the 60k-250k character tool payloads enter the history
-   whole. That is the honest control -- it measures the cost of doing nothing -- and it is
-   expected to hit the model's context limit on the heavier lines. A turn that overflows is
-   recorded as an error and reported as such, which is a result rather than a harness failure.
-2. **The graph is ephemeral.** The community plugin keeps its state in a weakly-keyed map and
-   writes nothing to ``agent.state``, so there is no load path and therefore no resume to
-   measure. The vended harness's ``--resume-at`` and its ``persist`` variants have no
-   counterpart and are gone.
-3. **The graph publishes no per-turn telemetry.** The vended plugin emitted one log record per
-   turn carrying the resolution ladder, which the vended harness parsed into curves. The
-   community plugin emits failures only, so the evidence here is read off the plugin's
-   end-of-run state instead. The per-turn ladder curves are unavailable.
+1. **The baseline installs no plugin at all.** Nothing keeps the payloads out of the window: the
+   60k-250k character tool payloads enter the history whole. That is the honest control -- it
+   measures the cost of doing nothing -- and it is expected to hit the model's context limit on
+   the heavier lines. A turn that overflows is recorded as an error and reported as such, which
+   is a result rather than a harness failure. Read ``Answered`` before any other column on such
+   a run.
+2. **The graph is ephemeral.** The plugin keeps its state in a weakly-keyed map and writes
+   nothing to ``agent.state``, so there is no load path and therefore no resume to measure: the
+   harness has no ``--resume-at`` and no ``persist`` variants. A fresh process rebuilds the graph
+   by one scan over the history.
+3. **The graph publishes no per-turn telemetry.** The plugin emits failures only, so the
+   evidence here is read off the plugin's end-of-run state instead (``dialogue_at_end``,
+   ``evidence_at_end``, Cards, Links). Per-turn resolution-ladder curves are unavailable,
+   because nothing records the ladder while the run is in flight.
 """
 
 from __future__ import annotations
@@ -536,7 +536,7 @@ rung when the remaining budget cannot fit it (``scoring.py:382``: ``remaining is
 remaining``), so with ``None`` every Card at or above ``expand_threshold`` travels at full content however
 many of them there are. ``expand_threshold`` cannot substitute for the ceiling -- it is a per-Card
 classifier and knows nothing about the total, so the call grows linearly with the conversation and is
-bounded by nothing. The vended harness carries a ``gr-budget-40k`` variant for exactly this reason, "a
+bounded by nothing. An earlier harness carried a ``gr-budget-40k`` variant for exactly this reason, "a
 ceiling that actually binds, so the budget-driven step down is exercised", and the combined arm was the
 one running without it. A Card that does not fit steps down ONE rung, to Description, never to Title, so
 the ceiling binding costs a Description on the lowest-Note Card of the turn rather than a dropped Card.

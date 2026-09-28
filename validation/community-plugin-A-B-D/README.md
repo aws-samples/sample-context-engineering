@@ -96,7 +96,7 @@ The last line above is optional but recommended. Bedrock's model invocation log 
 check on the token numbers this harness reports; `src/run.py` reads its configuration during preflight
 and warns when a run will not be verifiable afterwards.
 
-## The dependency: three packages, no SDK fork
+## The dependency: three packages, unmodified SDK
 
 `requirements.txt` installs the three community packages **editable from this repository**, so a run
 measures the code a reader can read, plus the public SDK:
@@ -110,8 +110,7 @@ strands-agents>=1.44.0,<2.0.0
 
 Verified: all three import and run against **unmodified `strands-agents` 1.56.0** from PyPI. The
 private middleware seam they couple to (`strands._middleware.stages.InvokeModelStage`,
-`strands.injection._message_injection`) is present there — which is what makes "community plugin"
-a real claim rather than a repackaging of the fork.
+`strands.injection._message_injection`) is present there.
 
 ---
 
@@ -213,9 +212,8 @@ disclosure strategy is tested rather than bypassed.
 
 ## Three differences that are configuration, not detail
 
-**1. The baseline installs no plugin at all.** The vended harness put its `ContextOffloader` in every
-configuration, the baseline included, so nothing could overflow the window. Here the control is the
-unmodified agent and every payload enters the history whole.
+**1. The baseline installs no plugin at all.** The control is the unmodified agent, and every payload
+enters the history whole.
 
 Measured: it completes, but only just, and only on a large-context model. All 60 turns finished at
 14.4M input tokens with a **peak of 204,439 tokens on a single call** — above Haiku 4.5's entire
@@ -231,13 +229,12 @@ measured on a context it did not build. `VALIDATION_SESSION=off` removes the man
 as well; the id a run used is recorded in its counters as `session_id`.
 
 **2. The graph is ephemeral.** The community plugin keeps its state in a weakly-keyed map and writes
-nothing to `agent.state`, so there is no load path and no resume to measure. The sibling harness's
-`--resume-at` and its `persist` variants have no counterpart here and are gone.
+nothing to `agent.state`, so there is no load path and no resume to measure: the harness has no
+`--resume-at` and no `persist` variants.
 
-**3. The graph publishes no per-turn telemetry.** The vended plugin emitted one log record per turn
-carrying the resolution ladder, which the sibling harness parses into curves. The community package
-logs failures only, so the graph's evidence here is read off its end-of-run state
-(`dialogue_at_end`, `evidence_at_end`, Cards, Links) and the per-turn ladder curves are unavailable.
+**3. The graph publishes no per-turn telemetry.** The community package logs failures only, so the
+graph's evidence here is read off its end-of-run state (`dialogue_at_end`, `evidence_at_end`, Cards,
+Links) and per-turn resolution-ladder curves are unavailable.
 
 ---
 
@@ -399,9 +396,8 @@ structural, and it belongs to the packaging rather than to the design:
 - **Nothing bridges the two.** The graph's README is explicit that its bridge to another plugin's
   stash is built entirely on private symbols and degrades to "answers as prose naming the miss".
 
-The vended stack never hit this, because relevance lived *inside* the `ContextManager` whose stash
-the graph bridged to — one store, one retrieval path. Split into two packages, there are two
-plausible tools for one job and only one of them can resolve the reference.
+With two packages there are two plausible tools for one job, and only one of them can resolve the
+reference.
 
 **The fix at the time, in the harness and not in the plugins:** when the relevance filter was
 installed, drop the graph's `expand_artifact` tool, leaving exactly one artifact-retrieval path. Its
@@ -512,7 +508,8 @@ Counters:
 
 - **`retrievals` counts the real retrieval tools** — the relevance filter's `retrieve_all_context`
   plus the graph's `expand_artifact`, `expand_card` and `find_context`. It used to key off
-  `retrieve_offloaded_content`, a vended-SDK tool that never exists in this harness, so the column read
+  `retrieve_offloaded_content`, a tool from an earlier SDK integration that never exists in this
+  harness, so the column read
   0 on every run. The memory probes treat the same four, plus `find_tools` and `get_tool_details`, as
   not re-fetching a domain value.
 - **The graph's rerank is read from `rerank_observed`** — the harness's own metered count of what the
