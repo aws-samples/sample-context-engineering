@@ -96,7 +96,8 @@ def _merge_accuracy(items: list[dict]) -> dict:
         ),
         "material_correctness": round(sum(i["material_correctness"] for i in items) / len(items), 4),
         "turns_materially_correct": round(sum(i["turns_materially_correct"] for i in items) / len(items), 2),
-        "turns_scored": items[0]["turns_scored"],
+        "turns_scored": round(sum(i["turns_scored"] for i in items) / len(items), 2),
+        "turns_scored_per_replay": [i["turns_scored"] for i in items],
         "critical_failures_total": round(sum(i["critical_failures_total"] for i in items) / len(items), 2),
         "per_turn": metrics._mean_per_turn_accuracy(items),
     }
@@ -297,6 +298,9 @@ async def _main_async(args: argparse.Namespace) -> int:
         # subtracts the requested output cap from the context window, so this figure decides how
         # much history fits before a call overflows.
         "max_output_tokens": config.MAX_OUTPUT_TOKENS,
+        # "file" = the baseline agent persisted its messages through Strands' FileSessionManager, with a
+        # fresh session id so nothing was restored; the plugin arms ran without one. "off" = none at all.
+        "session_manager": config.SESSION_MANAGER,
     }
     payload = {}
     for name, collectors in results_by_name.items():

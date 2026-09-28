@@ -128,12 +128,12 @@ recorded JSON instead of needing another run.
 | [Claude Opus 5](#42-claude-opus-5) | 1,000,000 | explicit | cache off, cache on | yes | all three |
 | [Claude Fable 5](#43-claude-fable-5) | 1,000,000 | explicit | cache off, cache on | yes | all three |
 | [GPT-6 Astra](#44-gpt-6-astra) | 1,050,000 | implicit | implicit cache | yes | relevance |
-| [GPT-5.6 Sol](#45-gpt-56-sol) | 1,000,000 | implicit | implicit cache | yes | baseline |
-| [Claude Haiku 4.5](#46-claude-haiku-45) | 200,000 | explicit | cache off | yes | all three |
+| [GPT-5.6 Sol](#45-gpt-56-sol) | 1,000,000 | implicit | implicit cache | yes | relevance |
+| [Claude Haiku 4.5](#46-claude-haiku-45) | 200,000 | explicit | cache off | **no** | all three |
 | [GLM 5](#47-glm-5) | 200,000 | none | one | **no** | all three |
 | [GLM 4.7](#48-glm-47) | 202,752 | none | one | **no** | all three |
 | [GLM 4.7 Flash](#49-glm-47-flash) | 202,752 | none | one | **no** | all three |
-| [Qwen3 Next 80B](#410-qwen3-next-80b) | 256,000 | none | one | **no** | all three |
+| [Qwen3 Next 80B](#410-qwen3-next-80b) | 256,000 | none | one | **no** | relevance |
 | [Nemotron Nano 9B](#411-nemotron-nano-9b) | 128,000 | none | one | **no** | all three |
 
 Every run: 60 turns / 30 scored · 1 replay · `max_output 4,096` · rerank `cohere.rerank-v3-5:0` · embed
@@ -148,21 +148,21 @@ $6.25/5m) · $5.00 in / $25.00 out per Mtok · **large** regime (preview 800, gr
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7s | $72.50 | — |
-| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8s | $48.10 | −33.7% |
-| Relevance Filtering only | 12,766,237 | −11.2% | **96.9%** | **29/30** | 11.7s | $64.45 | −11.1% |
-| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8s | $52.43 | −27.7% |
-| **All three combined** | **2,569,888** | **−82.1%** | 96.1% | 28/30 | **8.7s** | **$13.36** | −81.6% |
+| Baseline (no plugin) | 17,897,954 | — | 97.6% | 29/30 | 11.0s | $90.06 | — |
+| Progressive Tool Disclosure only | 6,738,122 | −62.4% | 92.9% | 26/30 | **8.1s** | $34.24 | −62.0% |
+| Relevance Filtering only | 12,432,470 | −30.5% | 95.3% | 27/30 | 9.8s | $62.77 | −30.3% |
+| Context Graph only | 10,511,391 | −41.3% | 94.5% | 27/30 | 10.0s | $53.13 | −41.0% |
+| **All three combined** | **2,877,396** | **−83.9%** | **99.2%** | **30/30** | 10.0s | **$15.09** | −83.2% |
 
 **Caching on.**
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
-|  Baseline (no plugin) | 174 | 14,842,278 | 215,531 | **68.9** | 15,057,983 | — | 94.5% | 27/30 | **8.0s** | **$9.49** | — |
-| Progressive Tool Disclosure only | 202 | 5,578,574 | 3,679,071 | 1.5 | 9,257,847 | −38.4% | 94.5% | 27/30 | 10.0s | $26.65 | +181.0% |
-| Relevance Filtering only | 204 | 15,701,512 | 211,522 | **74.2** | 15,913,238 | +5.7% | 94.5% | 27/30 | 10.2s | $10.10 | +6.5% |
-| Context Graph only | 576,260 | 8,205,206 | 1,521,353 | 5.4 | 10,302,819 | −31.4% | **99.2%** | **29/30** | 9.2s | $17.29 | +82.3% |
-| **All three combined** | 328,419 | 1,067,190 | 2,253,984 | **0.5** | 3,649,593 | −75.5% | 94.5% | 27/30 | 10.4s | $17.14 | +80.7% |
+| Baseline (no plugin) | 184 | 19,276,592 | 279,517 | **69.0** | 19,556,293 | — | **98.4%** | **29/30** | 8.1s | $12.07 | — |
+| Progressive Tool Disclosure only | 200 | 5,602,888 | 2,935,685 | 1.9 | 8,538,773 | −56.3% | 92.9% | 26/30 | 8.6s | $22.04 | +82.6% |
+| Relevance Filtering only | 186 | 11,742,023 | 183,017 | 64.2 | 11,925,226 | −39.0% | **98.4%** | **29/30** | **7.8s** | **$7.72** | −36.0% |
+| Context Graph only | 241,949 | 8,752,948 | 1,586,320 | 5.5 | 10,581,217 | −45.9% | 95.3% | 26/30 | 9.9s | $16.34 | +35.4% |
+| **All three combined** | 322,673 | 823,873 | 1,523,424 | **0.5** | 2,669,970 | −86.3% | 97.6% | **29/30** | 9.8s | $12.50 | +3.5% |
 
 ### 4.2 Claude Opus 5
 
@@ -173,21 +173,21 @@ $6.25/5m) · $5.00 in / $25.00 out per Mtok · **large** regime.
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 19,778,235 | — | 89.8% | 24/30 | 24.3s | $100.44 | — |
-| Progressive Tool Disclosure only ⚠ | 647,368 | −96.7% | 31.5% | 1/30 | 1.8s | $3.25 | −96.8% |
-| Relevance Filtering only | 18,106,860 | −8.5% | 96.9% | 28/30 | 21.4s | $91.89 | −8.5% |
-| Context Graph only | 13,527,548 | −31.6% | 93.7% | 25/30 | 26.0s | $69.54 | −30.8% |
-| **All three combined** | **5,565,805** | **−71.9%** | **100.0%** | **30/30** | 17.9s | **$29.17** | −71.0% |
+| Baseline (no plugin) | 18,817,365 | — | **97.6%** | **28/30** | 20.7s | $95.34 | — |
+| Progressive Tool Disclosure only | 19,040,438 | +1.2% | 92.9% | 26/30 | 17.8s | $96.17 | +0.9% |
+| Relevance Filtering only | 14,819,944 | −21.2% | 96.9% | **28/30** | 17.7s | $75.24 | −21.1% |
+| Context Graph only | 11,345,387 | −39.7% | 95.3% | 26/30 | 19.8s | $58.12 | −39.0% |
+| **All three combined** | **4,727,088** | **−74.9%** | 96.9% | 27/30 | **17.2s** | **$24.94** | −73.8% |
 
 **Caching on.**
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 196 | 26,321,602 | 285,328 | **92.3** | 26,607,126 | — | 92.1% | 24/30 | 23.2s | $17.16 | — |
-| Progressive Tool Disclosure only | 218 | 10,217,732 | 6,296,888 | 1.6 | 16,514,838 | −37.9% | 92.1% | 26/30 | 18.7s | $46.07 | +168.5% |
-| Relevance Filtering only | 200 | 17,343,538 | 237,313 | **73.1** | 17,581,051 | −33.9% | 92.9% | 25/30 | 19.7s | **$12.06** | −29.7% |
-| Context Graph only | 664,269 | 9,508,166 | 2,898,117 | 3.3 | 13,070,552 | −50.7% | 94.5% | 27/30 | 22.0s | $28.34 | +65.2% |
-| **All three combined** | 363,512 | 1,526,446 | 3,470,771 | **0.4** | 5,360,729 | −79.6% | **95.3%** | 27/30 | 18.3s | $25.98 | +51.4% |
+| Baseline (no plugin) | 192 | 20,305,665 | 281,010 | **72.3** | 20,586,867 | — | **97.6%** | 28/30 | 20.5s | $13.91 | — |
+| Progressive Tool Disclosure only | 218 | 10,482,326 | 7,023,275 | 1.5 | 17,505,819 | −15.0% | 91.3% | 25/30 | **13.9s** | $50.45 | +262.7% |
+| Relevance Filtering only | 216 | 15,734,826 | 255,567 | 61.6 | 15,990,609 | −22.3% | 96.1% | 28/30 | 16.4s | **$11.01** | −20.8% |
+| Context Graph only | 276,386 | 9,489,827 | 2,420,670 | 3.9 | 12,186,883 | −40.8% | 93.7% | 25/30 | 19.4s | $23.13 | +66.3% |
+| **All three combined** | 353,942 | 1,118,910 | 2,045,680 | **0.5** | 3,518,532 | −82.9% | **97.6%** | **29/30** | 16.9s | $16.64 | +19.6% |
 
 ### 4.3 Claude Fable 5
 
@@ -198,21 +198,21 @@ $12.50/5m) · **$10.00 in / $50.00 out** per Mtok, the most expensive model here
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 21,620,903 | — | **100.0%** | **30/30** | 20.5s | $217.86 | — |
-| Progressive Tool Disclosure only | 14,284,626 | −33.9% | 97.6% | 29/30 | 20.5s | $144.58 | −33.6% |
-| Relevance Filtering only | 17,263,244 | −20.2% | 97.6% | 29/30 | 18.1s | $174.08 | −20.1% |
-| Context Graph only | 12,645,472 | −41.5% | 96.1% | 28/30 | 21.0s | $128.54 | −41.0% |
-| **All three combined** | **5,311,719** | **−75.4%** | 96.9% | 28/30 | 22.1s | **$55.32** | −74.6% |
+| Baseline (no plugin) | 19,172,194 | — | 98.4% | 29/30 | 17.7s | $193.09 | — |
+| Progressive Tool Disclosure only | 22,512,071 | +17.4% | 98.4% | 29/30 | 21.9s | $226.88 | +17.5% |
+| Relevance Filtering only | 14,444,452 | −24.7% | **99.2%** | **30/30** | **16.1s** | $145.76 | −24.5% |
+| Context Graph only | 12,591,615 | −34.3% | 94.5% | 27/30 | 20.1s | $127.83 | −33.8% |
+| **All three combined** | **4,461,881** | **−76.7%** | 98.4% | 29/30 | 22.7s | **$47.01** | −75.7% |
 
 **Caching on.**
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 190 | 18,254,571 | 250,858 | **72.8** | 18,505,619 | — | 99.2% | **30/30** | 16.1s | $23.38 | — |
-| Progressive Tool Disclosure only | 248 | 8,001,876 | 6,708,508 | 1.2 | 14,710,632 | −20.5% | 98.4% | 29/30 | 19.3s | $93.96 | +301.8% |
-| Relevance Filtering only | 212 | 17,687,881 | 229,005 | **77.2** | 17,917,098 | −3.2% | 98.4% | 29/30 | **15.7s** | **$22.48** | −3.9% |
-| Context Graph only | 812,339 | 10,368,477 | 2,528,084 | 4.1 | 13,708,900 | −25.7% | 98.4% | 29/30 | 21.7s | $53.19 | +127.5% |
-| **All three combined** | 360,961 | 1,291,253 | 3,567,890 | **0.4** | 5,220,104 | −71.5% | 96.1% | 27/30 | 23.3s | $52.58 | +124.9% |
+| Baseline (no plugin) | 198 | 19,700,362 | 271,431 | **72.6** | 19,971,991 | — | 97.6% | 29/30 | **14.2s** | $24.79 | — |
+| Progressive Tool Disclosure only | 252 | 10,078,601 | 10,177,268 | 1.0 | 20,256,121 | +1.4% | 97.6% | 29/30 | 18.2s | $139.47 | +462.5% |
+| Relevance Filtering only | 204 | 14,013,780 | 223,409 | 62.7 | 14,237,393 | −28.7% | 99.2% | **30/30** | 14.4s | **$18.67** | −24.7% |
+| Context Graph only | 297,203 | 10,049,572 | 1,836,828 | 5.5 | 12,183,603 | −39.0% | **100.0%** | **30/30** | 17.7s | $38.23 | +54.2% |
+| **All three combined** | 409,642 | 1,790,760 | 2,958,854 | **0.6** | 5,159,256 | −74.2% | 97.6% | 29/30 | 24.8s | $46.40 | +87.1% |
 
 ### 4.4 GPT-6 Astra
 
@@ -222,11 +222,11 @@ served from `us-west-2` while called from `us-east-1`.
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 228 | 15,270,589 | 213,127 | **71.7** | 15,483,944 | — | 92.9% | 26/30 | 10.4s | $21.20 | — |
-| Progressive Tool Disclosure only | 252 | 7,810,974 | 5,534,968 | 1.4 | 13,346,194 | −13.8% | 92.9% | 26/30 | 10.3s | $86.18 | +306.5% |
-| Relevance Filtering only | 222 | 12,069,886 | 185,578 | **65.0** | 12,255,686 | −20.8% | 88.2% | 23/30 | 10.2s | **$17.33** | −18.3% |
-| Context Graph only | 252 | 1,473,390 | 8,536,045 | **0.2** | 10,009,687 | −35.2% | 91.3% | 25/30 | 10.9s | $120.59 | +468.8% |
-| **All three combined** | 292 | 17,588 | 4,051,747 | **0.0** | 4,069,627 | −73.5% | **94.5%** | **27/30** | **9.2s** | $57.38 | +170.7% |
+| Baseline (no plugin) | 202 | 10,766,018 | 164,828 | **65.3** | 10,931,048 | — | 96.1% | 28/30 | 6.9s | $15.25 | — |
+| Progressive Tool Disclosure only | 328 | 7,644,124 | 4,619,239 | 1.7 | 12,263,691 | +12.2% | **97.6%** | **29/30** | 9.2s | $73.50 | +381.9% |
+| Relevance Filtering only | 212 | 9,831,881 | 157,816 | 62.3 | 9,989,909 | −8.6% | **97.6%** | **29/30** | **6.8s** | **$14.13** | −7.4% |
+| Context Graph only | 252 | 1,477,264 | 7,271,836 | 0.2 | 8,749,352 | −20.0% | **97.6%** | **29/30** | 8.5s | $102.85 | +574.3% |
+| **All three combined** | 364 | 18,903 | 3,593,236 | **0.0** | 3,612,503 | −67.0% | **97.6%** | **29/30** | 8.9s | $51.16 | +235.4% |
 
 **Observations.** Implicit caching cannot be turned off.
 
@@ -237,11 +237,11 @@ $4.40 in / $22.00 out per Mtok · **large** regime · served from `us-east-2` wh
 
 | Configuration | Uncached | Cache read | Cache write | read:write | Billed tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 242 | 15,679,917 | 218,227 | **71.9** | 15,898,386 | — | **97.6%** | **29/30** | **9.0s** | **$8.82** | — |
-| Progressive Tool Disclosure only | 340 | 11,120,494 | 12,432,437 | 0.9 | 23,553,271 | +48.0% | 96.9% | 28/30 | 10.8s | $73.82 | +737.2% |
-| Relevance Filtering only | 276 | 17,145,788 | 208,099 | **82.4** | 17,354,163 | +9.2% | **97.6%** | **29/30** | 10.3s | $9.57 | +8.5% |
-| Context Graph only | 278 | 790,589 | 10,825,077 | **0.1** | 11,615,944 | −26.8% | 91.3% | 25/30 | 9.9s | $60.56 | +586.8% |
-| **All three combined** | 344 | 17,861 | 6,811,669 | **0.0** | 6,829,874 | −56.8% | 96.1% | 28/30 | 10.0s | $38.55 | +337.3% |
+| Baseline (no plugin) | 210 | 12,208,657 | 179,251 | **68.1** | 12,388,118 | — | **97.6%** | **29/30** | 5.8s | $6.91 | — |
+| Progressive Tool Disclosure only | 238 | 4,796,001 | 4,054,147 | 1.2 | 8,850,386 | −28.6% | 86.6% | 25/30 | 6.3s | $24.85 | +259.6% |
+| Relevance Filtering only | 220 | 9,675,159 | 151,027 | 64.1 | 9,826,406 | −20.7% | **97.6%** | **29/30** | **5.3s** | **$5.58** | −19.2% |
+| Context Graph only | 270 | 952,765 | 9,579,693 | 0.1 | 10,532,728 | −15.0% | 96.9% | 28/30 | 8.1s | $53.96 | +680.9% |
+| **All three combined** | 286 | 22,202 | 2,205,615 | **0.0** | 2,228,103 | −82.0% | 77.2% | 21/30 | 8.9s | $12.83 | +85.7% |
 
 **Observations.** Implicit caching cannot be turned off, so there is no uncached control here either. This is
 the one model where doing nothing wins on every axis at once — cheapest, most accurate, fastest.
@@ -251,13 +251,13 @@ the one model where doing nothing wins on every axis at once — cheapest, most 
 $0.10, write $1.25/5m — **inferred**) · $1.00 in / $5.00 out per Mtok · **tight** regime (preview 2,000,
 graph desc 250, cycles 4).
 
-| Configuration | Total tokens | Δ tokens | Accuracy | Correct | Peak/call | Turn | Cost | Δ cost |
-|---|---:|---:|---:|:--:|---:|---:|---:|---:|
-| Baseline (no plugin) | 12,703,571 | — | **95.3%** | **27/30** | 196,722 (**98%**) | 7.9s | $12.77 | — |
-| Progressive Tool Disclosure only | 10,296,950 | −18.9% | 88.2% | 22/30 | 160,920 (80%) | 7.9s | $10.37 | −18.8% |
-| Relevance Filtering only | 12,036,064 | −5.3% | 86.6% | 21/30 | 166,779 (83%) | 9.3s | $12.15 | −4.9% |
-| Context Graph only | 7,883,137 | −37.9% | 76.4% | 17/30 | 114,003 (57%) | 7.8s | $7.95 | −37.7% |
-| **All three combined** | **3,224,286** | **−74.6%** | 84.2% | 20/30 | **60,393 (30%)** | 6.6s | **$3.32** | −74.0% |
+| Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
+|---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
+| Baseline (no plugin) ✝ | **26/60** | **12/30** | **34** | 6,482,160 | −29.7% | 52.8% | 14/30 | 198,745 (**99%**) | 4.0s ✝ | $6.52 |
+| Progressive Tool Disclosure only ← ref | 60/60 | 0/30 | 0 | 9,225,960 | — | 85.0% | 21/30 | 136,935 (68%) | 6.2s | $9.31 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 7,899,828 | −14.4% | 83.5% | 20/30 | 111,389 (56%) | 5.4s | $7.97 |
+| Context Graph only | 60/60 | 0/30 | 0 | 8,544,161 | −7.4% | **92.1%** | **25/30** | 115,009 (58%) | 7.8s | $8.64 |
+| **All three combined** | 60/60 | 0/30 | 0 | **2,199,431** | **−76.2%** | 89.8% | **25/30** | **36,352 (18%)** | 5.2s | **$2.29** |
 
 ### 4.7 GLM 5
 
@@ -266,11 +266,11 @@ against · $1.00 in / $3.20 out per Mtok · **tight** regime (preview 2,000, gra
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **18/60** | **14/30** | **84** | 6,150,161 | −58.3% | 65.3% | 14/30 | 193,207 (97%) | 12.6s ✝ | $6.17 |
-| Progressive Tool Disclosure only ✝ | **25/60** | **11/30** | **64** | 9,170,600 | −37.8% | 66.1% | 16/30 | 193,113 (97%) | 34.0s ✝ | $9.22 |
-| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 14,739,065 | — | 80.3% | 24/30 | 198,011 (99%) | 35.5s | $14.80 |
-| Context Graph only | 60/60 | 0/30 | 0 | 7,175,940 | −51.3% | **96.1%** | **28/30** | 102,645 (51%) | 20.5s | $7.21 |
-| **All three combined** | 60/60 | 0/30 | 0 | **2,908,717** | **−80.3%** | 81.1% | 21/30 | **41,553 (21%)** | 14.0s | **$2.96** |
+| Baseline (no plugin) ✝ | **26/60** | **12/30** | **34** | 8,341,004 | −45.9% | 51.2% | 15/30 | 193,846 (**97%**) | 15.5s ✝ | $8.36 |
+| Progressive Tool Disclosure only ← ref | 60/60 | 0/30 | 0 | 15,424,133 | — | **95.3%** | **27/30** | 180,967 (90%) | 35.8s | $15.46 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 14,092,871 | −8.6% | 89.0% | 26/30 | 165,567 (83%) | 34.4s | $14.16 |
+| Context Graph only | 60/60 | 0/30 | 0 | 10,038,122 | −34.9% | 87.4% | 24/30 | 117,486 (59%) | 23.9s | $10.07 |
+| **All three combined** | 60/60 | 0/30 | 0 | **2,370,745** | **−84.6%** | 89.8% | 25/30 | **33,695 (17%)** | 15.6s | **$2.42** |
 
 **Observations.** The model that turns the question from cost into completion: the bare agent lost 84 calls
 and answered 18 of 60, so its 65.3% is mostly absence, with 14 of its 30 scored turns never attempted. Only
@@ -287,11 +287,11 @@ graph, which is not true of the next two, and is why more than one vendor is mea
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost | $/correct |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **22/60** | **12/30** | **70** | 5,814,709 | −58.9% | 65.3% | 14/30 | 186,905 (92%) | 18.4s ✝ | $3.52 | *$0.25* |
-| Progressive Tool Disclosure only ✝ ← ref | **40/60** | **6/30** | **30** | 14,153,824 | — | 73.2% | 20/30 | 195,178 (96%) | 47.4s ✝ | $8.56 | *$0.43* |
-| Relevance Filtering only ✝ | **27/60** | **11/30** | **54** | 11,140,007 | −21.3% | 66.1% | 17/30 | 194,955 (96%) | 36.4s ✝ | $6.75 | *$0.40* |
-| Context Graph only | 60/60 | 0/30 | 0 | 13,191,178 | −6.8% | **95.3%** | **27/30** | 176,766 (87%) | 36.4s | $7.96 | $0.29 |
-| **All three combined** | 59/60 † | 0/30 | 0 | **5,916,862** | **−58.2%** | 83.5% | 22/30 | **102,796 (51%)** | 23.6s | **$3.60** | **$0.16** |
+| Baseline (no plugin) ✝ | **20/60** | **14/30** | **40** | 5,755,771 | −65.2% | 48.0% | 13/30 | 193,179 (**95%**) | 16.5s ✝ | $3.47 | *$0.27* |
+| Progressive Tool Disclosure only ✝ ← ref | **54/60** | **3/30** | **6** | 16,547,804 | — | 78.0% | 25/30 | 195,933 (**97%**) | 66.8s ✝ | $10.00 | *$0.40* |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 10,899,610 | −34.1% | 89.8% | 26/30 | 127,025 (63%) | 16.2s | $6.57 | $0.25 |
+| Context Graph only | 60/60 | 0/30 | 0 | 7,416,591 | −55.2% | 90.5% | 27/30 | 107,480 (53%) | 29.9s | $4.49 | $0.17 |
+| **All three combined** | 60/60 | 0/30 | 0 | **3,670,567** | **−77.8%** | **96.1%** | **28/30** | **56,283 (28%)** | 27.8s | **$2.26** | **$0.08** |
 
 † A `ReadTimeoutError`, not the window; that arm refused zero calls. Fifteen other non-overflow errors
 (3 baseline, 7 relevance, 5 disclosure, 2 all-three) were output-cap truncations.
@@ -315,11 +315,11 @@ the cheapest model here · **tight** regime.
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **17/60** | **15/30** | **82** | 5,398,019 | −80.3% | 52.8% | 8/30 | 198,536 (98%) | 7.3s ✝ | $0.38 |
-| Progressive Tool Disclosure only ✝ ← ref | **36/60** | **7/30** | **40** | 27,403,577 | — | 58.3% | 11/30 | 198,654 (98%) | 33.0s ✝ | $1.93 |
-| Relevance Filtering only | 60/60 | 0/30 | 0 | 17,181,923 | −37.3% | **75.6%** | 17/30 | 187,849 (93%) | 13.4s | $1.22 |
-| Context Graph only ✝ | **52/60** | **2/30** | **8** | 18,123,481 | −33.9% | 74.8% | **18/30** | 198,646 (98%) | 29.7s ✝ | $1.28 |
-| **All three combined** | 60/60 | 0/30 | 0 | **4,010,248** | **−85.4%** | 55.1% | 10/30 | **53,355 (26%)** | 11.6s | **$0.30** |
+| Baseline (no plugin) ✝ | **26/60** | **12/30** | **34** | 7,295,295 | −38.5% | 49.6% | 13/30 | 188,759 (**93%**) | 7.6s ✝ | $0.51 |
+| Progressive Tool Disclosure only | 60/60 | 0/30 | 0 | 10,804,814 | −8.9% | **71.7%** | **18/30** | 189,266 (93%) | 6.8s | $0.76 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | 11,019,518 | −7.1% | 70.1% | 17/30 | 116,327 (57%) | 7.6s | $0.78 |
+| Context Graph only ← ref | 60/60 | 0/30 | 0 | 11,858,161 | — | 69.3% | 13/30 | 154,134 (76%) | 16.2s | $0.84 |
+| **All three combined** | 60/60 | 0/30 | 0 | **4,187,110** | **−64.7%** | 67.7% | 14/30 | **47,366 (23%)** | 15.2s | **$0.31** |
 
 Ten non-overflow errors (2 baseline, 4 disclosure, 4 graph) were output-cap truncations.
 
@@ -339,11 +339,11 @@ Mtok · regime **tight** — above 250K and still tight, see [the window regime]
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **13/60** | **17/30** | **94** | 8,591,570 | −74.1% | 54.3% | 9/30 | 248,552 (97%) | 5.6s ✝ | $1.21 |
-| Progressive Tool Disclosure only ✝ | **13/60** | **17/30** | **94** | 5,033,909 | −84.8% | 60.6% | 11/30 | 252,395 (99%) | 4.0s ✝ | $0.71 |
-| Relevance Filtering only ✝ ← ref | 55/60 | 3/30 | 10 | 33,149,405 | — | 79.5% | **22/30** | 256,310 (100%) | 19.9s | $4.71 |
-| Context Graph only | 60/60 | 0/30 | 0 | 9,727,355 | −70.7% | **81.1%** | 20/30 | 136,350 (53%) | 8.5s | $1.38 |
-| **All three combined** | 60/60 | 0/30 | 0 | **4,395,046** | **−86.7%** | 74.0% | 17/30 | **38,496 (15%)** | 10.2s | **$0.68** |
+| Baseline (no plugin) ✝ | **14/60** | **17/30** | **46** | 6,730,068 | −84.9% | 37.8% | 9/30 | 251,450 (**98%**) | 4.7s ✝ | $0.95 |
+| Progressive Tool Disclosure only ← ref | 60/60 | 0/30 | 0 | 44,594,408 | — | **86.6%** | 23/30 | 178,170 (70%) | 24.1s | $6.27 |
+| Relevance Filtering only | 60/60 | 0/30 | 0 | **13,663,677** | **−69.4%** | 81.1% | 23/30 | 181,676 (71%) | 9.9s | **$1.95** |
+| Context Graph only | 60/60 | 0/30 | 0 | 22,648,027 | −49.2% | 80.3% | 22/30 | 144,801 (57%) | 17.4s | $3.21 |
+| **All three combined** | 60/60 | 0/30 | 0 | 21,483,823 | −51.8% | **86.6%** | **24/30** | **72,336 (28%)** | 28.8s | $3.09 |
 
 **Observations.** The heaviest payload mass of the battery, and the reason the tight ceiling is 300K: a
 256,000-token window and the bare agent still peaks at it and loses 94 calls. Both single plugins that attack
@@ -358,11 +358,11 @@ $0.06 in / $0.23 out per Mtok · **tight** regime.
 
 | Configuration | Answered | Scored lost | Refused | Total tokens | Δ vs heaviest | Accuracy | Correct | Peak/call | Turn | Cost |
 |---|:--:|:--:|---:|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) ✝ | **9/60** | **21/30** | **102** | 1,596,017 | −85.3% | 48.8% | 6/30 | 111,016 (87%) | 4.2s ✝ | $0.10 |
-| Progressive Tool Disclosure only ✝ | **14/60** | **16/30** | **92** | 2,298,800 | −78.8% | 59.1% | 9/30 | 118,522 (93%) | 7.8s ✝ | $0.14 |
-| Relevance Filtering only ✝ | **28/60** | **11/30** | **64** | 5,073,784 | −53.3% | 66.9% | **14/30** | 125,719 (98%) | 12.4s ✝ | $0.33 |
-| Context Graph only ✝ ← ref | **43/60** | **7/30** | **34** | 10,868,671 | — | 59.8% | 11/30 | 124,762 (97%) | 22.8s ✝ | $0.67 |
-| **All three combined** | **60/60** | **0/30** | **0** | 6,431,158 | −40.8% | **68.5%** | 12/30 | **73,358 (57%)** | 28.6s | $0.44 |
+| Baseline (no plugin) ✝ | **12/60** | **19/30** | **48** | 1,823,314 | −75.9% | 27.6% | 5/30 | 125,581 (**98%**) | 4.7s ✝ | $0.11 |
+| Progressive Tool Disclosure only ✝ ← ref | **44/60** | **6/30** | **16** | 7,559,453 | — | 60.6% | 16/30 | 121,054 (**95%**) | 19.2s ✝ | $0.47 |
+| Relevance Filtering only ✝ | **35/60** | **9/30** | **25** | 5,531,562 | −26.8% | 53.5% | 14/30 | 124,652 (**97%**) | 13.1s ✝ | $0.35 |
+| Context Graph only ✝ | **15/60** | **16/30** | **45** | 4,144,929 | −45.2% | 35.4% | 7/30 | 123,516 (**96%**) | 10.8s ✝ | $0.25 |
+| **All three combined** | 60/60 | 0/30 | 0 | **3,464,956** | **−54.2%** | **60.6%** | **11/30** | **54,537 (43%)** | 24.9s | **$0.25** |
 
 **Observations.** Four of five arms could not finish, and the only column that orders cleanly is `Refused` —
 102, 92, 64, 34, **0**: each practice removes some of the pressure, only the conjunction removes all of it.

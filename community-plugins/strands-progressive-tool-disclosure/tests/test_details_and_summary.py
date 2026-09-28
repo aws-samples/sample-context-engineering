@@ -43,6 +43,7 @@ from strands_progressive_tool_disclosure.plugin import (
     GET_TOOL_DETAILS_NAME,
     _fold_tool_exchanges,
     _model_summarizer,
+    _pairs_intact,
     _truncate_description,
 )
 
@@ -855,9 +856,10 @@ def test_the_exchange_in_flight_is_kept_and_mixed_calls_keep_their_callable_part
 
     assert [m["role"] for m in folded] == ["user", "assistant", "user", "assistant", "user"]
     assert folded[1]["content"] == [mixed[1]["content"][1]]
+    # The answer to the callable call comes first: Converse rejects text ahead of a toolResult.
     assert folded[2]["content"] == [
-        {"text": "The tool send_wire was called and failed with: limit"},
         mixed[2]["content"][1],
+        {"text": "The tool send_wire was called and failed with: limit"},
     ]
 
 
@@ -895,3 +897,14 @@ def test_the_turn_in_flight_reaches_a_reasoning_model_as_the_same_objects():
         messages[3],
     ]
     assert folded[1] is messages[3]
+
+
+def test_the_pair_check_catches_a_use_without_its_result_right_after():
+    """The safety net's predicate: a toolUse must be answered in the very next message."""
+    use = {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "send_wire", "input": {}}}]}
+    answer = {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "ok"}]}}]}
+    question = {"role": "user", "content": [{"text": "q"}]}
+
+    assert _pairs_intact([question, use, answer])
+    assert not _pairs_intact([question, use, question])
+    assert not _pairs_intact([question, use, {"role": "assistant", "content": [{"text": "x"}]}])

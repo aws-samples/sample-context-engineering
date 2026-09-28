@@ -16,7 +16,7 @@ from .reranker import Reranker, RerankerError
 
 # ``RerankerError`` is re-exported here because it is the failure type of this module's score
 # validation: a caller catching a scoring failure imports it from either module.
-__all__ = ["Chunk", "RelevancePreview", "RerankerError"]
+__all__ = ["Chunk", "PreviewStats", "RelevancePreview", "RerankerError"]
 
 _CHARS_PER_TOKEN = 4
 """Approximate characters per token, the conversion used for every budget in this module."""
@@ -37,6 +37,35 @@ class Chunk:
     text: str
     start_line: int
     end_line: int
+
+
+@dataclass(frozen=True)
+class PreviewStats:
+    """What one preview selection did, as reported to the model and reused by retrieval.
+
+    Attributes:
+        total_chunks: Chunks the text was split into.
+        total_lines: Lines of the source text.
+        shown: The chunks the preview renders, in ascending index order. The last one may be
+            truncated by the preview budget.
+        ranking: Every chunk index, ordered by descending relevance score (ties by index).
+    """
+
+    total_chunks: int
+    total_lines: int
+    shown: tuple[Chunk, ...]
+    ranking: tuple[int, ...]
+
+    @property
+    def shown_spans(self) -> list[tuple[int, int]]:
+        """Line spans the preview covers, adjacent chunks merged, 1-indexed and inclusive."""
+        spans: list[tuple[int, int]] = []
+        for chunk in self.shown:
+            if spans and chunk.start_line == spans[-1][1] + 1:
+                spans[-1] = (spans[-1][0], chunk.end_line)
+            else:
+                spans.append((chunk.start_line, chunk.end_line))
+        return spans
 
 
 def _split_keeping_newlines(text: str) -> list[str]:
@@ -466,15 +495,36 @@ class RelevancePreview:
                 caller leaves the block unchanged through one path, and
                 ``text`` is left untouched.
         """
+        preview, _stats = await self.build_with_stats(text, query)
+        return preview
+
+    async def build_with_stats(self, text: str, query: str) -> tuple[str, PreviewStats]:
+        """Return the preview of :meth:`build` together with what the selection did.
+
+        The statistics are what the plugin's disclaimer reports to the model -- how much of the
+        result it is looking at -- and the chunk ranking is what ``retrieve_all_context`` reuses to hand
+        back more chunks in relevance order without scoring the text a second time.
+
+        Args:
+            text: The concatenated text of the stored blocks.
+            query: The scoring query, as for :meth:`build`.
+
+        Returns:
+            The preview and its :class:`PreviewStats`.
+
+        Raises:
+            RerankerError: As for :meth:`build`.
+        """
         budget_chars = self._preview_tokens * _CHARS_PER_TOKEN
         chunks = _chunk_text(text, self._chunk_tokens)
 
         if not chunks:
-            return ""
+            return "", PreviewStats(total_chunks=0, total_lines=0, shown=(), ranking=())
 
+        total_lines = chunks[-1].end_line
         # The whole text already fits: scoring could only pick it, at the cost of a call.
         if len(chunks) == 1 and len(text) <= budget_chars:
-            return text
+            return text, PreviewStats(total_chunks=1, total_lines=total_lines, shown=(chunks[0],), ranking=(0,))
 
         # Counted before the call, not after: the batches are billed once submitted, so a
         # failure halfway through still consumed what it sent.
@@ -485,4 +535,6 @@ class RelevancePreview:
         # from chunks or break the threshold comparison.
         scores = _validate_scores(raw_scores, len(chunks))
         selected = _select_chunks(chunks, scores, self._relevance_threshold, budget_chars)
-        return _assemble_preview(chunks, selected, budget_chars)
+        ranking = tuple(sorted(range(len(chunks)), key=lambda i: (-scores[i], i)))
+        stats = PreviewStats(total_chunks=len(chunks), total_lines=total_lines, shown=tuple(selected), ranking=ranking)
+        return _assemble_preview(chunks, selected, budget_chars), stats

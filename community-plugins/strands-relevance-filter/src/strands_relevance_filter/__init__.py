@@ -4,7 +4,7 @@ Provides :class:`RelevanceFilter`, a ``Plugin`` that rewrites an oversized textu
 public ``AfterToolCallEvent`` hook, before the result becomes a conversation message. The raw sub-blocks
 go to a ``Store`` first, then the result is replaced by the ``[Relevance: …]`` marker, a verbatim preview
 bounded by ``preview_tokens * 4`` characters, and reference tokens the model can read back through the
-plugin's own ``retrieve_context`` tool. Selection is verbatim: chosen chunks reach the model
+plugin's own ``retrieve_all_context`` tool. Selection is verbatim: chosen chunks reach the model
 character-for-character and the excess is never summarized, which is what keeps numeric, monetary, and
 tabular content exact.
 

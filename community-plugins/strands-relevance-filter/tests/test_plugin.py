@@ -1,7 +1,7 @@
 """Tests for :class:`strands_relevance_filter.plugin.RelevanceFilter`.
 
 Covers construction validation and inertness, each of the guards in ``_on_after_tool_call``, the
-happy-path rewrite, the ``retrieve_context`` read modes, and the ``include_retrieval_tool`` toggle.
+happy-path rewrite, the ``retrieve_all_context`` read modes, and the ``include_retrieval_tool`` toggle.
 The store is a real ``InMemoryStore`` (or a ``tmp_path`` ``FileStore``); only the reranker and the
 agent/model are faked, through ``conftest``.
 """
@@ -44,7 +44,7 @@ async def _init(plugin: RelevanceFilter, agent: FakeAgent) -> FakeAgent:
 
 
 def _tool_context(agent: FakeAgent, tool_use: ToolUse) -> ToolContext:
-    """A minimal ToolContext for calling ``retrieve_context`` directly; the tool reads only self."""
+    """A minimal ToolContext for calling ``retrieve_all_context`` directly; the tool reads only self."""
     return ToolContext(tool_use=tool_use, agent=agent, invocation_state={})  # type: ignore[arg-type]
 
 
@@ -107,11 +107,11 @@ async def test_guard_cancelled_call_leaves_result_untouched() -> None:
 
 
 @pytest.mark.asyncio
-async def test_guard_own_retrieve_context_result_is_not_refiltered() -> None:
+async def test_guard_own_retrieve_all_context_result_is_not_refiltered() -> None:
     reranker = FakeReranker()
     plugin = await _plugin_over_threshold(reranker)
     agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
-    retrieval_name = plugin.retrieve_context.tool_name
+    retrieval_name = plugin.retrieve_all_context.tool_name
     result = _result([{"text": "x" * 5000}])
     event = make_after_tool_call_event(tool_use=_tool_use(name=retrieval_name), result=result, agent=agent)
 
@@ -266,11 +266,11 @@ async def test_happy_path_multiple_text_blocks_use_plural_refs_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_mode_emits_no_reference_token_and_stores_nothing() -> None:
+async def test_tool_off_emits_no_reference_token_and_stores_nothing() -> None:
     """With the retrieval tool off, nothing could resolve a reference, so none is promised."""
     reranker = FakeReranker()
     store = InMemoryStore()
-    plugin = RelevanceFilter(store=store, max_result_tokens=10, config=_config(reranker))
+    plugin = RelevanceFilter(store=store, max_result_tokens=10, config=_config(reranker), include_retrieval_tool=False)
     agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
     result = _result([{"text": "alpha line\nbeta line\n" * 40}], tool_use_id="tool-7")
     event = make_after_tool_call_event(tool_use=_tool_use(tool_use_id="tool-7"), result=result, agent=agent)
@@ -290,7 +290,7 @@ async def test_default_mode_emits_no_reference_token_and_stores_nothing() -> Non
 async def test_filtering_runs_with_no_store_at_all() -> None:
     """Storage is optional: with no store and the tool off, chunking + rerank + rewrite still run."""
     reranker = FakeReranker()
-    plugin = RelevanceFilter(max_result_tokens=10, config=_config(reranker))
+    plugin = RelevanceFilter(max_result_tokens=10, config=_config(reranker), include_retrieval_tool=False)
     agent = await _init(plugin, FakeAgent(messages=_MESSAGES, token_count=100_000))
     result = _result([{"text": "alpha line\nbeta line\n" * 40}])
     event = make_after_tool_call_event(tool_use=_tool_use(), result=result, agent=agent)
@@ -303,7 +303,7 @@ async def test_filtering_runs_with_no_store_at_all() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# retrieve_context read modes.
+# retrieve_all_context read modes.
 # --------------------------------------------------------------------------------------------------
 
 
@@ -312,24 +312,24 @@ async def _store_text(plugin: RelevanceFilter, text: str, *, key: str = "tool-1_
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_full_read_returns_stored_text() -> None:
+async def test_retrieve_all_context_full_read_returns_stored_text() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
     agent = await _init(plugin, FakeAgent())
     text = "one\ntwo\nthree\nfour\nfive"
     reference = await _store_text(plugin, text)
 
-    out = await plugin.retrieve_context(reference=reference, tool_context=_tool_context(agent, _tool_use()))
+    out = await plugin.retrieve_all_context(reference=reference, tool_context=_tool_context(agent, _tool_use()))
 
     assert out == text
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_line_range_read() -> None:
+async def test_retrieve_all_context_line_range_read() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
     agent = await _init(plugin, FakeAgent())
     reference = await _store_text(plugin, "one\ntwo\nthree\nfour\nfive")
 
-    out = await plugin.retrieve_context(
+    out = await plugin.retrieve_all_context(
         reference=reference, tool_context=_tool_context(agent, _tool_use()), line_range={"start": 2, "end": 3}
     )
 
@@ -338,12 +338,12 @@ async def test_retrieve_context_line_range_read() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_pattern_read() -> None:
+async def test_retrieve_all_context_pattern_read() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
     agent = await _init(plugin, FakeAgent())
     reference = await _store_text(plugin, "alpha\nERROR here\nbeta\ngamma")
 
-    out = await plugin.retrieve_context(
+    out = await plugin.retrieve_all_context(
         reference=reference, tool_context=_tool_context(agent, _tool_use()), pattern="ERROR", context_lines=0
     )
 
@@ -352,22 +352,22 @@ async def test_retrieve_context_pattern_read() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_unknown_reference_raises_value_error() -> None:
+async def test_retrieve_all_context_unknown_reference_raises_value_error() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
     agent = await _init(plugin, FakeAgent())
 
     with pytest.raises(ValueError):
-        await plugin.retrieve_context(reference="mem_999_missing", tool_context=_tool_context(agent, _tool_use()))
+        await plugin.retrieve_all_context(reference="mem_999_missing", tool_context=_tool_context(agent, _tool_use()))
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_pattern_on_binary_content_raises_value_error() -> None:
+async def test_retrieve_all_context_pattern_on_binary_content_raises_value_error() -> None:
     plugin = RelevanceFilter(store=InMemoryStore())
     agent = await _init(plugin, FakeAgent())
     reference = await plugin._store.store("bin_0", b"\x00\x01\x02binary", "application/octet-stream")
 
     with pytest.raises(ValueError):
-        await plugin.retrieve_context(
+        await plugin.retrieve_all_context(
             reference=reference, tool_context=_tool_context(agent, _tool_use()), pattern="anything"
         )
 
@@ -382,19 +382,21 @@ async def test_include_retrieval_tool_false_drops_tool_but_keeps_hook() -> None:
     plugin = RelevanceFilter(store=InMemoryStore(), include_retrieval_tool=False)
     await _init(plugin, FakeAgent())
 
-    retrieval_name = plugin.retrieve_context.tool_name
+    retrieval_name = plugin.retrieve_all_context.tool_name
     assert all(t.tool_name != retrieval_name for t in plugin.tools)
-    # The hook is unaffected: the plugin still subscribes to AfterToolCallEvent.
-    assert len(plugin.hooks) == 1
+    # The hooks are unaffected: the filter and the end-of-turn cleanup (a no-op with the tool off).
+    assert len(plugin.hooks) == 2
 
 
 @pytest.mark.asyncio
-async def test_include_retrieval_tool_default_drops_tool() -> None:
-    plugin = RelevanceFilter(store=InMemoryStore())
+async def test_include_retrieval_tool_default_keeps_tool_and_stores() -> None:
+    plugin = RelevanceFilter()
     await _init(plugin, FakeAgent())
 
-    retrieval_name = plugin.retrieve_context.tool_name
-    assert all(t.tool_name != retrieval_name for t in plugin.tools)
+    retrieval_name = plugin.retrieve_all_context.tool_name
+    assert retrieval_name == "retrieve_all_context"
+    assert any(t.tool_name == retrieval_name for t in plugin.tools)
+    assert isinstance(plugin._store, InMemoryStore)  # storage is on by default
 
 
 @pytest.mark.asyncio
@@ -402,5 +404,5 @@ async def test_include_retrieval_tool_true_keeps_tool() -> None:
     plugin = RelevanceFilter(store=InMemoryStore(), include_retrieval_tool=True)
     await _init(plugin, FakeAgent())
 
-    retrieval_name = plugin.retrieve_context.tool_name
+    retrieval_name = plugin.retrieve_all_context.tool_name
     assert any(t.tool_name == retrieval_name for t in plugin.tools)

@@ -384,7 +384,7 @@ def _headline_table(rows: list[Row]) -> str:
             f"<td>{row.total_tokens:,.0f}</td>"
             f"<td>{token_delta}</td>"
             f"<td>{row.weighted_accuracy * 100:.1f}%</td>"
-            f"<td>{row.materially_correct:.0f}/{row.turns_scored}</td>"
+            f"<td>{row.materially_correct:.0f}/{row.turns_scored:g}</td>"
             f"<td>{row.turn_seconds_mean:.1f}s</td>"
             f"<td>${row.cost:,.2f}</td>"
             f"<td>{cost_delta}</td>"

@@ -224,15 +224,47 @@ def get_portfolio_allocation(account_id: str, group_by: str = "instrument_class"
         {
             "account": account_id,
             "group_by": group_by,
-            "allocation": [
-                {"bucket": "fixed_income", "share": "42,1%", "value": "R$ 20.135,44"},
-                {"bucket": "treasury", "share": "35,8%", "value": "R$ 17.123,90"},
-                {"bucket": "fund", "share": "22,1%", "value": "R$ 10.572,81"},
-            ],
+            "allocation": _allocation_of(account_id),
         },
         ensure_ascii=False,
         indent=2,
     )
+
+
+_ASSET_CLASS_PREFIXES = (("Tesouro", "treasury"), ("Fundo", "fund"), ("CDB", "fixed_income"), ("LCA", "fixed_income"))
+
+
+def _parse_brl(value: str) -> float:
+    """Parse "R$ 14.454,00" into 14454.0."""
+    return float(value.replace("R$", "").strip().replace(".", "").replace(",", "."))
+
+
+def _format_brl(value: float) -> str:
+    """Format 14454.0 as "R$ 14.454,00"."""
+    return "R$ " + f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _allocation_of(account_id: str) -> list[dict[str, str]]:
+    """Group the account's positions by asset class, so allocation and positions never disagree."""
+    buckets: dict[str, float] = {}
+    for position in _POSITIONS:
+        if position["account"] != account_id:
+            continue
+        bucket = next(
+            (name for prefix, name in _ASSET_CLASS_PREFIXES if position["instrument"].startswith(prefix)),
+            "other",
+        )
+        buckets[bucket] = buckets.get(bucket, 0.0) + _parse_brl(position["total"])
+
+    total = sum(buckets.values())
+    return [
+        {
+            "bucket": bucket,
+            "share": f"{value / total * 100:.1f}".replace(".", ",") + "%",
+            "value": _format_brl(value),
+        }
+        for bucket, value in sorted(buckets.items(), key=lambda item: -item[1])
+    ]
 
 
 @tool
@@ -747,3 +779,13 @@ def account_ids() -> tuple[str, ...]:
     prompts asking about an account that no longer exists.
     """
     return tuple(account["id"] for account in _ACCOUNTS)
+
+
+def account_records() -> tuple[dict[str, str], ...]:
+    """Return a copy of every fixture account: ``id``, ``institution``, ``type`` and ``balance``.
+
+    The scored filler needs more than the id: a prompt that names the wrong institution for an account,
+    or asks for the yield of a savings account, has a false premise, and a careful model answers it by
+    correcting the premise instead of calling the tool -- which the expectation scores as a failure.
+    """
+    return tuple(dict(account) for account in _ACCOUNTS)

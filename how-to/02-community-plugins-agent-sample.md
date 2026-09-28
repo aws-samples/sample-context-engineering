@@ -169,8 +169,10 @@ Each section below changes only how that `Agent` is constructed.
 
 `RelevanceFilter` attaches to the public `AfterToolCallEvent` hook. When a tool result exceeds
 `max_result_tokens`, it writes the raw sub-blocks to a `Store`, then replaces the result with a
-**verbatim** preview of the chunks that score highest against the question, plus a reference the model
-reads back through the plugin's own `retrieve_context` tool.
+**verbatim** preview of the chunks that score highest against the question, headed by a disclaimer that
+says how much of the result the excerpt covers, plus a reference the model can pass to the plugin's own
+`retrieve_all_context` tool when a question needs the whole result (a maximum, a total, a count).
+Those retrieval exchanges are removed from the history when the turn ends.
 
 ```python
 from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
@@ -197,7 +199,14 @@ agent = Agent(
 
 Selection is verbatim — chosen chunks reach the model character for character — which is what keeps
 monetary and tabular figures exact. Omissions are marked with `[... N lines omitted ...]`, and the
-line numbers in those markers are the ones `retrieve_context` accepts as a `line_range`.
+line numbers in those markers are the ones `retrieve_all_context` accepts as a `line_range`.
+
+The tool is registered by `include_retrieval_tool`, which defaults to `True`; off, nothing is stored
+and no reference is minted. Its budgets are `pattern` (only the matching lines, with `context_lines`
+around each — the cheapest way to aggregate), `line_range`, `max_chunks` (the N most relevant chunks
+in document order, from the ranking the excerpt already computed, so no second rerank is charged) and
+`max_tokens`, which bounds the response in every mode. Precedence is `line_range`, then `pattern`,
+then `max_chunks`.
 
 Construction is inert: the reranker is built on the first filtered result, so a filter that never
 fires needs no credentials.
@@ -208,11 +217,11 @@ same preview budget on the chunks that answer the question.
 ## B — Progressive tool disclosure
 
 Projects the call's tool list down to what is callable on it: the two plugin tools `find_tools` and
-`get_tool_details`, the `always_available` tools, the schemas already loaded and still live by TTL, and
-the tools the history references. Every other tool is **one line in the system prompt** — its name and
-a summary of its description, at most `catalog_chars` characters. A full schema enters the call when the
-model loads it by name, and leaves again after `ttl_cycles` idle cycles. Every tool stays callable
-throughout — only what the call is *told about* changes.
+`get_tool_details`, the `always_available` tools, and the schemas already loaded and still live by TTL.
+Every other tool is **one line in the system prompt** — its name and a summary of its description, at
+most `catalog_chars` characters. A full schema enters the call when the model loads it by name, and
+leaves again after `ttl_cycles` idle cycles. Every tool stays callable throughout — only what the call
+is *told about* changes.
 
 ```python
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
@@ -225,11 +234,12 @@ agent = Agent(
         ProgressiveToolDisclosure(
             catalog_chars=80,    # character limit of each catalog line; None drops the catalog
             summarizer=None,     # None = the agent's own model writes the lines, once per tool
-            ttl_cycles=5,        # cycles a loaded schema survives after its last use
+            ttl_cycles=3,        # cycles a loaded schema survives after its last use
             top_k=4,             # tools listed per find_tools call
             # A retrieval tool must never need discovery: the model is told to call it in the text
-            # that replaced the payload. Name the ones your setup installs.
-            always_available=["retrieve_context"],
+            # that replaced the payload. Name the ones your setup installs -- but not the relevance
+            # filter's retrieve_all_context, which is for whole-result questions and is loaded on demand.
+            always_available=[],
         )
     ],
 )
@@ -251,13 +261,23 @@ The saving scales with catalog size: with a handful of tools there is little sch
 off at the tool counts a real agent reaches — the benchmark runs 93 tools for ~63k tokens of schema
 per call.
 
+A released schema leaves nothing behind that invites a call. In the messages each call sends, the
+exchanges of tools that call does not carry are folded to one sentence — `The tool X was called and the
+result was: ...` — and the plugin's own `find_tools` / `get_tool_details` exchanges are dropped. A
+`toolUse` with its arguments next to a success is a template the model copies, and a copy of a tool no
+longer in the list is a call it cannot make. Only closed turns are folded: the turn in flight passes
+through untouched, because a reasoning model rejects a modified latest assistant message.
+`agent.messages` is never mutated — the fold is on the per-call copy.
+
 A catalog name is not in `tool_specs` at all, so nothing in the call claims it is callable with no
-arguments. If a model calls one anyway, a pre-call guard cancels that call with "call it again" and the
-schema is already loaded for the retry — a safety net rather than the normal path. The measurements that
-made that path common (5 `find_tools` searches against 14 premature cancellations over 60 turns) were
-taken on the **previous design**, where every undisclosed tool sat in `tool_specs` as a reduced entry
-with an empty `inputSchema` that read as "takes no arguments". Those figures do not describe this one,
-and the benchmark's `searches` / `loads` / `premature_cancellations` counters are what to read instead.
+arguments. If a model calls one anyway, a pre-call guard cancels that call and points it at
+`get_tool_details`; nothing is loaded on its behalf, because a recovery that loaded the tool would teach
+the model that calling a catalog name directly works. A tool whose parameters are all optional is
+exempt — it is callable empty, so the call is not a guess. The measurements that made that path common
+(5 `find_tools` searches against 14 premature cancellations over 60 turns) were taken on the **previous
+design**, where every undisclosed tool sat in `tool_specs` as a reduced entry with an empty
+`inputSchema` that read as "takes no arguments". Those figures do not describe this one, and the
+benchmark's `searches` / `loads` / `premature_cancellations` counters are what to read instead.
 
 ## D — Context graph
 
@@ -313,36 +333,11 @@ from strands_relevance_filter import BedrockReranker, FileStore, RelevanceFilter
 
 graph = ContextGraph(
     matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3", boto_session=session),
-    # The filter below ships its own retrieval tool over its own store, and the graph's
-    # `expand_artifact` reads a store that cannot resolve the filter's references. Two plausible
-    # tools for one job, and only one of them can answer -- see gotcha 1. Excluding it here is the
-    # supported way to say so; earlier revisions of this page reached into `graph._tools`.
-    include_artifact_tool=False,
+    # Kept ON. The filter's tool is scoped to whole-result questions and is named in the filter's own
+    # disclaimer, so the two no longer present as the same job -- see gotcha 1 for the measurement
+    # that once motivated dropping this one.
+    include_artifact_tool=True,
 )
-
-# GOTCHA 1: two artifact-retrieval tools, two stores, no bridge. Drop the graph's so the only
-# artifact path is the filter's retrieve_context, which is the one that can resolve its references.
-graph._tools = [t for t in graph._tools if t.tool_name != "expand_artifact"]
-
-
-# GOTCHA 2: the community graph publishes no accessor for the tools a stepped-down Card still
-# mentions, so the bridge disclosure accepts has to be supplied. Without it the model reads about a
-# tool whose inputSchema left the call.
-def graph_referenced_tools(agent):
-    """Return the tool names of every Card the current turn did not take at full content."""
-    state = graph._states.get(agent)
-    if state is None or state.choice.full_pass:
-        return ()
-    selected = state.choice.selected
-    names = set()
-    for title, card in state.cards.items():
-        choice = state.choice.by_title.get(title)
-        stepped_down = (selected is not None and title not in selected) or (
-            choice is not None and (choice.dialogue != "full" or choice.evidence != "full")
-        )
-        if stepped_down:
-            names.update(card.tool_names)
-    return tuple(sorted(names))
 
 
 agent = Agent(
@@ -364,46 +359,63 @@ agent = Agent(
         graph,
         ProgressiveToolDisclosure(
             catalog_chars=80,
-            ttl_cycles=5,
+            ttl_cycles=3,
             top_k=4,
             # Derived, never hard-coded. A tool that is only in the catalog is not in `tool_specs` at
             # all, so the model has to load it with `get_tool_details` before it can be called -- and
             # every retrieval tool here needs arguments (a Title, a reference, a search need). Making
             # them always available spends no cycle on loading what the folded-context guidance
-            # already told the model to call. Reading the names off the plugin keeps this correct
-            # when `include_artifact_tool` is false, as it is above.
-            always_available=[*graph.retrieval_tool_names, "retrieve_context"],
-            referenced_source=graph_referenced_tools,
+            # already told the model to call. Reading the names off the plugin keeps this correct if
+            # `include_artifact_tool` is ever turned off or a tool is renamed. The filter's
+            # retrieve_all_context is left out on purpose: it is loaded from the catalog only for a
+            # whole-result question.
+            always_available=[*graph.retrieval_tool_names],
         ),
     ],
 )
 ```
 
 The three plugins compose without fighting: the filter acts on tool results as they arrive, the graph
-rewrites the per-call message list, and disclosure rewrites the per-call tool list. None of them
-mutates `agent.messages` or the tool registry.
+rewrites the per-call message list, and disclosure rewrites the per-call tool list plus the exchanges
+of the tools it left out. None of them mutates `agent.messages` or the tool registry.
 
 ## Four things that will bite you
 
-### 1. Two retrieval tools for one job, and only one can answer
+### 1. Two retrieval tools, two stores, no bridge
 
-`RelevanceFilter` hands out references that **only its own** `retrieve_context` resolves.
+`RelevanceFilter` hands out references that **only its own** `retrieve_all_context` resolves.
 `ContextGraph` resolves **its own** references through `expand_artifact`. Nothing bridges the two
 stores — the graph's README is explicit that its bridge to another plugin's stash is built entirely on
 private symbols and degrades to "answers as prose naming the miss".
 
-Installed together, the model reaches for whichever looks right and gets a miss. Measured, it said so
-in its own answer:
+When both tools read as the same job, the model reaches for whichever looks right and gets a miss.
+Measured, it said so in its own answer:
 
 > "every export's artifact reference has come back **unreachable** … I can't read the stored
 > artifacts."
 
-That cost the benchmark two of eighteen scored turns. Dropping the graph's `expand_artifact` took the
-full stack from **84.5% / 15-of-18 to 94.4% / 17-of-18**. The graph's other two tools stay:
-`expand_card` and `find_context` reach into the conversation's own turns, which the filter does not do.
+That cost the benchmark two of eighteen scored turns, and dropping the graph's `expand_artifact` took
+the full stack from **84.5% / 15-of-18 to 94.4% / 17-of-18**.
 
-This is the vended stack's one structural advantage — there, relevance lived *inside* the
-`ContextManager` whose stash the graph bridged to, so there was one store and one retrieval path.
+**Both tools are installed, and the disambiguation sits in the tool itself rather than in the
+wiring.** Three things changed:
+
+- The filter's tool is `retrieve_all_context`, scoped to the one question an excerpt cannot answer —
+  one that needs every row. It is not an artifact reader.
+- It is registered by default (`include_retrieval_tool=True`), and the excerpt's disclaimer names it
+  by name, with the reference and the budgets to pass, so the model is told which call to make rather
+  than left to pick.
+- It is reached **through the disclosure catalog**, not through `always_available`: a whole-result
+  question is rare, so its schema is loaded only when one comes up.
+
+So the graph keeps `expand_artifact` (`include_artifact_tool=True`), alongside `expand_card` and
+`find_context`, which reach into the conversation's own turns — a job the filter does not do. Whether
+the model still confuses the two is something the benchmark's `all` arm measures; it is not assumed
+here. If you see "unreachable reference" answers come back, that is the symptom, and turning
+`include_artifact_tool` off is still the one-line way to leave a single retrieval path.
+
+The vended stack never had the ambiguity: relevance lived *inside* the `ContextManager` whose stash
+the graph bridged to, so there was one store and one retrieval path.
 
 ### 2. `NullConversationManager` is a precondition of the graph
 
@@ -482,8 +494,10 @@ Which puts each plugin in a different position:
   from 62,656 tokens to ~5,300), and it is that success that triggers the penalty — a small tool set is
   one you change often. Its catalog now sits in the system prompt, which does not add a second source of
   invalidation: a line only enters or leaves the catalog when the same load or expiry already changed
-  `toolConfig` ahead of it, and the line's text is cached so it never drifts on its own. Loading several
-  tools in one `get_tool_details` call is therefore cheaper than loading them one at a time.
+  `toolConfig` ahead of it, and the line's text is cached so it never drifts on its own. The same holds
+  for the folded exchanges — the fold is a function of the projection, so it changes only on a call whose
+  `toolConfig` changed anyway. Loading several tools in one `get_tool_details` call is therefore cheaper
+  than loading them one at a time.
 - **`ContextGraph` removes messages from the middle of the history.** Everything after the edit is new.
   Its digest block is appended after the cache point and so is billed as ordinary input, which is the
   right design; the removal is what cannot be made cache-friendly, because the removal *is* the plugin.

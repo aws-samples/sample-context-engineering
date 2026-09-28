@@ -34,12 +34,12 @@ import math
 import weakref
 from collections.abc import Awaitable, Callable, Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
 from strands.plugins import Plugin, hook
 from strands.tools.decorator import tool
-from strands.types.content import Messages, SystemPrompt
+from strands.types.content import Message, Messages, SystemPrompt
 from strands.types.tools import ToolContext, ToolSpec
 
 from ._compat import InvokeModelStage
@@ -769,6 +769,41 @@ def _without_reasoning(content: Sequence[Any]) -> list[Any]:
     return [block for block in content if "reasoningContent" not in block]
 
 
+def _results_first(content: Sequence[Any]) -> list[Any]:
+    """Move ``toolResult`` blocks to the front, keeping order otherwise.
+
+    Converse rejects a user message where text precedes the ``toolResult`` answering the previous
+    assistant message (``tool_use ids were found without tool_result blocks immediately after``), and a
+    fold sentence or a merge can put text there.
+    """
+    return [b for b in content if "toolResult" in b] + [b for b in content if "toolResult" not in b]
+
+
+def _tidy(message: Message, content: Sequence[Any]) -> Message:
+    """Return ``message`` with ``content`` fixed up for its role: no stale reasoning, results first."""
+    fixed = _without_reasoning(content) if message.get("role") == "assistant" else _results_first(content)
+    return cast("Message", {**message, "content": fixed})
+
+
+def _pairs_intact(messages: Messages) -> bool:
+    """Report whether every ``toolUse`` is answered by a ``toolResult`` in the very next message.
+
+    The fold's own invariant, checked on its output: a case it did not foresee then costs the saving on
+    that call, never the call itself.
+    """
+    for position, message in enumerate(messages[:-1]):
+        if message.get("role") != "assistant":
+            continue
+        use_ids = {b["toolUse"].get("toolUseId") for b in message.get("content") or () if "toolUse" in b}
+        if not use_ids:
+            continue
+        answers = messages[position + 1]
+        result_ids = {b["toolResult"].get("toolUseId") for b in answers.get("content") or () if "toolResult" in b}
+        if answers.get("role") != "user" or not use_ids <= result_ids:
+            return False
+    return True
+
+
 def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> Messages:
     """Return the call's messages with every exchange the model cannot repeat folded out of tool form.
 
@@ -835,16 +870,13 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
         if message.get("role") == "assistant":
             content = _without_reasoning(content)
         if content:
-            rebuilt.append({**message, "content": content})
+            rebuilt.append(_tidy(message, content))
 
     merged: Messages = []
     for message in rebuilt:
         if merged and merged[-1].get("role") == message.get("role"):
             previous = merged[-1]
-            combined = [*(previous.get("content") or ()), *(message.get("content") or ())]
-            if message.get("role") == "assistant":
-                combined = _without_reasoning(combined)
-            merged[-1] = {**previous, "content": combined}
+            merged[-1] = _tidy(previous, [*(previous.get("content") or ()), *(message.get("content") or ())])
         else:
             merged.append(message)
 
@@ -853,11 +885,14 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
     current = messages[boundary:]
     if merged[-1].get("role") == current[0].get("role"):
         tail = merged.pop()
-        current = [
-            {**current[0], "content": [*(tail.get("content") or ()), *(current[0].get("content") or ())]},
-            *current[1:],
-        ]
-    return [*merged, *current]
+        opening = _tidy(current[0], [*(tail.get("content") or ()), *(current[0].get("content") or ())])
+        current = [opening, *current[1:]]
+    folded = [*merged, *current]
+    # The last message may be an assistant toolUse still waiting for its result, so it is not checked.
+    if not _pairs_intact(folded[:-1]) and _pairs_intact(messages[:-1]):
+        logger.warning("fold broke a toolUse/toolResult pair | sending the messages unfolded")
+        return messages
+    return folded
 
 
 def _should_passthrough(

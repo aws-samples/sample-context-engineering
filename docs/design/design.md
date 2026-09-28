@@ -243,11 +243,19 @@ Translating:
 - **Lean catalog**, always present, listed in the **system prompt**: each tool as its name plus a
   summary of its description within a character budget (`catalog_chars`). It is not a separate
   artifact — it is generated from the objects that are already registered, and the summary of a
-  description too long to fit is written once and cached.
+  description too long to fit is written once and cached. The block states the rule where the names
+  are read: a listed tool is not in the tool list and a direct call to it does not run.
 - **Detail on demand**: the model names the tools it wants and `get_tool_details` loads their full
   parameters for the next call; when no listed name fits, `find_tools` searches over those same
-  objects first.
-- **Forgetting**: the detail leaves when it stops being used.
+  objects first. A call that skipped the load is cancelled with a message pointing at
+  `get_tool_details`, and nothing is loaded on the model's behalf — a recovery that loaded it would
+  teach that calling a catalog name directly works.
+- **Forgetting**: the detail leaves when it stops being used. Every call that actually runs renews it.
+- **Folding what the history shows**: a closed exchange with a tool that is not callable on this call
+  goes in as a plain sentence — *the tool X was called and the result was: Y* — instead of a `toolUse`
+  next to its result. The pair with its arguments is a template, and a model that copies it calls a
+  tool the call no longer carries. The turn in flight is never folded, and nothing is rewritten in the
+  agent's own history.
 
 Forgetting is free — the tool is never removed from the agent, it just stops being sent.
 
@@ -363,21 +371,22 @@ sequenceDiagram
     AG->>T: executes
     T-->>A: result (100k tokens)
 
-    Note over A: hook MessageAddedEvent<br/>rewrites the toolResult block in place
-    Note over A,S: the raw content leaves the history before the next call,<br/>which is why it goes to Storage
+    Note over A: hook AfterToolCallEvent<br/>rewrites event.result before it enters the history
+    Note over A,S: the raw content never becomes a message at all,<br/>which is why it goes to Storage
 
     A->>S: stores the raw content
     S-->>A: reference
     A->>A: scores the chunks against<br/>the question at hand
-    A-->>AG: relevant chunks, verbatim<br/>+ reference
+    A-->>AG: relevant chunks, verbatim<br/>+ disclaimer + reference
 
     AG->>M: call with the filtered result
 
     opt the filter cut something that was needed
-        M-->>AG: asks by the reference
-        AG->>S: queries by pattern or range
+        M-->>AG: retrieve_all_context(reference)
+        AG->>S: queries by span, pattern, chunk count or token budget
         S-->>AG: chunk
         AG->>M: call — costs a cycle
+        Note over A: the exchange is removed from the history<br/>at AfterInvocationEvent · a retrieval is paid for once
     end
 ```
 
@@ -394,8 +403,8 @@ sequenceDiagram
 
     Note over AG,B: middleware InvokeModelStage.Input<br/>single hook point
 
-    AG->>B: builds tool_specs and system_prompt for this call
-    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)<br/>no other tool is in tool_specs at all
+    AG->>B: builds tool_specs, system_prompt and messages for this call
+    B-->>AG: tool_specs = find_tools + get_tool_details + always_available + loaded<br/>system_prompt += catalog (name: summary)<br/>no other tool is in tool_specs at all
 
     AG->>M: call
     Note over M: the rule lives in the catalog block itself,<br/>beside the names it governs
@@ -409,7 +418,9 @@ sequenceDiagram
     AG->>T: executes
     T-->>AG: result
 
-    Note over B: the schema stays while it is in use<br/>and is forgotten by inactivity
+    Note over B: the schema stays while calls renew it<br/>and is released by inactivity
+    Note over B: the messages of the call carry the closed exchanges<br/>of every tool outside tool_specs as a sentence,<br/>not as a toolUse the model can copy
+    Note over B: a catalog name called directly is cancelled ·<br/>the message points at get_tool_details<br/>and nothing is loaded on the model's behalf
     Note over B: fallback — when no catalog name fits,<br/>find_tools searches and lists matches,<br/>then get_tool_details loads them
     Note over B: catalog_chars = None sends only the two tools<br/>saves more, but the model may<br/>not know it has tools
 ```
@@ -431,8 +442,8 @@ sequenceDiagram
     U->>AG: message
 
     Note over AG,B: middleware InvokeModelStage.Input
-    AG->>B: builds tool_specs and system_prompt for this call
-    B-->>AG: two plugin tools + those in use<br/>lean catalog appended to the system prompt
+    AG->>B: builds tool_specs, system_prompt and messages for this call
+    B-->>AG: two plugin tools + always_available + loaded<br/>lean catalog appended to the system prompt<br/>closed exchanges of the rest folded into a sentence
 
     AG->>M: call
 
@@ -447,17 +458,18 @@ sequenceDiagram
 
     AG->>T: executes
     T->>A: result (100k tokens)
-    Note over A: hook MessageAddedEvent
+    Note over A: hook AfterToolCallEvent
     A->>S: stores the raw content
     A-->>AG: relevant chunks + reference
 
     AG->>M: call with the filtered result
 
     opt the filter cut something that was needed
-        M-->>AG: asks it back by the reference
+        M-->>AG: retrieve_all_context(reference)
         AG->>S: explicit query
         S-->>AG: content
         AG->>M: call — costs a cycle
+        Note over B: retrieve_all_context is not in always_available ·<br/>it sits in the catalog and is loaded only<br/>when a whole result is what the question needs
     end
 
     M-->>AG: final response

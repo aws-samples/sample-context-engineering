@@ -197,15 +197,17 @@ The card keeps a reference, never content.
 `tracking_id` and belongs to the subject card. The raw content is what the `Stash` holds under a
 reference, and the artifact card keeps that reference. The expansion is
 `retrieve_context(reference, line_range=...)`, which already exists — the `ContextManager`'s
-retrieval tool, not the offloader's.
+retrieval tool (`_context_manager/retrieval_tool.py:24`), not the offloader's, and distinct from the
+relevance filter's own `retrieve_all_context`, which reads back a payload the filter stored rather
+than a `Stash` reference.
 
-The timing changed on A's side and it is worth being exact about it, because §5 leans on the
-distinction. The offloader replaced the content in the `AfterToolCallEvent`, so the raw content was
-never a message at all. The `ContextManager` rewrites the block in place on `MessageAddedEvent`
-(`design-a` §4), so the raw content **is** a message for a moment and then stops being one, before
-any model call sees it. Either way what the card addresses is the reference, and D reads the
-reference off the preview text — which is what makes the graph independent of hook order against
-whichever of the two is running.
+The timing differs by host and it is worth being exact about it, because §5 leans on the distinction.
+A as shipped — `RelevanceFilter` — rewrites `event.result` on `AfterToolCallEvent`, so the raw content
+is never a message at all, and so did the offloader before it. The `ContextManager` instead rewrites
+the block in place on `MessageAddedEvent` (`design-a` §4), so under that host the raw content **is** a
+message for a moment and then stops being one, before any model call sees it. Either way what the card
+addresses is the reference, and D reads the reference off the preview text — which is what makes the
+graph independent of hook order against whichever of the two is running.
 
 D reads both shapes, because both hosts write one:
 
@@ -285,7 +287,8 @@ Tempting to slice into smaller pieces. It does not work, for three reasons that 
    content (destructive), which is what keeps recovery lossless.
 
 Sub-message exists in one place only, and it is safe because there the content is not a message: a
-stashed tool result is addressable by `line_range` and by `pattern` through `retrieve_context`, and
+stashed tool result is addressable by `line_range` and by `pattern` through the `ContextManager`'s
+`retrieve_context`, and
 A splits the same text into `chunk_tokens` chunks to score it (`design-a` §5). Both read below the
 message without rewriting the list.
 
@@ -634,7 +637,7 @@ sequenceDiagram
     G->>G: step 2 — whoever rose pulls its neighbors
     G->>G: sorts, spends body_budget, distributes across three resolutions
     G-->>AG: full / description / title, per card
-    Note over AG: InvokeModelStage.Input — D removes from the history<br/>and folds the descriptions at the end · publishes the tool names<br/>that B's referenced consumes
+    Note over AG: InvokeModelStage.Input — D removes from the history<br/>and folds the descriptions at the end · B projects<br/>tool_specs over what D left
     AG->>M: call
     Note over AG: the in-memory conversation stays intact
     end
@@ -891,7 +894,7 @@ only remote call is the `matcher`.
 multilingual embedding, and swapping it changes the useful value of `expand_threshold`, which is not
 portable across implementations of `similar()`.
 
-`expand_threshold=0.0` turns everything on: today's behavior, and it is the regression test.
+`expand_threshold=0.0` turns everything on: the no-plugin behavior, and it is the regression test.
 
 The two thresholds do different jobs, and the asymmetric one is `collapse_floor`. It does not decide
 what is sent — it decides whether a card has a description or only a title. Erring low costs up to
@@ -908,14 +911,15 @@ D adds no new hook to the SDK. It uses four that already exist.
 | locks the turn's choice | `BeforeInvocationEvent` hook |
 | **removes**: filters the history by resolution | `InvokeModelStage.Input` middleware |
 | **compacts**: folds the descriptions as a final block | the same middleware, via the injection primitive (§9.2) |
-| publishes the tool names of the cards above title | the same middleware, before B |
 
-D assembles **history**, not `tool_specs`. The last line is where the interference dies, and not by D
-taking over B's job: D publishes the set of names that the cards above title mention, and B's
-`referenced` becomes the union of what the retained history cites with that set. B keeps deciding on
-its own who gets the full specification and who gets the pre-specification (§13.1).
+D assembles **history**, not `tool_specs`. That is where the interference dies, and not by a bridge
+between the two: B decides on its own who gets the full specification and who gets the
+pre-specification, reading nothing D publishes (§13.1).
 
-Order matters: D has to publish before B projects, in the same stage.
+What the two do share is one field of that middleware stage, `messages`: D filters the history by
+resolution, and B folds the closed exchanges of the tools this call does not carry (§13.1). Both are
+projections of the same list, so they compose — and the order has to be fixed: D first, B over what D
+left.
 
 ## 12. Contract
 
@@ -924,7 +928,7 @@ Seven rules. The last one is the one that defines the design.
 | Rule | Why |
 |---|---|
 | Never mutates the history, only decides resolution | an error costs one poor call |
-| Never blocks the main agent | with no cards, everything goes in whole: today's behavior |
+| Never blocks the main agent | with no cards, everything goes in whole: the no-plugin behavior |
 | Main agent protection forces the full content | whoever is solving the task knows more |
 | Choice locked per turn | avoids the context changing in the middle of a line of reasoning |
 | The current turn always goes in whole | its cards do not exist yet; the agent sees its own work at maximum resolution |
@@ -941,21 +945,21 @@ never drops resolution, and model output is validated on form and never on merit
 
 Two are D's:
 
-- **A card above title feeds B's `referenced`.** See §13.1 — D does not write to `tool_specs`, it
-  supplies input to a calculation B already does.
+- **A card never promotes a tool.** See §13.1 — D does not write to `tool_specs`, and B's projection
+  reads nothing from the graph: a tool a description names is loaded by the same route as any other
+  catalog name.
 - **An artifact card never turns by automatic choice.** A raw tool result only raises resolution on
   an explicit request. The search alone never brings back 100 thousand tokens.
 
 ### 13.1 Pre-specification and specification are distinct things
 
-B already operates on two levels, and `_compose_projection` separates them into four blocks plus the
+B already operates on two levels, and `_compose_projection` separates them into three blocks plus the
 catalog:
 
 ```
   block 1  the two plugin tools     ─┐
   block 2  always_available          │   FULL specification
-  block 3  exposed                   │   (with inputSchema)
-  block 4  referenced               ─┘
+  block 3  loaded, by TTL           ─┘   (with inputSchema)
   catalog  everything else          ──▶  pre-specification
                                          NOT in tool_specs at all
                                          one system-prompt line: name + summary
@@ -963,42 +967,34 @@ catalog:
 
 Two readings D needs to respect:
 
-**The pre-specification is never missing.** Every tool that did not pass in the four blocks gets a
+**The pre-specification is never missing.** Every tool that did not pass in the three blocks gets a
 catalog line. There is no absent tool, so there is nothing for D to "bring".
 
-**Block 4 is already the subject → tool link.** `referenced` is the names of the `toolUse` of the
-**retained history**. B already reads the projected history.
+**The history promotes nothing.** There is no block for the tools the retained history cites. A
+`toolUse` whose tool is absent from `tool_specs` is accepted by the provider, and keeping those tools
+made the projection grow with every tool the conversation had ever touched. What the history gets
+instead is B's own fold: a closed exchange of a tool outside `tool_specs` arrives as a sentence —
+*the tool X was called and the result was: Y* — evidence without a call shape to copy.
 
-The real problem is what happens when D lowers a card's resolution. Its `toolUse` leave the retained
-history, the name drops off `referenced`, and the tool falls out of the projection into the catalog — it
-loses the `inputSchema`. But the description **keeps naming the tool**
-(`tools used: list_investment_positions ×3`). The model reads about a tool it can no longer call without
-loading it first.
+That is what removes the defect D used to have to guard against. A card dropping to title took the
+`toolUse` out of the retained history, the name off `referenced`, and the `inputSchema` with it, while
+the description **kept naming the tool** (`tools used: list_investment_positions ×3`) — the model read
+about a tool it could no longer call. With no history block left, a lowered card takes nothing away:
+the description is in the same position as a catalog line, and the route from a name to a callable
+tool is `get_tool_details`, the one route the catalog rule already teaches. A direct call is cancelled
+with a message pointing there, and nothing is loaded on the model's behalf.
 
-That is a defect **D introduces**, not one D fixes. The guard exists so as not to introduce it:
-
-```
-  card in full content  ──▶  tool names enter the referenced  ──▶  full spec
-  card in description   ──▶  tool names enter the referenced  ──▶  full spec
-  card in title         ──▶  they do not enter                ──▶  catalog line only
-```
-
-A description is history at a lower resolution, and `referenced` means "the history mentions this" —
-so the description qualifies by the very criterion B already uses. D does not reimplement or override
-B: it supplies a better input to an existing calculation.
-
-The two scales become aligned, and neither has an "absent" level:
+So the two scales are independent instead of aligned, and neither has an "absent" level:
 
 | card resolution | tool shape |
 |---|---|
-| full content | full specification |
-| description | full specification |
-| title | catalog line (pre-specification) |
+| full content | loaded or catalog line, by B's TTL alone |
+| description | loaded or catalog line, by B's TTL alone |
+| title | loaded or catalog line, by B's TTL alone |
 
 Consequence for the budget: D does **not** compete with B's `catalog_chars` and cannot overflow the
-schema budget, because it emits no spec at all. What D moves is the boundary between the `referenced`
-block and the catalog, and the cost of that boundary is the `inputSchema` of the tools of the cards above
-title — measurable, and limited by the number of cards, not by the number of tools.
+schema budget, because it emits no spec at all and moves no boundary inside `tool_specs`. A lowered
+card costs history tokens and nothing else.
 
 ## 14. What D serves of the measured numbers
 
@@ -1050,14 +1046,14 @@ missing.
 
 | Failure | Effect | Mitigation |
 |---|---|---|
-| The search lights up too much | everything goes in whole | it is today's behavior; structural fail-safe |
+| The search lights up too much | everything goes in whole | it is the no-plugin behavior; structural fail-safe |
 | The search lights up too little | poor answer | the description is there, the model asks: one cycle |
 | A wrong similarity link fuses subjects | more context | favorable asymmetry, see §14 |
 | The derived description does not catch what mattered | poor answer | the full content is still in the card, the title is visible |
 | Model abuses `expand` or `find_context` | each recovery becomes resident history, and `find_context` costs one cycle even when it finds nothing | same risk the report points out in A: recovery pays twice. The score feedback (§9.1) is the countermeasure, and the curve of cycles per turn (§18) is how it is detected |
 | Evidence decays and the question was an aggregation | wrong answer, not poor | §3.1 names the case; the reference is in the title and `expand` reads by range. It is the most serious failure mode of the design, because it fails silently |
 | Classifier fails | message without a card | a message without a card goes in whole |
-| `similar()` fails or times out | no score | with no score, everything goes in whole: today's behavior. `SemanticTopicMatcher` already returns empty on any exception instead of propagating |
+| `similar()` fails or times out | no score | with no score, everything goes in whole: the no-plugin behavior. `SemanticTopicMatcher` already returns empty on any exception instead of propagating |
 
 The fifth line needs measurement before any conclusion. The report already shows the pattern in A:
 `relevance` consumed rerank units, worked, and returned +0.7% tokens — because the gap marker is an
@@ -1080,10 +1076,9 @@ D exposes two recovery routes, and they answer different questions:
 | `find_context(need, tag=None)` | **what** it is looking for, not where it is | semantic search over the descriptions, with optional exact tag filter (§7.1, §8.1) |
 
 A tool stays out of both, and §13.1 explains why: raising a tool from pre-specification to full
-specification is B's decision, taken from `referenced`. D already influences that by publishing the
-names of the cards above title, and the model already has B's `find_tools` plus `get_tool_details` for
-the case of wanting a tool no card mentions. A third route to the same thing would be ambiguity, not
-convenience.
+specification is B's decision, taken from what the model has loaded, and D feeds no input to it. The
+model already has B's `find_tools` plus `get_tool_details` for any tool it wants, whether a card
+mentions it or not. A third route to the same thing would be ambiguity, not convenience.
 
 Honest caveat about `expand`: subject and artifact have different parameters — line range and pattern
 only exist for an artifact. Either the signature carries fields that only apply to half the cases, or
@@ -1099,16 +1094,13 @@ what the table above fixes.
 - Rate of `expand` requested by the model. It is the direct measure of the automatic choice's error,
   and a high number at the start is good: it means the way back exists and the model finds it.
 - Premature calls, against **B alone** and not against zero. The 15 to 17 that the
-  `progressive_tool_disclosure` counter measured came from tools never used yet, on the **previous**
-  design, where an undisclosed tool still sat in `tool_specs` as a reduced entry with an empty
-  `inputSchema`. With the catalog in the system prompt the counter should sit near zero, so the baseline
-  to compare against is whatever B alone records on the current code. D's prediction is unchanged —
-  *not to make it worse*: if it names a tool in the description without preserving the spec, the number
-  goes up, and that is how the defect of §13.1 shows up in the measurement.
-- How many tools D promoted from the catalog into the `referenced` block, and how many `inputSchema`
-  tokens that cost. It
-  is the direct price of the §13.1 guard, and it needs to stay below what the description saved on the
-  same call.
+  `progressive_tool_disclosure` counter measured came from an earlier design, where an undisclosed tool
+  still sat in `tool_specs` as a reduced entry with an empty `inputSchema`. With the catalog in the
+  system prompt, a cancellation that points at `get_tool_details`, and no load on the model's behalf,
+  the counter should sit near zero, so the baseline to compare against is whatever B alone records on
+  the current code. D's prediction is unchanged — *not to make it worse*: a description that names a
+  tool is one more invitation to call it directly, and `premature_cancellations` is where that shows
+  up.
 - **Curve of recovery cycles per turn** — `expand` plus `find_context`, across the session. It is the
   metric that decides whether D works, more than tokens. A descending curve means the score learned
   from the request (§9.1); a flat curve means D traded tokens for latency, which is the result A
@@ -1125,13 +1117,15 @@ D is a context strategy, selected in a parameter. **Only one strategy runs per a
 
 ```
   context_strategy = "graph"   ──▶  D
-                   | None      ──▶  none, today's behavior
+                   | None      ──▶  none, the no-plugin behavior
 ```
 
-It is the same shape A uses. A is now one entry in the `ContextManager` pipeline —
-`Offload.relevance("tool_results")`, id `offload:relevance`, sibling of `offload:truncate` — which is
-a choice between strategies, not a sum of plugins. The difference is that A's pipeline is ordered and
-several entries may run; D's exclusivity is stricter, because it is the assembly point itself.
+It is the same shape A uses. A shipped as a standalone `Plugin`, `RelevanceFilter`, and not as a
+`ContextManager` offload strategy: the SDK's offload family is `drop`, `summarize` and `truncate`
+(`strands/_context_manager/strategies/offload/`), with no relevance entry. The comparison still
+holds in kind — `ContextManager` picks among strategies rather than summing plugins, and its pipeline
+is ordered so several entries may run, while D's exclusivity is stricter because it is the assembly
+point itself.
 
 The exclusivity is not configuration convenience, it is what guarantees **a single assembly point per
 call**. Two strategies deciding over the same history is the interference the report measured: gains
@@ -1140,20 +1134,31 @@ that add up and accuracy that does not.
 ## 19.1 Relationship with A and B
 
 ```
-  A  filter on the result   ──▶  now a ContextManager strategy; still what produces the reference
-                                 the artifact card addresses
-  B  lean catalog           ──▶  keeps assembling on its own; D only feeds the referenced (§13.1)
+  A  filter on the result   ──▶  a standalone plugin on AfterToolCallEvent · still what produces
+                                 the reference the artifact card addresses
+  B  lean catalog           ──▶  assembles tool_specs on its own, reading nothing from D (§13.1)
 ```
 
-Neither of the two has an assembly conflict with D: A rewrites one `toolResult` block in place on
-`MessageAddedEvent`, before the next model call, and B assembles `tool_specs`, which D does not touch
-(§13.1).
+A has no assembly conflict with D: it rewrites `event.result` on `AfterToolCallEvent`, before the
+payload becomes a message at all
+(`strands_relevance_filter/plugin.py:_on_after_tool_call:611`). With B the split is by field — B owns
+`tool_specs`, which D does not touch (§13.1) — except for `messages`, which both project in the same
+middleware stage: D filters by resolution, B folds the exchanges of the tools the call does not carry,
+and the order is D first (§11).
 
-What A's move does change is **which of D's two paths registers the artifact card**. D's
-`AfterToolCallEvent` hook is a fast path only: it reads references off `event.result`, and with A no
-longer acting on that event, a result there names none, so the hook registers nothing. The card then
-comes from the second path, the scan of the preview text — which is the path the code already
-declares makes hook order irrelevant. Same card, one event later.
+Because A rewrites on the same event D's fast path reads, **either of D's two paths can register the
+artifact card**. D's `AfterToolCallEvent` hook reads references off `event.result`, so when A has
+already rewritten that result the references are there and the hook registers the card immediately;
+when they are not — a host that replaces the content elsewhere, or a hook order that puts D first —
+the card comes from the second path, the scan of the preview text, which is the path the code declares
+makes hook order irrelevant (`strands_context_graph/plugin.py:876` docstring). Same card, at worst one event later.
+
+One thing A takes off D's hands entirely: A's own retrieval tool, `retrieve_all_context`, has its
+exchanges removed from `agent.messages` at `AfterInvocationEvent`, once the turn has ended
+(`strands_relevance_filter/plugin.py:_on_after_invocation:589`). They are gone before the next
+`MessageAddedEvent` boundary closes a turn, so D's scan never sees them and no card is ever derived
+from a recovery A performed. Under B that tool is also kept out of `always_available` and reached
+through the catalog, so it does not compete with D's three retrieval tools for the exempt slots.
 
 ## 19.2 Why there is no idea C
 
@@ -1297,7 +1302,7 @@ The integrations are optional and degrade to less optimization, never to error:
 
 ```
   without A   ──▶  no artifact card; the rest works
-  without B   ──▶  D publishes tool names nobody reads; harmless
+  without B   ──▶  D assembles the history alone; nothing folds the exchanges it keeps
 ```
 
 ## 22. Open decisions
@@ -1365,5 +1370,5 @@ Four things D explicitly does not do, and each one has an owner.
 |---|---|---|
 | Retrieved long-term memory | it has no durable identity in the conversation and the store changes from outside; a card with a copy rots silently (§4) | the LTM mechanism; D only improves its *query* |
 | A graph that crosses sessions | STM has session scope; crossing is accumulating knowledge, that is, LTM (§20) | idem |
-| Assembling the `tool_specs` | pre-specification and specification are distinct levels and B already separates them into five blocks (§13.1) | B; D only feeds the `referenced` |
+| Assembling the `tool_specs` | pre-specification and specification are distinct levels and B already separates them into three blocks (§13.1) | B; D feeds it no input |
 | Content delivery per call | `injection/_message_injection.py` already folds a final block ephemerally and cache-safely; D uses it, does not reimplement it (§9.2) | the `injection` module |
