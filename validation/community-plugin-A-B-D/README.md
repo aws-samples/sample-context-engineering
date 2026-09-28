@@ -9,16 +9,8 @@ This directory benchmarks practices **A, B and D** as **community plugins** — 
 packages that attach to the SDK's extension surface and are installed alongside an **unmodified**
 `strands-agents` from PyPI.
 
-It is the sibling of [`../01-designA-B-D`](../01-designA-B-D), which measures the same three
-strategies as **vended plugins of a forked SDK**. Same scenario, same tool suite, same model, same
-60 turns — so the two runs' absolute token totals are directly comparable, which is the point of
-having both.
-
-| Strategy | Vended (`01-designA-B-D`) | Community (here) |
-|---|---|---|
-| **A** Relevance filtering | `ContextManager` + `Offload.relevance` | `strands_relevance_filter.RelevanceFilter` |
-| **B** Progressive tool disclosure | `strands.vended_plugins.…` | `strands_progressive_tool_disclosure.ProgressiveToolDisclosure` |
-| **D** Context graph | `ContextStrategy(strategy="graph")` | `strands_context_graph.ContextGraph` |
+The same scenario, tools and scoring are reused by the LangGraph harness in
+[`../plugins-langgraph/`](../plugins-langgraph/README.md).
 
 ---
 
@@ -381,19 +373,6 @@ history, not as the current cost of the arm.
 Peak input on a single call, Opus: baseline 204,439 — above Haiku's entire window, which is why the
 baseline is only runnable here on a model with more than 200k of context; relevance 174,062;
 disclosure 149,681; graph 147,948; all three 49,943.
-
-### Against the vended run
-
-**Not comparable any more, and the earlier claim of parity should not be repeated as a like-for-like.**
-The vended figures in [`../../README-vended-plugins.md`](../../README-vended-plugins.md) were measured
-on the previous version of this script — 18 scored turns, and a filler that asked about accounts the
-fixture did not hold, so 36 of 42 filler turns made no tool call and contributed almost no payload
-mass. This script grounds every filler turn, which is why its baseline carries 14.4M input tokens
-where the vended one carried 11.3M.
-
-The strategies' *direction* and *relative* ordering agree across both. Settling whether the two
-packagings reach the same absolute number would mean re-running the vended harness on the corrected
-script, which has not been done.
 
 ---
 

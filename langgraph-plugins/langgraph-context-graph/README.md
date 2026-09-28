@@ -15,11 +15,13 @@ which the middleware warns about at construction. Verified against `langchain` 1
 
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install langgraph-context-graph
+uv pip install -e context-core -e langgraph-plugins/langgraph-context-graph
 ```
 
-This pulls in [`agent-context-core`](https://pypi.org/project/agent-context-core/), `langchain` and
+This pulls in `agent-context-core`, `langchain` and
 `langgraph`. The default similarity matcher embeds with `cohere.embed-multilingual-v3` on Amazon Bedrock,
 so it needs AWS credentials and a region. Pass `matcher=` to use another backend.
 

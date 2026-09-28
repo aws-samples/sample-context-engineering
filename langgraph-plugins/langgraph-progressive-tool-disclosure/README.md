@@ -10,11 +10,13 @@ Verified against `langchain` 1.x.
 
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install langgraph-progressive-tool-disclosure
+uv pip install -e context-core -e langgraph-plugins/langgraph-progressive-tool-disclosure
 ```
 
-This pulls in [`agent-context-core`](https://pypi.org/project/agent-context-core/), `langchain` and
+This pulls in `agent-context-core`, `langchain` and
 `langgraph`. Tool search is lexical and local. By default, catalog lines that exceed `catalog_chars` are
 summarized by the agent's own model.
 

@@ -68,14 +68,6 @@ stack runs under `invoke` and under `ainvoke`.
 
 ## Install
 
-From PyPI:
-
-```bash
-pip install langgraph-relevance-filter langgraph-progressive-tool-disclosure langgraph-context-graph
-```
-
-Each binding pulls in the shared core, published as `agent-context-core` (import name `context_core`).
-
 From a clone of this repository:
 
 ```bash

@@ -10,15 +10,15 @@ Framework-agnostic core for the three context-engineering practices:
 
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install agent-context-core
+uv pip install -e context-core
 ```
 
 The distribution is `agent-context-core`; the import name is `context_core`. You normally do not install
-it directly — the framework bindings depend on it:
-[`langgraph-relevance-filter`](https://pypi.org/project/langgraph-relevance-filter/),
-[`langgraph-progressive-tool-disclosure`](https://pypi.org/project/langgraph-progressive-tool-disclosure/)
-and [`langgraph-context-graph`](https://pypi.org/project/langgraph-context-graph/).
+it directly — the framework bindings depend on it: `langgraph-relevance-filter`,
+`langgraph-progressive-tool-disclosure` and `langgraph-context-graph`.
 
 The default reranker (`amazon.rerank-v1:0`) and embedder (`cohere.embed-multilingual-v3`) call Amazon
 Bedrock through `boto3`, so using them needs AWS credentials and a region. Both are pluggable, and no AWS
