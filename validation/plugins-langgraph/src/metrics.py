@@ -69,7 +69,7 @@ RETRIEVAL_TOOLS = ("retrieve_all_context", "expand_artifact", "expand_card", "fi
 ``retrieve_all_context`` is the relevance filter's (registered by default; its exchanges leave the
 history when the turn ends); the other three are the context graph's. ``find_tools`` and
 ``get_tool_details`` are excluded: they return tool specs, not content. The earlier count keyed off
-``retrieve_offloaded_content``, a vended-SDK tool that never exists here, so the column read 0.
+``retrieve_offloaded_content``, a tool from an earlier SDK integration that never exists here, so the column read 0.
 """
 
 

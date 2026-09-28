@@ -15,3 +15,7 @@ venv/
 # not artefacts a reader of this repository needs. `.kiro/` is a local agent configuration directory.
 tmp/
 .kiro/
+
+# Local backup of retired material and discarded worktree patches. Kept on disk, never
+# versioned.
+bkp/

@@ -1,18 +1,18 @@
 """Builds each configuration and replays the scenario against real Bedrock calls.
 
-The sibling harness in ``validation/01-designA-B-D`` measures the same three strategies as vended
-plugins of a forked SDK. This one measures the three **community packages** against an unmodified
-``strands-agents``, and three differences follow from that -- none of them cosmetic:
+This harness measures the three strategies as **community packages**, installed alongside an
+unmodified ``strands-agents`` from PyPI, and three properties follow from that -- none of them
+cosmetic:
 
-**The baseline installs nothing.** The vended harness put its ``ContextOffloader`` in every
-configuration, the baseline included, because without it the 60k-250k character payloads overflow
-the window and the baseline fails rather than merely costing more. Here the baseline is the
+**The baseline installs nothing.** No plugin sits in the baseline configuration, so nothing
+stops the 60k-250k character payloads from entering the history whole and overflowing the
+window: on a tight window the baseline fails rather than merely costing more. It is the
 unmodified agent, which is the honest control: it measures the cost of doing nothing, and a turn
 that exceeds the model's context limit is recorded as an error and reported. That is the
 measurement, not a defect.
 
-**Each strategy brings its own remote client.** The vended stack shared one ``ContextManager``, so
-one metered reranker covered everything. Here ``RelevanceFilter`` owns a ``Reranker`` and
+**Each strategy brings its own remote client.** No component is shared between the strategies,
+so no single metered client covers everything. ``RelevanceFilter`` owns a ``Reranker`` and
 ``ContextGraph`` owns a ``SimilarityMatcher``, so metering is done by subclassing each package's
 *public* class -- ``BedrockReranker`` and ``EmbeddingSimilarityMatcher`` -- rather than the SDK's
 private ones.
@@ -257,8 +257,8 @@ bridged them: ``RelevanceFilter`` stored the raw sub-blocks it replaced and hand
 ``retrieve_context`` resolved, while ``ContextGraph`` recorded addresses it saw in placeholder text
 and resolved them through a store of its own. The graph's README is explicit that its bridge to
 another plugin's stash is built entirely on private symbols and degrades to "answers as prose naming
-the miss" -- which is exactly what happened, and the vended stack never hit it because relevance
-lived *inside* the ContextManager whose stash the graph bridged to.
+the miss" -- which is exactly what happened: the model picked the tool whose store did not hold
+the reference, and got a miss back.
 
 So with both installed there were two plausible tools for one job and only one could resolve the
 reference, and dropping the graph's left exactly one artifact path. The filter's tool has since been

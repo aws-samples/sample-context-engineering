@@ -11,11 +11,13 @@ Verified against `langchain` 1.x. `include_retrieval_tool` defaults to `True`.
 
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install langgraph-relevance-filter
+uv pip install -e context-core -e langgraph-plugins/langgraph-relevance-filter
 ```
 
-This pulls in [`agent-context-core`](https://pypi.org/project/agent-context-core/), `langchain` and
+This pulls in `agent-context-core`, `langchain` and
 `langgraph`. The default reranker (`amazon.rerank-v1:0`) runs on Amazon Bedrock, so the first oversized
 result needs AWS credentials and a region. Pass your own reranker through `config` to use something else.
 

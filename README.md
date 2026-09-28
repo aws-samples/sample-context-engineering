@@ -7,269 +7,239 @@
 > roles, permissions, and deployment configurations shown here are minimal examples — not
 > production-ready baselines.
 
-A collection of **context-engineering practices** for LLM agents — techniques that keep an agent's
-working context small and relevant as a conversation grows, without losing the information the task
-actually needs.
+Three **context-engineering practices** for LLM agents: techniques that keep an agent's working context
+small and relevant as a conversation grows, without losing what the task needs.
 
-The practices ship as **three community plugins** for [Strands Agents](https://strandsagents.com):
-ordinary installable packages that attach to the SDK's extension surface. No SDK fork, no pinned
-commit — they run against an unmodified `strands-agents` from PyPI.
+They ship for two frameworks, over one shared core:
+
+- **[Strands Agents](https://strandsagents.com)** — three plugins that install next to an unmodified
+  `strands-agents` from PyPI.
+- **[LangChain / LangGraph](https://langchain-ai.github.io/langgraph/)** — three `create_agent`
+  middlewares for LangChain v1.
+- **[`context-core`](context-core/)** — the framework-agnostic logic both use. It imports no agent
+  framework.
+
+On a 60-turn benchmark with prompt caching off, the three practices together send **75–84% fewer
+tokens** than a bare agent on large-window models, at the same accuracy. On models with a window of
+256K tokens or less the bare agent cannot finish the conversation, and the three together answer every
+turn. [The results](#the-results) have the numbers.
 
 ## Why
 
-The collection starts from a measured diagnosis of a real agent session (13 turns, ~29 minutes), not
-from intuition. Three findings shaped the ideas:
+The practices come from a measured diagnosis of a real agent session (13 turns, ~29 minutes), not from
+intuition. Three findings shaped them:
 
-- **The context is dominated by what the task does *not* need.** In the measured session, four turns
-  of tool-connector troubleshooting accounted for **44.7%** of all token consumption — legitimately
-  discussed, but not the objective, and re-sent on every following turn.
-- **A large fixed floor is paid on every call.** Roughly **63k tokens per call** were tool schema
-  alone — about 85% of a call's floor — reprocessed on all 33 model calls with the prompt cache off.
-- **Retrieved memory is accumulated, not transient.** Retrieved records are inserted *into* the
-  conversation and re-sent every turn, making irrelevant retrieval a **quadratic** cost rather than a
-  one-off.
+- **Most of the context is what the task does *not* need.** Four turns of tool-connector
+  troubleshooting accounted for **44.7%** of all tokens in the session. They were legitimately
+  discussed, but they were not the objective, and they were re-sent on every later turn.
+- **A large fixed floor is paid on every call.** About **63k tokens per call** were tool schema alone,
+  roughly 85% of a call's floor, re-processed on all 33 model calls.
+- **Retrieved memory accumulates.** Retrieved records are inserted into the conversation and re-sent
+  every turn, so irrelevant retrieval costs quadratically, not once.
 
-The common thread: an agent's context grows with *everything that happened*, while a good answer needs
-only *what the activity in progress requires*. The practices here separate those two — keeping the
-task's **attention memory** resident and letting the **background** be reachable on demand instead of
-resident.
+An agent's context grows with everything that happened, while a good answer needs only what the current
+activity requires. The practices keep the task's **attention memory** in the context and leave the
+**background** reachable on demand.
 
-This direction is consistent with published work: AWS's Strands benchmark for compaction-plus-offload
-context management reports **cost −55%** with **accuracy rising 68% → 98%**
+This is consistent with published work: the Strands benchmark for compaction plus offload reports **cost
+−55%** with **accuracy rising 68% → 98%**
 ([reduced cost, better isolation, more resilience](https://strandsagents.com/blog/reduced-cost-better-isolation-more-resilience/)).
-The practices below take that further and measure each one against a baseline in this repo.
 
 ## The practices
 
-Each practice is documented in three layers: **the idea** (framework-agnostic), **an example** (real
-framework code, in the same doc), and **results** (the reproducible benchmark under
-`validation/community-plugin-A-B-D/`).
+| | Practice | What it does | Strands | LangGraph | Design |
+|---|---|---|---|---|---|
+| **A** | **Relevance filtering** | Scores a tool result's chunks against the question and keeps what answers it, before the result enters the history. | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | [`langgraph-relevance-filter`](langgraph-plugins/langgraph-relevance-filter/) | [design A](docs/design/design-a-relevance-filtering.md) |
+| **B** | **Progressive tool disclosure** | Sends a lean tool catalog and a tool's full spec only on demand, attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | [`langgraph-progressive-tool-disclosure`](langgraph-plugins/langgraph-progressive-tool-disclosure/) | [design B](docs/design/design-b-progressive-tool-disclosure.md) |
+| **D** | **Context graph** | Turns the history into Cards and sends each at the resolution the question needs (full, Description or Title), recoverable on demand. It subsumes an earlier curator idea (C). | [`strands-context-graph`](community-plugins/strands-context-graph/) | [`langgraph-context-graph`](langgraph-plugins/langgraph-context-graph/) | [design D](docs/design/design-d-context-graph.md) |
 
-| | Practice | Idea | Package | Design |
-|---|---|---|---|---|
-| **A** | **Relevance filtering** | Score a tool result's chunks against the question and keep only what answers it, instead of a positional slice. | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | [`design-a-relevance-filtering.md`](docs/design/design-a-relevance-filtering.md) |
-| **B** | **Progressive tool disclosure** | Send a lean tool catalog; fetch a tool's full spec on demand, then forget it — attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | [`design-b-progressive-tool-disclosure.md`](docs/design/design-b-progressive-tool-disclosure.md) |
-| **D** | **Context graph** | Reorganize the two above into one graph with remove/recover over an immutable log. It subsumes the earlier background-curator idea (C), which is why there is no standalone C. | [`strands-context-graph`](community-plugins/strands-context-graph/) | [`design-d-context-graph.md`](docs/design/design-d-context-graph.md) |
+Each package is independent: install one, two or all three. They compose because they act at different
+moments: the filter on a tool result before it enters the history, disclosure on the tool list, the
+graph on a history that already exists.
 
-Each package is independent: install one, two, or all three.
+## How to install and use them
 
-## How to install and use the community plugins
+| Framework | Guide | Benchmark |
+|---|---|---|
+| Strands Agents | **[`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md)** | [`validation/community-plugin-A-B-D/`](validation/community-plugin-A-B-D/README.md) |
+| LangChain / LangGraph | **[`how-to/03-langgraph-plugins-agent-sample.md`](how-to/03-langgraph-plugins-agent-sample.md)** | [`validation/plugins-langgraph/`](validation/plugins-langgraph/README.md) |
 
-**→ [`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md)**
+Each guide goes from nothing to a working agent: prerequisites, a minimal agent with one oversized tool,
+each practice on its own, then all three together, with the constructor arguments the benchmark uses. Each
+also lists the things that fail silently when the three are combined. **Read those before wiring all
+three.** The ones that apply to both frameworks:
 
-That guide is the runnable path from nothing to a working agent: what you need, a minimal agent with
-one oversized tool, then each plugin wired on its own, then all three together — with the exact
-constructor arguments and what each one costs.
+1. **The relevance threshold is a position in a distribution, not a number.** The package default of
+   `0.5` rejects every chunk with `cohere.rerank-v3-5`, whose strong matches score ~0.29. The benchmark
+   uses `0.02`.
+2. **Nothing may delete from the history behind the graph.** In Strands that means
+   `NullConversationManager`; in LangGraph, no summarization or trimming middleware. Either can drop
+   what the graph only meant to fold.
+3. **Two retrieval tools read two stores.** The filter's `retrieve_all_context` and the graph's
+   `expand_artifact` must not look like the same job to the model; the guides show how they are scoped
+   and, in LangGraph, how the graph reads the filter's store through `stash=`.
 
-It also carries **four gotchas you should read before combining the plugins**, because two of them
-cost a measured benchmark run its answers and neither fails loudly:
-
-1. **Two retrieval tools, one job.** The relevance filter and the context graph each ship an
-   artifact-retrieval tool over its own store, and nothing bridges them. Installed together, the model
-   reaches for the wrong one and gets an unresolvable reference. Fixing it recovered two scored turns.
-2. **`NullConversationManager` is a precondition of the graph**, not a suggestion — any other manager
-   can physically drop what the graph only meant to fold.
-3. **The relevance threshold is a position in a distribution, not a number.** The package default of
-   `0.5` rejects every chunk with `cohere.rerank-v3-5`, whose strong matches score ~0.29.
-4. **The graph should fold *less* when the relevance filter is present, not more.** They compete for
-   the same job: the filter has already replaced the payload with a preview before the graph derives
-   its Card. Thresholds that improved the graph alone, applied to all three together, lost five
-   materially correct turns while moving tokens 1.2%.
-
-Quick install, from a clone of this repository:
+The packages are not on PyPI yet. Install them from a clone of this repository:
 
 ```bash
-pip install -e community-plugins/strands-context-graph
-pip install -e community-plugins/strands-progressive-tool-disclosure
-pip install -e community-plugins/strands-relevance-filter
-pip install "strands-agents>=1.44.0,<2.0.0"
+# Strands
+pip install -e community-plugins/strands-relevance-filter \
+            -e community-plugins/strands-progressive-tool-disclosure \
+            -e community-plugins/strands-context-graph \
+            "strands-agents>=1.44.0,<2.0.0"
+
+# LangChain / LangGraph
+pip install -e context-core \
+            -e langgraph-plugins/langgraph-relevance-filter \
+            -e langgraph-plugins/langgraph-progressive-tool-disclosure \
+            -e langgraph-plugins/langgraph-context-graph \
+            "langchain>=1.0,<2" "langgraph>=1.0,<2" "langchain-aws>=1.7,<2"
 ```
 
-Verified against **`strands-agents` 1.56.0** from PyPI.
+Verified against `strands-agents` 1.56.0 and `langchain` 1.4.2.
 
-## The result
+## The results
 
-**Total tokens** is the agent's own `usage`, input plus output, plus every auxiliary token the strategy
-spent on its own account: the graph's embedding calls and the filter's rerank calls. **Cost** applies
-the rates declared in `validation/community-plugin-A-B-D/src/config.py` to measured units — without
-that, the strategies that buy their saving with a second model call would rank better than they are.
-Rates are per model id in `MODEL_PRICING`, read off the [Bedrock pricing
-page](https://aws.amazon.com/bedrock/pricing/) on 2026-09-21: Opus 4.8 at $5.00/$25.00 per million
-input/output tokens. These are list prices, so read the cost column as list cost rather than as
-anyone's bill; every comparison below is a ratio between rows priced the same way. Prompt caching is
-off in every row below.
+One scripted conversation of 60 turns, replayed once per configuration: a bare agent (no plugin), each
+practice alone, and all three together. Several mocked tools return 40,000–120,000 characters in one
+result, which is where the mass is. 30 turns are scored deterministically against ground truth computed
+from the tools (no LLM judge); [how correctness is measured](#how-correctness-is-measured).
+
+**Total tokens** is the agent's own input plus output, plus every token a strategy spends on its own
+account (the graph's embeddings, the filter's reranks). **Cost** applies published Bedrock list prices to
+those units, so read it as list cost, not a bill. Every model, every arm, the cache-on runs and the
+parameters are in **[`BENCHMARK.md`](BENCHMARK.md)**.
+
+### Large windows, caching off: the saving is cost
+
+Strands plugins, Claude Opus 4.8 (1M-token window):
 
 | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Turn | Cost | Δ cost |
 |---|---:|---:|---:|:--:|---:|---:|---:|
-| Baseline (no plugin) | 14,377,382 | — | 96.9% | 28/30 | 11.7s | $72.50 | — |
-| Progressive Tool Disclosure only | 9,466,084 | −34.2% | 94.5% | 27/30 | 12.8s | $48.10 | −33.7% |
-| Relevance Filtering only | 12,766,237 | −11.2% | 96.9% | 29/30 | 11.7s | $64.45 | −11.1% |
-| Context Graph only | 10,385,714 | −27.8% | 93.7% | 27/30 | 10.8s | $52.43 | −27.7% |
-| **All three combined** | **2,569,888** | **−82.1%** | **96.1%** | **28/30** | **8.7s** | **$13.36** | **−81.6%** |
+| Baseline (no plugin) | 17,897,954 | — | 97.6% | 29/30 | 11.0s | $90.06 | — |
+| Progressive Tool Disclosure only | 6,738,122 | −62.4% | 92.9% | 26/30 | 8.1s | $34.24 | −62.0% |
+| Relevance Filtering only | 12,432,470 | −30.5% | 95.3% | 27/30 | 9.8s | $62.77 | −30.3% |
+| Context Graph only | 10,511,391 | −41.3% | 94.5% | 27/30 | 10.0s | $53.13 | −41.0% |
+| **All three combined** | **2,877,396** | **−83.9%** | **99.2%** | **30/30** | 10.0s | **$15.09** | **−83.2%** |
 
-*The full stack sends 82% fewer tokens for the same 28 of 30 materially correct turns as the
-unmodified agent, at a fifth of the cost and three seconds faster per turn — turn times are measured
-with all five configurations running concurrently, so they are relative to each other rather than
-isolated latency.*
+*Read Δ tokens and Correct: the full stack sends 84% fewer tokens, costs a sixth, and got every scored turn
+right.*
 
-Agent `us.anthropic.claude-opus-4-8`, region `us-east-1`, one **replay** per configuration — the same
-scripted conversation run start to finish, once for each row, 60 turns, zero errors.
+The same comparison on the other large-window models, baseline against all three:
 
-The baseline here is a **bare agent**: no plugin at all, every tool payload entering the history whole
-and staying there. That is the honest control — it measures the cost of doing nothing. It completes,
-but only just: it peaked at **204,439 input tokens on a single call**, which is more than some models'
-entire context window, so the baseline is what decides which models this benchmark can run on.
+| Model | Framework | Baseline tokens | All three | Δ tokens | Correct (base → all) | Cost (base → all) |
+|---|---|---:|---:|---:|:--:|---:|
+| Claude Opus 4.8 | Strands | 17.9M | 2.9M | **−83.9%** | 29 → 30 | $90.06 → $15.09 |
+| Claude Opus 4.8 | LangGraph | 15.2M | 2.5M | **−83.5%** | 29 → 29 | $76.57 → $13.18 |
+| Claude Opus 5 | Strands | 18.8M | 4.7M | **−74.9%** | 28 → 27 | $95.34 → $24.94 |
+| Claude Fable 5 | Strands | 19.2M | 4.5M | **−76.7%** | 29 → 29 | $193.09 → $47.01 |
 
-The large differences — **−82.1%** with correctness holding at 28 of 30 turns and cost dropping to a
-fifth — support a decision; nothing under ~20% does. A single replay cannot be more precise than that:
-the agent chooses its own tool path, so two replays of the *same* configuration already differ by
-roughly that much. Full breakdown (per-token cost attribution, per-turn curves) is regenerated by the
-harness under `validation/community-plugin-A-B-D/`.
+*Read Δ tokens: on every large-window model the saving lands between −75% and −84% with accuracy held,
+and the LangGraph port reproduces the Strands figure on the same model.* The LangGraph run's full table is
+in [`langgraph-plugins/README.md`](langgraph-plugins/README.md#benchmark).
 
-The full stack makes **more model calls** to send fewer tokens — 101 against the baseline's 87 — which
-is the trade the practices make: a retrieval cycle is cheap next to resending a 60k-character payload
-on every subsequent turn. It is also the fastest per turn despite those extra calls, because each one
-carries far less.
+The full stack makes more model calls to send fewer tokens: a retrieval call is cheap next to re-sending a
+60k-character payload on every later turn. Single-practice figures move with the model (disclosure alone
+saves 62% on Opus 4.8 and spends 17% more on Fable 5), so do not quote one without naming its model.
 
-**One strategy changes sign with the model.** The same run on Claude Haiku 4.5 — ~15x cheaper per
-token — reaches the same conclusion about the full stack (−78.0%, $2.52 against $11.10) but has
-relevance filtering costing **21.6% more** than doing nothing instead of saving 11.2%. Every
-`retrieve_context` result becomes a conversation message and rides along on every later call, so a
-model that retrieves repeatedly pays for the same content many times. Do not quote a single-strategy
-figure without naming the model it came from; see
-[`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) for both
-tables.
+### Small windows: the saving is completion
 
-### The same script on two more models
+On models with a window of 256K tokens or less, the bare agent's history outgrows the window: the provider
+rejects the call (`ContextWindowOverflowException`) and the turn is never answered. Strands plugins, same
+script:
 
-The table above is one model. The same 60-turn script was replayed on two further Claude models, also
-with prompt caching off, and both reproduce the ordering: the full stack is the cheapest arm, and it is
-the only one that moves cost by more than a rounding error. Same rates source as above, list prices.
+| Model | Window | Baseline answered | Refused calls | Baseline correct | All three answered | All three correct | Peak call (base → all) | Cost (base → all) |
+|---|---:|:--:|---:|:--:|:--:|:--:|---:|---:|
+| Claude Haiku 4.5 | 200K | 26/60 | 34 | 14/30 | **60/60** | **25/30** | 99% → 18% | $6.52 → $2.29 |
+| GLM 5 | 200K | 26/60 | 34 | 15/30 | **60/60** | **25/30** | 97% → 17% | $8.36 → $2.42 |
+| GLM 4.7 | 203K | 20/60 | 40 | 13/30 | **60/60** | **28/30** | 95% → 28% | $3.47 → $2.26 |
+| GLM 4.7 Flash | 203K | 26/60 | 34 | 13/30 | **60/60** | **14/30** | 93% → 23% | $0.51 → $0.31 |
+| Qwen3 Next 80B | 256K | 14/60 | 46 | 9/30 | **60/60** | **24/30** | 98% → 28% | $0.95 → $3.09 |
+| Nemotron Nano 9B | 128K | 12/60 | 48 | 5/30 | **60/60** | **11/30** | 98% → 43% | $0.11 → $0.25 |
 
-| Model | Configuration | Total tokens | Δ tokens | Accuracy | Correct | Cost | Δ cost |
-|---|---|---:|---:|---:|:--:|---:|---:|
-| **Claude Opus 5** | Baseline (no plugin) | 19,778,235 | — | 89.8% | 24/30 | $100.44 | — |
-| | Relevance Filtering only | 18,106,860 | −8.5% | 96.9% | 28/30 | $91.89 | −8.5% |
-| | Context Graph only | 13,527,548 | −31.6% | 93.7% | 25/30 | $69.54 | −30.8% |
-| | **All three combined** | **5,565,805** | **−71.9%** | **100.0%** | **30/30** | **$29.17** | **−71.0%** |
-| **Claude Fable 5** | Baseline (no plugin) | 21,620,903 | — | 100.0% | 30/30 | $217.86 | — |
-| | Progressive Tool Disclosure only | 14,284,626 | −33.9% | 97.6% | 29/30 | $144.58 | −33.6% |
-| | Relevance Filtering only | 17,263,244 | −20.2% | 97.6% | 29/30 | $174.08 | −20.1% |
-| | Context Graph only | 12,645,472 | −41.5% | 96.1% | 28/30 | $128.54 | −41.0% |
-| | **All three combined** | **5,311,719** | **−75.4%** | 96.9% | 28/30 | **$55.32** | **−74.6%** |
+*Read Answered and Peak call: the bare agent never finishes, the full stack answers every turn on every
+model, and its largest call stays under half the window.* A baseline that answered 12 of 60 turns is cheap
+because it stopped working, so its cost is not a price for the workload. That is why cost rises on Qwen3
+and Nemotron: the full stack answered four to five times as many turns.
 
-*The saving lands between −72% and −82% on all three models, and on Opus 5 the full stack was also the
-most accurate arm of the run — 30 of 30 against the bare agent's 24.* Opus 5's disclosure-only arm is
-omitted because it is not a result: the model never called `find_tools`, ran without a tool schema and
-answered almost nothing (1 of 30). One replay, so read it as a path the agent can take, not as a
-property of the plugin.
+Single practices do not get there alone: each one fails to keep the peak inside the window on at least one
+of these models, and on Nemotron Nano 9B none of the three finishes by itself. They remove different mass
+(A the payload, B the schema, D the history), which is why only the combination holds everywhere.
 
-Every cell of every model, the cache-on counterpart of each run, and how to read the columns are in
-**[`BENCHMARK.md`](BENCHMARK.md)**.
+### With prompt caching on
 
-### Considerations before adopting this
+Prompt caching attacks the same redundancy, and on a large-window model it makes the bare agent's re-sent
+prefix cheap. There the compressing practices can cost more than doing nothing, because every edit to the
+prompt is a new cache write. On Opus 4.8 with caching on, the baseline costs $12.07, relevance filtering
+alone **$7.72**, and all three $12.50. Relevance filtering is the one to combine with caching: it compresses
+once and then leaves the prompt alone.
 
-Three conditions decide how much of the saving above you actually see.
+Caching only pays when the same prefix comes back within its TTL. A system prompt per tenant, a tool set
+per user permission, one-shot fan-out, an A/B prompt split, or a human who pauses longer than the TTL pay
+the write premium and collect no read
+([billing for cached tokens](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)).
+In those shapes, and on models that publish no caching (GLM, Qwen3, Nemotron), the caching-off figures
+above apply. The measured numbers are in [`BENCHMARK.md`](BENCHMARK.md) and the wiring rule is in
+[the Strands guide](how-to/02-community-plugins-agent-sample.md#prompt-caching-and-these-plugins).
 
-**The context window.** The saving is a cost argument on a 1M-token model and a *completion* argument
-on a small one. Replayed on GLM 5, whose card gives a
-[200K-token window](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5.html),
-the bare agent lost **90 calls** to `ContextWindowOverflowException` and answered only **15 of the 60
-turns** — 15 of the 30 scored ones were never attempted, which is why it scored 14 of 30. The full
-stack answered all sixty, lost no calls and scored 26 of 30, with its peak call at 43,490 tokens
-against the baseline's 198,588. Below roughly 250K tokens these practices stop being an optimisation
-and become the thing that lets the conversation finish at all. A smaller window sharpens it: on
-Nemotron Nano 9B (128K) the bare agent answered **9 of 60** and the full stack was the only arm of five
-that answered every turn — see the [Nemotron Nano 9B section](BENCHMARK.md#411-nemotron-nano-9b) of
-[`BENCHMARK.md`](BENCHMARK.md) for the per-model accounting.
+### How to read one replay
 
-**Whether the model caches, and whether you want it to.** Prompt caching attacks the same redundancy
-these practices do, and only one of the two can bill it. On a model with a large window *and* caching
-on, a bare agent's prefix is re-read cheaply and the compressing plugins can cost more than doing
-nothing — so the two are alternatives, not a stack. The exception is relevance filtering, which is
-compatible with caching and is the one to combine it with. The measured numbers are in
-[`BENCHMARK.md`](BENCHMARK.md) and the wiring rule is in
-[`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md#prompt-caching-and-these-plugins).
-Not every model offers caching at all: GLM 5's card lists neither caching type, so there is nothing to
-weigh against.
-
-**Whether your traffic reuses its prefix.** Caching only pays when the *same* prompt prefix is re-sent
-inside the cache TTL, and tokens written to cache can cost more than uncached input
-([Billing for cached tokens](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)).
-Common agentic shapes that never get there — a system prompt per tenant, a tool set per user
-permission, one-shot fan-out classification, an A/B split across two prompt variants, or a human who
-pauses longer than the TTL between turns — pay the write premium and collect no read. In those shapes
-the plugins are the only lever, and the figures above apply as published.
+The agent chooses its own tool path, so two replays of identical code differ: four byte-identical arms
+moved by up to six correct turns and 16% of their tokens between two runs. Nothing under about ±6 turns or
+±20% of tokens is evidence. The figures above that decide something (−75% to −84% tokens, 60 of 60 turns
+against 12 to 26) clear that band by a wide margin; the per-arm accuracy ranking within one model does not.
 
 ### How correctness is measured
 
-The two correctness columns are different measures, not the same one twice. **Half the script is
-scored**: 30 of the 60 turns carry weighted expectations — 18 hand-written turns plus 12 generated —
-and the other 30 are unscored mass, there to lengthen the history. Expectations are strings the answer
-must contain, may contain, or must *not* contain, the last catching the confidently wrong answers a
-degraded context produces.
+The two correctness columns are different measures. 30 of the 60 turns carry weighted expectations (18
+hand-written, 12 generated); the other 30 are grounded filler that lengthens the history. Expectations are
+strings the answer must contain, may contain, or must *not* contain, the last catching the confidently
+wrong answers a degraded context produces.
 
-- **Accuracy** is the fraction of expectation *weight* met across the whole run — partial credit, so a
-  turn that states the right figure but omits a secondary fact scores between 0 and 1.
-- **Correct** counts turns with no *critical* failure — the fact the question was actually asking for.
-  This is the stricter reading, and it is why a configuration can gain accuracy while losing a turn.
+- **Accuracy** is the fraction of expectation *weight* met across the run, with partial credit.
+- **Correct** counts turns with no *critical* failure, the fact the question asked for. It is the stricter
+  reading, which is why an arm can gain accuracy while losing a turn.
 
-Scoring is deterministic, not an LLM judge: the tools are mocked, so every factual question has one
-computable answer, and ground truth is derived from the tool implementations rather than written by hand.
-Figures must match as the tools formatted them — a paraphrased or reformatted number fails even when the
-arithmetic is right, which is deliberate. See `validation/community-plugin-A-B-D/src/accuracy.py`.
+Scoring is deterministic: the tools are mocked, so every factual question has one computable answer, and
+ground truth is derived from the tool implementations. Figures must match as the tools formatted them — a
+reformatted number fails even when the arithmetic is right, on purpose. See
+`validation/community-plugin-A-B-D/src/accuracy.py`.
 
 ## Layout
 
 ```
 BENCHMARK.md                              every model, every cell, and how to read them
+context-core/                             the shared, framework-agnostic logic of A, B and D
 community-plugins/
-  strands-relevance-filter/               practice A, installable package
-  strands-progressive-tool-disclosure/    practice B, installable package
-  strands-context-graph/                  practice D, installable package
+  strands-relevance-filter/               practice A for Strands
+  strands-progressive-tool-disclosure/    practice B for Strands
+  strands-context-graph/                  practice D for Strands
+langgraph-plugins/
+  langgraph-relevance-filter/             practice A for LangChain / LangGraph
+  langgraph-progressive-tool-disclosure/  practice B for LangChain / LangGraph
+  langgraph-context-graph/                practice D for LangChain / LangGraph
 docs/design/
-  design.md         the concepts, framework-agnostic (L100/L200 overview)
+  design.md         the concepts, framework-agnostic
   design-a-*.md     idea A — relevance filtering (idea + example)
   design-b-*.md     idea B — progressive tool disclosure (idea + example)
   design-d-*.md     idea D — context graph (idea + example)
+  sequence/         sequence diagrams, Strands and langgraph/
 how-to/
-  02-community-plugins-agent-sample.md    install and use the three packages  <- start here
-  01-designA-B-D-agent-sample.md          the same practices on the forked SDK
+  02-community-plugins-agent-sample.md    Strands: install and use the three plugins
+  03-langgraph-plugins-agent-sample.md    LangGraph: install and use the three middlewares
 validation/
-  community-plugin-A-B-D/   the benchmark for the community packages
-  01-designA-B-D/           the benchmark for the forked SDK's vended plugins
+  community-plugin-A-B-D/   the benchmark for the Strands plugins
+  plugins-langgraph/        the benchmark for the LangGraph middlewares
 ```
 
-- **Read the ideas:** start at [`docs/design/design.md`](docs/design/design.md) for the concepts,
-  then the per-practice docs (`design-a-*`, `design-b-*`, `design-d-*`).
-- **Run an agent with the practices:** see
-  [`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md).
-- **Compare the models:** see [`BENCHMARK.md`](BENCHMARK.md) — one section per model with its
-  parameters, results and caveats, plus what holds across all eleven.
-- **Reproduce the numbers:** see
-  [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md) — it
-  installs the packages, runs the benchmark, and generates JSON + Markdown + HTML reports.
-  Re-rendering a recorded run's report needs no AWS credentials; only a live benchmark run does.
-
-## The forked-SDK path
-
-The same three practices also exist as **vended plugins of a forked SDK** — the form they were
-originally measured in, where they are bundled by the SDK itself rather than installed beside it.
-
-That path, its own benchmark and its results are documented in
-**[`README-vended-plugins.md`](README-vended-plugins.md)**.
-
-The two are **not directly comparable on absolute numbers**, and an earlier version of this page
-claimed they were. The vended figures were measured on a previous version of the benchmark script,
-whose filler turns asked about accounts the fixture did not hold — so most of them made no tool call
-and contributed almost no payload mass. The corrected script grounds every filler turn, which is why
-its baseline carries 14.4M input tokens where the vended one carried 11.3M.
-
-What does hold across both: the direction and the relative ordering of the strategies, and a full stack
-that cuts roughly 80% of tokens while holding answer quality. The community form needs no fork, which
-is why it is the recommended path; the vended form keeps one structural advantage, described in
-gotcha 1 of the how-to. Settling whether the two reach the same absolute figure would mean re-running
-the vended harness on the corrected script, which has not been done.
+- **Read the ideas:** start at [`docs/design/design.md`](docs/design/design.md), then the per-practice
+  docs.
+- **Run an agent:** the [Strands guide](how-to/02-community-plugins-agent-sample.md) or the
+  [LangGraph guide](how-to/03-langgraph-plugins-agent-sample.md).
+- **Compare the models:** [`BENCHMARK.md`](BENCHMARK.md), one section per model.
+- **Reproduce the numbers:** [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md)
+  or [`validation/plugins-langgraph/README.md`](validation/plugins-langgraph/README.md). Re-rendering a
+  recorded run's report needs no AWS credentials; only a live run does.
 
 ## Scope and limitations
 
@@ -287,17 +257,19 @@ This content is a **research validation harness**, not a production application.
 - **Synthetic data only** — All financial scenario data (FinBank, TestBank, NeoBank, account numbers,
   balances) is synthetic, computed by `validation/community-plugin-A-B-D/src/ground_truth.py`. No real
   customer or personal data is used.
-- **Test coverage is uneven across the three packages.** They now carry **764 passing tests** between
-  them, but not evenly: `strands-context-graph` 560, `strands-relevance-filter` 123, and
-  `strands-progressive-tool-disclosure` 81. The relevance filter's suite was written against its
-  documented contract after the fact, so it verifies the behaviour the docstrings promise rather than
-  having driven the design.
+- **Test coverage is uneven.** The packages carry **1,588 passing tests**: `context-core` 449; Strands
+  `strands-context-graph` 612, `strands-progressive-tool-disclosure` 169, `strands-relevance-filter` 145;
+  LangGraph `langgraph-context-graph` 87, `langgraph-progressive-tool-disclosure` 82,
+  `langgraph-relevance-filter` 44. The Strands relevance filter's suite was written against its documented
+  contract after the fact, so it verifies what the docstrings promise rather than having driven the design.
+- **One replay per cell.** Every benchmark figure comes from a single run per configuration; see
+  [how to read one replay](#how-to-read-one-replay).
 
 ## Responsible AI considerations
 
-This repository uses Amazon Bedrock foundation models (`us.anthropic.claude-opus-4-8`,
-`cohere.rerank-v3-5:0`, `cohere.embed-multilingual-v3`) for benchmarking context-engineering
-strategies. Key considerations:
+This repository uses Amazon Bedrock foundation models for benchmarking context-engineering strategies —
+the agent models listed in [`BENCHMARK.md`](BENCHMARK.md), plus `cohere.rerank-v3-5:0` and
+`cohere.embed-multilingual-v3` for the practices themselves. Key considerations:
 
 - **Intended use** — Measuring token consumption, accuracy, and latency of context-management
   strategies in a controlled benchmark environment. Not intended for real financial advice, customer
@@ -312,6 +284,6 @@ strategies. Key considerations:
 
 ## Status
 
-Draft for discussion. The ideas are stable at A/B/D. The three packages are at `0.1.0` and are not yet
-published to PyPI — install them from this repository. The benchmark runs against live Bedrock; a
-recorded run's report re-renders with no credentials at all.
+Draft for discussion. The ideas are stable at A/B/D. All seven packages are at `0.1.0` and are not yet
+published to PyPI; install them from this repository. The benchmarks run against live Bedrock; a recorded
+run's report re-renders with no credentials at all.

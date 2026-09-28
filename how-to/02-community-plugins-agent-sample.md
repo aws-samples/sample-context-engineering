@@ -8,10 +8,9 @@ A runnable example of the three practices — [relevance filtering](../docs/desi
 [context graph](../docs/design/design-d-context-graph.md) — installed on a Strands agent as **three
 standalone community packages**, one at a time and then together.
 
-The difference from [`01-designA-B-D-agent-sample.md`](01-designA-B-D-agent-sample.md) is where the
-plugins come from. That guide installs a **forked SDK** and uses the plugins it vends. This one
-installs three ordinary packages next to an **unmodified `strands-agents`** from PyPI — no fork, no
-pinned commit SHA.
+The three plugins install as ordinary packages next to an **unmodified `strands-agents`** from PyPI.
+The same practices for LangChain / LangGraph are in
+[`03-langgraph-plugins-agent-sample.md`](03-langgraph-plugins-agent-sample.md).
 
 This is the shape the benchmark under
 [`validation/community-plugin-A-B-D/`](../validation/community-plugin-A-B-D/README.md) measures.
@@ -20,13 +19,12 @@ Start here for the wiring; go there for what it costs.
 **Read [the four gotchas](#four-things-that-will-bite-you) before wiring all three together.** Two of
 them cost a measured benchmark run its answers, and none of them fails loudly.
 
-## No fork required
+## Compatibility
 
 The three packages install next to an **unmodified** `strands-agents` from PyPI. Verified against
 **1.56.0**: the private middleware seam they couple to
 (`strands._middleware.stages.InvokeModelStage`, `strands.injection._message_injection`) is present on
-the public release, which is what makes "community plugin" a real claim rather than a repackaging of
-the fork. They are not published to PyPI yet, so they install from this repository.
+the public release. They are not published to PyPI yet, so they install from this repository.
 
 Everything you need to run them is in [Run it in five commands](#run-it-in-five-commands) below.
 
@@ -319,7 +317,7 @@ portable**: supply a different embedding model and they mean nothing. `expand_th
 collapse_floor=0.0` is the regression switch — it projects every Card at Full Content, producing a
 call identical field for field to one made without the plugin.
 
-Unlike the vended plugin, this one is **ephemeral**: it writes nothing to `agent.state`, so there is
+The plugin is **ephemeral**: it writes nothing to `agent.state`, so there is
 no `persist` option and nothing to restore. A fresh process rebuilds the whole graph by one scan over
 the history.
 
@@ -413,9 +411,6 @@ So the graph keeps `expand_artifact` (`include_artifact_tool=True`), alongside `
 the model still confuses the two is something the benchmark's `all` arm measures; it is not assumed
 here. If you see "unreachable reference" answers come back, that is the symptom, and turning
 `include_artifact_tool` off is still the one-line way to leave a single retrieval path.
-
-The vended stack never had the ambiguity: relevance lived *inside* the `ContextManager` whose stash
-the graph bridged to, so there was one store and one retrieval path.
 
 ### 2. `NullConversationManager` is a precondition of the graph
 
