@@ -13,6 +13,28 @@ Because `request.override(messages=…)` is transient, no persisted state is del
 `NullConversationManager` precondition becomes "do not also install a summarization/pruning middleware",
 which the middleware warns about at construction. Verified against `langchain` 1.x.
 
+## Install
+
+```bash
+pip install langgraph-context-graph
+```
+
+This pulls in [`agent-context-core`](https://pypi.org/project/agent-context-core/), `langchain` and
+`langgraph`. The default similarity matcher embeds with `cohere.embed-multilingual-v3` on Amazon Bedrock,
+so it needs AWS credentials and a region. Pass `matcher=` to use another backend.
+
+## Usage
+
+```python
+from langchain.agents import create_agent
+from langgraph_context_graph import ContextGraphMiddleware
+
+agent = create_agent(model="...", tools=[...], middleware=[ContextGraphMiddleware()])
+```
+
+Source, design notes and benchmarks:
+[sample-context-engineering](https://github.com/aws-samples/sample-context-engineering).
+
 ## The three retrieval tools
 
 | Tool | Reaches | Switch |

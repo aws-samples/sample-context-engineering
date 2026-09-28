@@ -1,20 +1,43 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "context-core"
+# Distribution name on PyPI. The import name stays `context_core`.
+name = "agent-context-core"
 version = "0.1.0"
 description = "Framework-agnostic core for context-engineering practices (relevance filtering, progressive tool disclosure, context graph). No agent-framework dependency."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cristiano Scandura" }]
+keywords = ["llm", "agents", "context-engineering", "context-window", "tool-calling", "rag"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 # NO agent framework here: neither strands-agents nor langchain/langgraph.
 # Only the remote-scoring backends the default reranker/embedder/S3 store need.
 dependencies = [
     "boto3>=1.34",
     "botocore>=1.34",
 ]
+
+[project.urls]
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+Source = "https://github.com/aws-samples/sample-context-engineering/tree/main/context-core"
+Issues = "https://github.com/aws-samples/sample-context-engineering/issues"
 
 [project.optional-dependencies]
 test = [
@@ -27,6 +50,9 @@ test = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/context_core"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/context_core", "tests", "README.md", "LICENSE", "NOTICE"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
