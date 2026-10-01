@@ -16,6 +16,8 @@ They ship for two frameworks, over one shared core:
   `strands-agents` from PyPI.
 - **[LangChain / LangGraph](https://langchain-ai.github.io/langgraph/)** — three `create_agent`
   middlewares for LangChain v1.
+- **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — four `ContextEngine` plugins (three
+  practices + one composed engine, since Hermes is single-select).
 - **[`context-core`](context-core/)** — the framework-agnostic logic both use. It imports no agent
   framework.
 
@@ -47,11 +49,11 @@ This is consistent with published work: the Strands benchmark for compaction plu
 
 ## The practices
 
-| | Practice | What it does | Strands | LangGraph | Design |
-|---|---|---|---|---|---|
-| **A** | **Relevance filtering** | Scores a tool result's chunks against the question and keeps what answers it, before the result enters the history. | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | [`langgraph-relevance-filter`](langgraph-plugins/langgraph-relevance-filter/) | [design A](docs/design/design-a-relevance-filtering.md) |
-| **B** | **Progressive tool disclosure** | Sends a lean tool catalog and a tool's full spec only on demand, attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | [`langgraph-progressive-tool-disclosure`](langgraph-plugins/langgraph-progressive-tool-disclosure/) | [design B](docs/design/design-b-progressive-tool-disclosure.md) |
-| **D** | **Context graph** | Turns the history into Cards and sends each at the resolution the question needs (full, Description or Title), recoverable on demand. It subsumes an earlier curator idea (C). | [`strands-context-graph`](community-plugins/strands-context-graph/) | [`langgraph-context-graph`](langgraph-plugins/langgraph-context-graph/) | [design D](docs/design/design-d-context-graph.md) |
+| | Practice | What it does | Strands | LangGraph | Hermes | Design |
+|---|---|---|---|---|---|---|
+| **A** | **Relevance filtering** | Scores a tool result's chunks against the question and keeps what answers it, before the result enters the history. | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | [`langgraph-relevance-filter`](langgraph-plugins/langgraph-relevance-filter/) | [`hermes-relevance-filter`](hermes-plugins/hermes-relevance-filter/) | [design A](docs/design/design-a-relevance-filtering.md) |
+| **B** | **Progressive tool disclosure** | Sends a lean tool catalog and a tool's full spec only on demand, attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | [`langgraph-progressive-tool-disclosure`](langgraph-plugins/langgraph-progressive-tool-disclosure/) | [`hermes-progressive-tool-disclosure`](hermes-plugins/hermes-progressive-tool-disclosure/) | [design B](docs/design/design-b-progressive-tool-disclosure.md) |
+| **D** | **Context graph** | Turns the history into Cards and sends each at the resolution the question needs (full, Description or Title), recoverable on demand. It subsumes an earlier curator idea (C). | [`strands-context-graph`](community-plugins/strands-context-graph/) | [`langgraph-context-graph`](langgraph-plugins/langgraph-context-graph/) | [`hermes-context-graph`](hermes-plugins/hermes-context-graph/) | [design D](docs/design/design-d-context-graph.md) |
 
 Each package is independent: install one, two or all three. They compose because they act at different
 moments: the filter on a tool result before it enters the history, disclosure on the tool list, the
@@ -63,6 +65,7 @@ graph on a history that already exists.
 |---|---|---|
 | Strands Agents | **[`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md)** | [`validation/community-plugin-A-B-D/`](validation/community-plugin-A-B-D/README.md) |
 | LangChain / LangGraph | **[`how-to/03-langgraph-plugins-agent-sample.md`](how-to/03-langgraph-plugins-agent-sample.md)** | [`validation/plugins-langgraph/`](validation/plugins-langgraph/README.md) |
+| Hermes Agent | **[`how-to/04-hermes-plugins-agent-sample.md`](how-to/04-hermes-plugins-agent-sample.md)** | [`validation/plugins-hermes/`](validation/plugins-hermes/README.md) |
 
 Each guide goes from nothing to a working agent: prerequisites, a minimal agent with one oversized tool,
 each practice on its own, then all three together, with the constructor arguments the benchmark uses. Each
@@ -94,6 +97,14 @@ pip install -e context-core \
             -e langgraph-plugins/langgraph-progressive-tool-disclosure \
             -e langgraph-plugins/langgraph-context-graph \
             "langchain>=1.0,<2" "langgraph>=1.0,<2" "langchain-aws>=1.7,<2"
+
+# Hermes Agent (hermes-agent is version 0.0.0 and not on PyPI; install the host from source)
+pip install -e context-core \
+            -e hermes-plugins/hermes-relevance-filter \
+            -e hermes-plugins/hermes-progressive-tool-disclosure \
+            -e hermes-plugins/hermes-context-graph \
+            -e hermes-plugins/hermes-all-three \
+            "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
 ```
 
 Verified against `strands-agents` 1.56.0 and `langchain` 1.4.2.
@@ -218,18 +229,25 @@ langgraph-plugins/
   langgraph-relevance-filter/             practice A for LangChain / LangGraph
   langgraph-progressive-tool-disclosure/  practice B for LangChain / LangGraph
   langgraph-context-graph/                practice D for LangChain / LangGraph
+hermes-plugins/
+  hermes-relevance-filter/                practice A for Hermes Agent
+  hermes-progressive-tool-disclosure/     practice B for Hermes Agent
+  hermes-context-graph/                   practice D for Hermes Agent
+  hermes-all-three/                       the composed engine (Hermes is single-select)
 docs/design/
   design.md         the concepts, framework-agnostic
   design-a-*.md     idea A — relevance filtering (idea + example)
   design-b-*.md     idea B — progressive tool disclosure (idea + example)
   design-d-*.md     idea D — context graph (idea + example)
-  sequence/         sequence diagrams, Strands and langgraph/
+  sequence/         sequence diagrams, Strands, langgraph/ and hermes/
 how-to/
   02-community-plugins-agent-sample.md    Strands: install and use the three plugins
   03-langgraph-plugins-agent-sample.md    LangGraph: install and use the three middlewares
+  04-hermes-plugins-agent-sample.md       Hermes: install and select the four engines
 validation/
   community-plugin-A-B-D/   the benchmark for the Strands plugins
   plugins-langgraph/        the benchmark for the LangGraph middlewares
+  plugins-hermes/           the benchmark for the Hermes engines
 ```
 
 - **Read the ideas:** start at [`docs/design/design.md`](docs/design/design.md), then the per-practice
