@@ -1,0 +1,4 @@
+name: all-three
+version: 0.1.0
+description: "The composed engine applying all three practices (relevance filter + progressive tool disclosure + context graph) in one, since Hermes allows only one active context engine. Select with context.engine: all-three."
+author: Cristiano Scandura

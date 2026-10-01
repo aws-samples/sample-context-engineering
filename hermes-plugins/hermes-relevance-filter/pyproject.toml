@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "hermes-relevance-filter"
+version = "0.1.0"
+description = "Hermes Agent binding (Practice A): relevance-filter oversized tool results via a ContextEngine over agent-context-core."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cristiano Scandura" }]
+keywords = ["hermes", "hermes-agent", "context-engine", "llm", "agents", "context-engineering", "tool-results"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "agent-context-core>=0.1.0,<0.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+Source = "https://github.com/aws-samples/sample-context-engineering/tree/main/hermes-plugins/hermes-relevance-filter"
+Issues = "https://github.com/aws-samples/sample-context-engineering/issues"
+
+# hermes-agent is version 0.0.0 and not published to PyPI; it is a dev/peer dependency installed from
+# source. The engine imports agent.context_engine.ContextEngine lazily, so the package imports and tests
+# without Hermes present. Install the real host with: pip install "hermes-relevance-filter[hermes]".
+[project.optional-dependencies]
+hermes = [
+    "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git",
+]
+test = [
+    "pytest>=8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_relevance_filter"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/hermes_relevance_filter", "tests", "README.md", "LICENSE", "NOTICE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

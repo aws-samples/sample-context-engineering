@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "hermes-all-three"
+version = "0.1.0"
+description = "Hermes Agent binding: the composed ContextEngine applying all three practices (relevance + disclosure + context-graph) in one engine, since Hermes is single-select."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Cristiano Scandura" }]
+keywords = ["hermes", "hermes-agent", "context-engine", "llm", "agents", "context-engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "agent-context-core>=0.1.0,<0.2",
+    "hermes-relevance-filter>=0.1.0,<0.2",
+    "hermes-progressive-tool-disclosure>=0.1.0,<0.2",
+    "hermes-context-graph>=0.1.0,<0.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/aws-samples/sample-context-engineering"
+Source = "https://github.com/aws-samples/sample-context-engineering/tree/main/hermes-plugins/hermes-all-three"
+Issues = "https://github.com/aws-samples/sample-context-engineering/issues"
+
+[project.optional-dependencies]
+hermes = [
+    "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git",
+]
+test = [
+    "pytest>=8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_all_three"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/hermes_all_three", "tests", "README.md", "LICENSE", "NOTICE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
