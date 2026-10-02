@@ -1,0 +1,4 @@
+name: relevance-filter
+version: 0.1.0
+description: "Practice A — relevance-filter oversized tool results into a verbatim excerpt with a recovery tool, over agent-context-core. Select with context.engine: relevance-filter."
+author: Cristiano Scandura

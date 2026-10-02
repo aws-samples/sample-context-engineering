@@ -1,0 +1,25 @@
+# The four strategies under test are HERMES CONTEXT ENGINES: standalone packages implementing Hermes
+# Agent's ContextEngine ABC, selected one at a time via context.engine. Three practices plus the
+# composed all-three engine (Hermes is single-select). This is the difference from
+# validation/plugins-langgraph (middleware form) and validation/community-plugin-A-B-D (Strands form)
+# of the same strategies.
+#
+# Installed editable from the repository so a run measures the code in this checkout. Paths relative to
+# this file's directory.
+-e ../../hermes-plugins/hermes-relevance-filter
+-e ../../hermes-plugins/hermes-progressive-tool-disclosure
+-e ../../hermes-plugins/hermes-context-graph
+-e ../../hermes-plugins/hermes-all-three
+
+# The framework-neutral core the four bindings share.
+-e ../../context-core
+
+# The offline harness needs no Hermes host and no AWS: the engines import the ContextEngine ABC lazily
+# (stub fallback) and the mock runner uses fake reranker/matcher. httpx is the corpus loader's only dep.
+httpx
+
+# Hermes Agent itself — needed ONLY for the live run (hermes-agent is version 0.0.0, not on PyPI).
+# hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git
+
+# Testing.
+pytest>=8
