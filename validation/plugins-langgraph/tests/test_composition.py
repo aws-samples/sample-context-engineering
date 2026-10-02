@@ -8,8 +8,8 @@ reranker, or embedder:
   is safe.
 - A (relevance) is on the tool surface (``wrap_tool_call`` + ``after_agent``), a different surface from
   the model-call layer.
-- As in the Strands harness, the combined arm keeps A's ``retrieve_all_context`` and D's three tools, and
-  D gets ``stash=relevance.stash`` so a reference A mints resolves through ``expand_artifact`` too --
+- As in the Strands harness, the combined arm keeps A's ``rf_retrieve_all_context`` and D's three tools, and
+  D gets ``stash=relevance.stash`` so a reference A mints resolves through ``cg_expand_artifact`` too --
   both retrieval tools read the same content.
 - Every hook has sync and async twins, so the stack runs under ``invoke`` and ``ainvoke``.
 """
@@ -84,9 +84,9 @@ def test_the_combined_arm_carries_both_retrieval_paths_over_one_content():
     def names(mw):
         return {getattr(t, "name", getattr(t, "__name__", "")) for t in getattr(mw, "tools", [])}
 
-    # As in the Strands harness: the filter keeps retrieve_all_context, the graph keeps its three.
-    assert "retrieve_all_context" in names(relevance)
-    assert {"expand_card", "expand_artifact", "find_context"} <= names(graph)
+    # As in the Strands harness: the filter keeps rf_retrieve_all_context, the graph keeps its three.
+    assert "rf_retrieve_all_context" in names(relevance)
+    assert {"cg_expand_card", "cg_expand_artifact", "cg_find_context"} <= names(graph)
 
 
 @pytest.mark.asyncio
@@ -117,12 +117,12 @@ async def test_a_reference_the_filter_mints_resolves_through_expand_artifact():
     reference = rewritten.content.split("[ref: ", 1)[1].split("]", 1)[0].split(",")[0].strip()
     assert reference.startswith("mem_")
 
-    answer = await graph.expand_artifact(GraphState(), graph._store_for(""), reference)
+    answer = await graph.cg_expand_artifact(GraphState(), graph._store_for(""), reference)
     assert "row 3999: refund issued for account 3999" in answer
 
     # Without the stash the same reference is absent, which is the Strands result with no ContextManager.
     bare = ContextGraphMiddleware(matcher=_MockMatcher())
-    missing = await bare.expand_artifact(GraphState(), bare._store_for(""), reference)
+    missing = await bare.cg_expand_artifact(GraphState(), bare._store_for(""), reference)
     assert "row 3999" not in missing
 
 

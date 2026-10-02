@@ -210,7 +210,7 @@ class _MeteredMatcher(EmbeddingSimilarityMatcher):
 
 
 RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"
-"""Whether the relevance filter stores raw content and registers ``retrieve_all_context``.
+"""Whether the relevance filter stores raw content and registers ``rf_retrieve_all_context``.
 
 On by default, matching the middleware's own default, in EVERY arm -- the combined one included, as
 in the Strands harness (see :func:`build_middleware`, where the graph also gets the filter's stash).
@@ -488,7 +488,7 @@ def build_middleware(config: RunConfig, session: boto3.Session) -> list[AgentMid
     if config.relevance:
         # Namespaced by run tag as well as configuration: the tag is what keeps two runs executing
         # at the same time from writing into each other's stored sub-blocks and serving the wrong
-        # content back through retrieve_all_context.
+        # content back through rf_retrieve_all_context.
         storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
@@ -545,7 +545,7 @@ def build_middleware(config: RunConfig, session: boto3.Session) -> list[AgentMid
             # Always on, as in the Strands harness (runner.py there passes True explicitly).
             include_artifact_tool=True,
             # The filter's store as the second resolution layer, so a [ref: mem_N_...] the filter
-            # minted resolves through expand_artifact too. Strands gets this from the ContextManager
+            # minted resolves through cg_expand_artifact too. Strands gets this from the ContextManager
             # Stash when one is installed; LangGraph has none, so it is wired explicitly.
             stash=relevance.stash if relevance is not None else None,
         )
@@ -640,7 +640,7 @@ def _collect_plugin_counters(
     **One counter is derived rather than read.** The LangGraph disclosure middleware keeps
     ``loaded_tools`` in graph state and its premature-cancellation tally and summary usage on the
     instance, like the Strands plugin's per-agent object, but keeps no search tally. Searches are
-    therefore counted from the recorded ``find_tools`` invocations, the same event seen from the
+    therefore counted from the recorded ``ptd_find_tools`` invocations, the same event seen from the
     harness side.
 
     Args:
@@ -663,8 +663,8 @@ def _collect_plugin_counters(
             values = getattr(state, "values", None) if state is not None else None
             loaded = dict((values or {}).get("loaded_tools") or {}) if isinstance(values, dict) else {}
             counters["disclosure"] = {
-                "searches": tool_uses.get("find_tools", 0),
-                "loads": tool_uses.get("get_tool_details", 0),
+                "searches": tool_uses.get("ptd_find_tools", 0),
+                "loads": tool_uses.get("ptd_get_tool_details", 0),
                 "loaded_tools_at_end": sorted(loaded),
                 "loaded_count_at_end": len(loaded),
                 "premature_cancellations": disclosure_mw.premature_cancellations,

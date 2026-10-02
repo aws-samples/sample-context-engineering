@@ -2,7 +2,7 @@
 
 The assertions are about the contract and the default store alone: a reference in, a decoded block out, a miss that is
 ``None`` rather than an exception, and an empty store when nothing offloads. The resolution order and the optional
-``ContextManager`` Stash bridge belong to ``tools.expand_artifact`` and are asserted there.
+``ContextManager`` Stash bridge belong to ``tools.cg_expand_artifact`` and are asserted there.
 """
 
 from collections.abc import Callable

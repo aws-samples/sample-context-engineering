@@ -3,10 +3,10 @@
 The graph decides a Resolution per Card from a Note, and the Note is a guess. A wrong guess leaves the model not with a
 worse answer but with a Title, an explicit invitation to ask. These three are what the invitation leads to:
 
-- :func:`expand_card` asks by Title, reads the graph, and raises both axes for the rest of the turn.
-- :func:`expand_artifact` asks by reference, reads the plugin's own store and then the optional Stash bridge, and raises
+- :func:`cg_expand_card` asks by Title, reads the graph, and raises both axes for the rest of the turn.
+- :func:`cg_expand_artifact` asks by reference, reads the plugin's own store then the optional Stash bridge, and raises
   nothing: the content comes back inline.
-- :func:`find_context` asks by Description in the model's own words, reads the same vector index the Turn Choice scores
+- :func:`cg_find_context` asks by Description in the model's own words, reads the vector index the Turn Choice scores
   against, and raises nothing.
 
 Five properties are shared by all three. Nothing here calls a language model or touches ``agent.messages``: none holds a
@@ -15,10 +15,10 @@ never an exception — an unknown Title, an unknown reference, non-textual conte
 prose naming what was missing (Requirements 12.3, 12.6, 12.7, 12.12, 16.8), because a raise would report the *tool*
 broken rather than the *request*. Success records the fed-back Note and an error records nothing, by not reaching
 :func:`~.scoring.record_reuse` on the error paths rather than by a branch inside it (Requirement 13.8); the elevation
-:func:`expand_card` performs lasts the rest of the turn, while the fed-back Note carries the request into the turn
+:func:`cg_expand_card` performs lasts the rest of the turn, while the fed-back Note carries the request into the turn
 *after* it (Requirement 12.14). The retrieval cycle counter is incremented on invocation, not on success
 (Requirement 17.8): a cycle spent on a request that came back empty was still spent. And no index is built here —
-:func:`find_context` scores through the matcher the Turn Choice uses (Requirement 12.10), whose vectors come from the
+:func:`cg_find_context` scores through the matcher the Turn Choice uses (Requirement 12.10), whose vectors come from the
 per-process cache keyed by ``(purpose, text)``, so an unchanged Description costs nothing on this path.
 
 The reads themselves are delegated and never reimplemented: :mod:`.store` owns the resolution order, the bound of a
@@ -48,7 +48,7 @@ from .store import (
 if TYPE_CHECKING:
     from .matcher import SimilarityMatcher
 
-__all__ = ["expand_artifact", "expand_card", "find_context"]
+__all__ = ["cg_expand_artifact", "cg_expand_card", "cg_find_context"]
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +84,14 @@ def _exhausted(tool: str, state: _GraphState, max_retrieval_cycles: int | None) 
 
 
 _MAX_CANDIDATES = 5
-"""Candidates :func:`find_context` returns at most (Requirement 12.9). Capped rather than "as many as clear the floor":
+"""Candidates :func:`cg_find_context` returns at most (Req. 12.9). Capped rather than "as many as clear the floor":
 a search that answers with the whole graph has re-injected the very thing the graph collapsed."""
 
 
-# ---- expand_card ------------------------------------------------------------------------------
+# ---- cg_expand_card ------------------------------------------------------------------------------
 
 
-def expand_card(
+def cg_expand_card(
     state: _GraphState,
     titles: Sequence[str],
     *,
@@ -127,7 +127,7 @@ def expand_card(
         refusal when the turn's retrieval budget is spent. A batch is reported per title, so a partial match says which
         half worked.
     """
-    refusal = _exhausted("expand_card", state, max_retrieval_cycles)
+    refusal = _exhausted("cg_expand_card", state, max_retrieval_cycles)
     if refusal is not None:
         return refusal
 
@@ -135,7 +135,7 @@ def expand_card(
 
     wanted = [titles] if isinstance(titles, str) else list(titles)
     if not wanted:
-        return "expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
+        return "cg_expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
 
     found: list[str] = []
     missing: list[str] = []
@@ -160,13 +160,13 @@ def expand_card(
 
     if not found:
         return (
-            f"expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
-            "copy a title exactly as it was shown to you, or use find_context to describe what you need"
+            f"cg_expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
+            "copy a title exactly as it was shown to you, or use cg_find_context to describe what you need"
         )
 
     confirmation = (
-        f"expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results "
-        "together"
+        f"cg_expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its "
+        "tool results together"
     )
     if missing:
         confirmation += f" | no turn is titled {_quoted(missing)}, so nothing was raised for it"
@@ -186,10 +186,10 @@ def _quoted(titles: Sequence[str]) -> str:
     return ", ".join(f"'{title}'" for title in titles)
 
 
-# ---- expand_artifact --------------------------------------------------------------------------
+# ---- cg_expand_artifact --------------------------------------------------------------------------
 
 
-async def expand_artifact(
+async def cg_expand_artifact(
     state: _GraphState,
     store: ReferenceStore,
     agent: object,
@@ -227,7 +227,7 @@ async def expand_artifact(
         reference, non-textual content, or a line range outside the content — with nothing recorded and no Resolution
         changed (Requirements 12.6, 12.7).
     """
-    refusal = _exhausted("expand_artifact", state, max_retrieval_cycles)
+    refusal = _exhausted("cg_expand_artifact", state, max_retrieval_cycles)
     if refusal is not None:
         return refusal
 
@@ -247,13 +247,13 @@ async def expand_artifact(
         span = _span_of(line_range)
         if line_range is not None and span is None:
             return (
-                f"expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
+                f"cg_expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
                 '{"start": <int>, "end": <int>}, 1-indexed and inclusive'
             )
         try:
             answer = read_artifact(resolved.text, line_range=span, pattern=pattern)
         except ValueError as error:
-            return f"expand_artifact | reference '{reference}' | {error}"
+            return f"cg_expand_artifact | reference '{reference}' | {error}"
 
     title = _artifact_title(state, reference)
     if title is not None:
@@ -277,7 +277,7 @@ def _whole_artifact(reference: str, text: str) -> str:
         The notice followed by the content.
     """
     notice = (
-        f"expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire "
+        f"cg_expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire "
         f"token count, about {estimate_tokens(text)} tokens, and it stays in the conversation for the rest of the "
         "turn | next time pass line_range or pattern to read only the part you need"
     )
@@ -323,10 +323,10 @@ def _artifact_title(state: _GraphState, reference: str) -> str | None:
     return None
 
 
-# ---- find_context -----------------------------------------------------------------------------
+# ---- cg_find_context -----------------------------------------------------------------------------
 
 
-def find_context(
+def cg_find_context(
     state: _GraphState,
     need: str,
     tag: str | None = None,
@@ -363,7 +363,7 @@ def find_context(
         At most five candidates with their Title, Tags and Description (Requirement 12.9), or an empty result naming the
         ``need`` received, in which case no fed-back Note was recorded and no Resolution changed (Requirement 12.12).
     """
-    refusal = _exhausted("find_context", state, max_retrieval_cycles)
+    refusal = _exhausted("cg_find_context", state, max_retrieval_cycles)
     if refusal is not None:
         return refusal
 
@@ -426,7 +426,7 @@ def _similarities(
             raise ValueError(f"similarity count=<{len(scores)}> | expected=<{len(descriptions)}>")
         return {title: float(scores[index]) for index, title in enumerate(titles)}
     except Exception:
-        logger.debug("find_context similarity unavailable for %d candidate(s)", len(descriptions), exc_info=True)
+        logger.debug("cg_find_context similarity unavailable for %d candidate(s)", len(descriptions), exc_info=True)
         return None
 
 
@@ -445,9 +445,9 @@ def _nothing_found(need: str, tag: str | None) -> str:
     """
     narrowed = f", among the turns tagged '{tag}'" if tag is not None else ""
     return (
-        f"find_context | nothing in this conversation matches '{need}'{narrowed} | "
+        f"cg_find_context | nothing in this conversation matches '{need}'{narrowed} | "
         "the titles already in front of you are the whole conversation, so what you need was "
-        "either never discussed or is in a turn you can name directly with expand_card"
+        "either never discussed or is in a turn you can name directly with cg_expand_card"
     )
 
 
@@ -496,7 +496,7 @@ def _render_candidates(state: _GraphState, need: str, chosen: list[str], neighbo
     ``similar`` neighbours. Those are not extra candidates and are not scored against the need: they are
     the graph's own statement that two turns discuss related things, which the similarity ranking alone
     cannot see, since it compares each Description to the QUESTION and never to another Description. A
-    title costs a handful of tokens and is the argument ``expand_card`` takes, so the model can follow one
+    title costs a handful of tokens and is the argument ``cg_expand_card`` takes, so the model can follow one
     without another search.
 
     Args:
@@ -509,7 +509,7 @@ def _render_candidates(state: _GraphState, need: str, chosen: list[str], neighbo
     Returns:
         The rendered answer.
     """
-    lines = [f"find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
+    lines = [f"cg_find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
     # Every chosen title is excluded from every neighbourhood: a candidate is already being rendered in
     # full, so offering it again as somebody's neighbour would spend tokens to say nothing.
     already = set(chosen)
@@ -525,5 +525,5 @@ def _render_candidates(state: _GraphState, need: str, chosen: list[str], neighbo
         if neighbors:
             rendered = ", ".join(f"{neighbor} ({weight:.2f})" for neighbor, weight in neighbors)
             lines.append(f"  related turns: {rendered}")
-    lines.append("call expand_card with one of these titles to bring that turn back in full")
+    lines.append("call cg_expand_card with one of these titles to bring that turn back in full")
     return "\n".join(lines)

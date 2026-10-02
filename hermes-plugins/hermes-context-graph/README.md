@@ -11,7 +11,7 @@ Each closed turn becomes a **Card**. On every request the engine projects the co
 resolution this question needs — Full Content, Description, or just Title — so the model sees a compact
 graph instead of the whole transcript. The **persisted history is never deleted** (projection, not
 destruction): a mis-cut costs one recovery call, not a lost fact. Three tools raise folded content back:
-`expand_card(titles)`, `expand_artifact(reference)`, `find_context(need)`.
+`cg_expand_card(titles)`, `cg_expand_artifact(reference)`, `cg_find_context(need)`.
 
 ## How it maps onto the Hermes `ContextEngine`
 
@@ -19,7 +19,7 @@ destruction): a mis-cut costs one recovery call, not a lost fact. Three tools ra
 |---|---|
 | `on_turn_complete(messages)` | store each tool return as an addressable artifact under `<tool_call_id>_0`; derive its artifact Cards |
 | `select_context(request_messages)` | run `context_core.graph.project` over closed turns; return the projected list; request-only; **fail-open** |
-| `get_tool_schemas()` / `handle_tool_call()` | `expand_card` + `expand_artifact` + `find_context` |
+| `get_tool_schemas()` / `handle_tool_call()` | `cg_expand_card` + `cg_expand_artifact` + `cg_find_context` |
 
 The graph state and reference store live on the engine instance (process-local, not Hermes persisted
 state — the same rationale as the LangGraph binding's per-conversation store).
@@ -34,8 +34,8 @@ middleware; here single-select makes the conflict impossible).
 ## Install & select
 
 ```bash
-pip install hermes-context-graph
-pip install "hermes-context-graph[hermes]"  # + Hermes host from source
+# Not published to PyPI - install from a clone of this repository
+pip install -e context-core -e "hermes-plugins/hermes-context-graph[hermes]"  # [hermes] = Hermes host from source
 ```
 
 ```yaml
@@ -44,4 +44,4 @@ context:
 ```
 
 Pass `stash=` a relevance filter's store so a `[ref: …]` the filter minted also resolves through
-`expand_artifact` (this is what `hermes-all-three` wires up).
+`cg_expand_artifact` (this is what `hermes-all-three` wires up).

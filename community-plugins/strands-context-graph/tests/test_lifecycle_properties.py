@@ -129,7 +129,7 @@ def conversations(draw: st.DrawFn) -> list[dict[str, Any]]:
 
     Each closed turn opens on a plain user ask and may carry a tool pair before its assistant answer; that pair's result
     is sometimes an offloader's placeholder naming a reference, which is what gives the ``AfterToolCallEvent`` half and
-    ``expand_artifact`` something to work with. A message now and then arrives with no ``tracking_id``, the
+    ``cg_expand_artifact`` something to work with. A message now and then arrives with no ``tracking_id``, the
     derivation-lag shape, which yields a turn the graph cannot address.
     """
     messages: list[dict[str, Any]] = []
@@ -181,7 +181,7 @@ def context_over(graph: ContextGraph, agent: _Agent) -> InvokeModelContext:
 def tool_context(agent: _Agent) -> ToolContext:
     """The context a retrieval tool is called with, carrying the agent whose graph it reads."""
     return ToolContext(
-        tool_use={"toolUseId": "tu-retrieval", "name": "expand_card", "input": {}},
+        tool_use={"toolUseId": "tu-retrieval", "name": "cg_expand_card", "input": {}},
         agent=agent,  # type: ignore[arg-type]
         invocation_state={},
     )
@@ -237,13 +237,13 @@ def call_retrieval_tools(graph: ContextGraph, agent: _Agent) -> None:
     state = graph._states[agent]
 
     titles = [title for title, card in state.cards.items() if card.kind == "subject"]
-    asyncio.run(graph.expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
+    asyncio.run(graph.cg_expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
 
-    asyncio.run(graph.find_context(need=first_question(agent.messages), tool_context=context))
+    asyncio.run(graph.cg_find_context(need=first_question(agent.messages), tool_context=context))
 
     artifacts = [card.reference for card in state.cards.values() if card.kind == "artifact" and card.reference]
     if artifacts:
-        asyncio.run(graph.expand_artifact(reference=artifacts[0], tool_context=context))
+        asyncio.run(graph.cg_expand_artifact(reference=artifacts[0], tool_context=context))
 
 
 def first_question(messages: list[dict[str, Any]]) -> str:

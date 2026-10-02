@@ -10,7 +10,7 @@ all content decisions (chunking, reranking, preview assembly, search) live in `c
 When a tool result exceeds `max_result_tokens` (default 8000), the engine rewrites it in the request
 into a marker + a disclaimer carrying the result's real size + a **verbatim** relevance preview scored
 against the question in progress + a `[ref: …]` token. The full result is kept in a store and read back
-on demand through the `retrieve_all_context` tool. Selection is verbatim, so numeric, monetary and
+on demand through the `rf_retrieve_all_context` tool. Selection is verbatim, so numeric, monetary and
 tabular content stays exact.
 
 ## How it maps onto the Hermes `ContextEngine`
@@ -18,8 +18,8 @@ tabular content stays exact.
 | Seam | Role |
 |---|---|
 | `on_turn_complete(messages)` | detect oversized `role:"tool"` results, store the full text, record the rewrite |
-| `select_context(request_messages)` | request-only copy with oversized results replaced; closed `retrieve_all_context` exchanges dropped; **fail-open** |
-| `get_tool_schemas()` / `handle_tool_call()` | the `retrieve_all_context` recovery tool |
+| `select_context(request_messages)` | request-only copy with oversized results replaced; closed `rf_retrieve_all_context` exchanges dropped; **fail-open** |
+| `get_tool_schemas()` / `handle_tool_call()` | the `rf_retrieve_all_context` recovery tool |
 | `compress()` | budget fallback only (A's saving is in the rewrite) |
 
 Hermes hands the engine the finished turn's messages (`on_turn_complete`), not each tool result at
@@ -30,8 +30,8 @@ synchronous engine exposes no model handle for native token counting.
 ## Install & select
 
 ```bash
-pip install hermes-relevance-filter          # the engine
-pip install "hermes-relevance-filter[hermes]" # + the Hermes host from source (not on PyPI)
+# Not published to PyPI - install from a clone of this repository
+pip install -e context-core -e "hermes-plugins/hermes-relevance-filter[hermes]"  # [hermes] = Hermes host from source
 ```
 
 Copy/symlink the installed package into `$HERMES_HOME/plugins/relevance-filter/`, then in `config.yaml`:

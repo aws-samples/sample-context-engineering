@@ -44,7 +44,7 @@ def test_tool_schemas_well_formed() -> None:
     schemas = _engine().get_tool_schemas()
     assert len(schemas) == 1
     fn = schemas[0]["function"]
-    assert fn["name"] == "retrieve_all_context"
+    assert fn["name"] == "rf_retrieve_all_context"
     assert "reference" in fn["parameters"]["required"]
 
 
@@ -101,7 +101,7 @@ def test_full_text_recoverable_via_retrieve_all_context() -> None:
     body = "\n".join(f"row {i} value {i*10}" for i in range(400))
     _oversized_turn(e, body)
     ref = next(iter(e._rankings))  # a reference was stored
-    out = json.loads(e.handle_tool_call("retrieve_all_context", {"reference": ref}))
+    out = json.loads(e.handle_tool_call("rf_retrieve_all_context", {"reference": ref}))
     assert "row 399 value 3990" in out["content"]
 
 
@@ -111,13 +111,13 @@ def test_retrieve_pattern_filters_rows() -> None:
     _oversized_turn(e, body)
     ref = next(iter(e._rankings))
     out = json.loads(e.handle_tool_call(
-        "retrieve_all_context", {"reference": ref, "pattern": "KEEP", "context_lines": 0}))
+        "rf_retrieve_all_context", {"reference": ref, "pattern": "KEEP", "context_lines": 0}))
     assert "KEEP 0" in out["content"] and "KEEP 200" in out["content"]
     assert "skip 1" not in out["content"]
 
 
 def test_retrieve_unknown_reference_errors() -> None:
-    out = json.loads(_engine().handle_tool_call("retrieve_all_context", {"reference": "nope"}))
+    out = json.loads(_engine().handle_tool_call("rf_retrieve_all_context", {"reference": "nope"}))
     assert "not found" in out["error"]
 
 
@@ -136,7 +136,7 @@ def test_closed_retrieval_exchange_dropped() -> None:
     msgs = [
         {"role": "user", "content": "q"},
         {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "r1", "type": "function", "function": {"name": "retrieve_all_context", "arguments": "{}"}}]},
+            {"id": "r1", "type": "function", "function": {"name": "rf_retrieve_all_context", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "r1", "content": "big recovered content"},
         {"role": "assistant", "content": "the answer is 42"},
     ]

@@ -54,10 +54,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-FIND_TOOLS_NAME = "find_tools"
+FIND_TOOLS_NAME = "ptd_find_tools"
 """Name of the search tool. Also the name a projection looks for to decide it can project at all."""
 
-GET_TOOL_DETAILS_NAME = "get_tool_details"
+GET_TOOL_DETAILS_NAME = "ptd_get_tool_details"
 """Name of the loading tool: the one call that puts full specifications into the next projection.
 
 Not ``get_details``: a bare verb-noun that generic is a name a domain tool can already hold, and a
@@ -87,11 +87,11 @@ The tools listed below are NOT in your tool list, and you MUST NOT call them dir
 are not loaded, and a direct call is rejected without running.
 
 To use any of them, always follow these steps:
-1. Call `{get_tool_details}` with the names you need, as a list, in one call.
+1. Call `{ptd_get_tool_details}` with the names you need, as a list, in one call.
 2. On your next call they are in your tool list with their full parameters. Call them from there.
 3. A tool left unused for a few calls is unloaded again. If a call to it is rejected, repeat step 1.
 
-If no name below fits what you need, call `{find_tools}` with the need in your own words, then go to
+If no name below fits what you need, call `{ptd_find_tools}` with the need in your own words, then go to
 step 1 with the names it returns.
 
 The tools that ARE in your tool list for this call you call directly.
@@ -100,8 +100,8 @@ The tools that ARE in your tool list for this call you call directly.
 """Preamble of the system-prompt catalog: the rule, stated where the model reads the names.
 
 The names are not in the call's tool list at all, so nothing asserts they are callable, and the rule that
-governs them arrives in the same block. The common path is catalog -> ``get_tool_details`` -> call;
-``find_tools`` is the fallback for a need the model cannot map to a listed name.
+governs them arrives in the same block. The common path is catalog -> ``ptd_get_tool_details`` -> call;
+``ptd_find_tools`` is the fallback for a need the model cannot map to a listed name.
 """
 
 
@@ -369,7 +369,7 @@ def catalog_prompt_block(
     if not lines:
         return ""
 
-    header = CATALOG_PROMPT_HEADER.format(find_tools=FIND_TOOLS_NAME, get_tool_details=GET_TOOL_DETAILS_NAME)
+    header = CATALOG_PROMPT_HEADER.format(ptd_find_tools=FIND_TOOLS_NAME, ptd_get_tool_details=GET_TOOL_DETAILS_NAME)
     return header + "\n".join(lines)
 
 

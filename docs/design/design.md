@@ -245,10 +245,10 @@ Translating:
   artifact — it is generated from the objects that are already registered, and the summary of a
   description too long to fit is written once and cached. The block states the rule where the names
   are read: a listed tool is not in the tool list and a direct call to it does not run.
-- **Detail on demand**: the model names the tools it wants and `get_tool_details` loads their full
-  parameters for the next call; when no listed name fits, `find_tools` searches over those same
+- **Detail on demand**: the model names the tools it wants and `ptd_get_tool_details` loads their full
+  parameters for the next call; when no listed name fits, `ptd_find_tools` searches over those same
   objects first. A call that skipped the load is cancelled with a message pointing at
-  `get_tool_details`, and nothing is loaded on the model's behalf — a recovery that loaded it would
+  `ptd_get_tool_details`, and nothing is loaded on the model's behalf — a recovery that loaded it would
   teach that calling a catalog name directly works.
 - **Forgetting**: the detail leaves when it stops being used. Every call that actually runs renews it.
 - **Folding what the history shows**: a closed exchange with a tool that is not callable on this call
@@ -382,7 +382,7 @@ sequenceDiagram
     AG->>M: call with the filtered result
 
     opt the filter cut something that was needed
-        M-->>AG: retrieve_all_context(reference)
+        M-->>AG: rf_retrieve_all_context(reference)
         AG->>S: queries by span, pattern, chunk count or token budget
         S-->>AG: chunk
         AG->>M: call — costs a cycle
@@ -404,12 +404,12 @@ sequenceDiagram
     Note over AG,B: middleware InvokeModelStage.Input<br/>single hook point
 
     AG->>B: builds tool_specs, system_prompt and messages for this call
-    B-->>AG: tool_specs = find_tools + get_tool_details + always_available + loaded<br/>system_prompt += catalog (name: summary)<br/>no other tool is in tool_specs at all
+    B-->>AG: tool_specs = ptd_find_tools + ptd_get_tool_details + always_available + loaded<br/>system_prompt += catalog (name: summary)<br/>no other tool is in tool_specs at all
 
     AG->>M: call
     Note over M: the rule lives in the catalog block itself,<br/>beside the names it governs
 
-    M-->>AG: get_tool_details(["list_investment_transactions"])
+    M-->>AG: ptd_get_tool_details(["list_investment_transactions"])
     AG->>B: loads the named tools
     B-->>AG: full inputSchema of each, in the next call's tool_specs
     AG->>M: call — costs a cycle
@@ -420,8 +420,8 @@ sequenceDiagram
 
     Note over B: the schema stays while calls renew it<br/>and is released by inactivity
     Note over B: the messages of the call carry the closed exchanges<br/>of every tool outside tool_specs as a sentence,<br/>not as a toolUse the model can copy
-    Note over B: a catalog name called directly is cancelled ·<br/>the message points at get_tool_details<br/>and nothing is loaded on the model's behalf
-    Note over B: fallback — when no catalog name fits,<br/>find_tools searches and lists matches,<br/>then get_tool_details loads them
+    Note over B: a catalog name called directly is cancelled ·<br/>the message points at ptd_get_tool_details<br/>and nothing is loaded on the model's behalf
+    Note over B: fallback — when no catalog name fits,<br/>ptd_find_tools searches and lists matches,<br/>then ptd_get_tool_details loads them
     Note over B: catalog_chars = None sends only the two tools<br/>saves more, but the model may<br/>not know it has tools
 ```
 
@@ -448,8 +448,8 @@ sequenceDiagram
     AG->>M: call
 
     opt needs a tool it has not loaded
-        M-->>AG: get_tool_details([names from the catalog])
-        AG->>B: loads them — find_tools first when no name fits
+        M-->>AG: ptd_get_tool_details([names from the catalog])
+        AG->>B: loads them — ptd_find_tools first when no name fits
         B-->>AG: full inputSchema
         AG->>M: call — costs a cycle
     end
@@ -465,11 +465,11 @@ sequenceDiagram
     AG->>M: call with the filtered result
 
     opt the filter cut something that was needed
-        M-->>AG: retrieve_all_context(reference)
+        M-->>AG: rf_retrieve_all_context(reference)
         AG->>S: explicit query
         S-->>AG: content
         AG->>M: call — costs a cycle
-        Note over B: retrieve_all_context is not in always_available ·<br/>it sits in the catalog and is loaded only<br/>when a whole result is what the question needs
+        Note over B: rf_retrieve_all_context is not in always_available ·<br/>it sits in the catalog and is loaded only<br/>when a whole result is what the question needs
     end
 
     M-->>AG: final response

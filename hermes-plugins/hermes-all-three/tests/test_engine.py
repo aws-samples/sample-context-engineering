@@ -42,8 +42,8 @@ def test_is_context_engine() -> None:
 def test_six_tools_present() -> None:
     names = {s["function"]["name"] for s in _engine().get_tool_schemas()}
     assert names == {
-        "retrieve_all_context", "find_tools", "get_tool_details",
-        "expand_card", "expand_artifact", "find_context",
+        "rf_retrieve_all_context", "ptd_find_tools", "ptd_get_tool_details",
+        "cg_expand_card", "cg_expand_artifact", "cg_find_context",
     }
 
 
@@ -61,8 +61,8 @@ def test_shared_store_handed_to_graph_as_stash() -> None:
 
 def test_dispatch_routes_to_owning_practice() -> None:
     e = _engine()
-    # find_tools -> disclosure
-    out = json.loads(e.handle_tool_call("find_tools", {"need": "search ledger"}))
+    # ptd_find_tools -> disclosure
+    out = json.loads(e.handle_tool_call("ptd_find_tools", {"need": "search ledger"}))
     assert "matches" in out
     # unknown -> error
     assert json.loads(e.handle_tool_call("ghost", {}))["error"]
@@ -99,8 +99,8 @@ def test_shared_ref_resolves_via_expand_artifact() -> None:
     ]
     e.on_turn_complete(convo)      # A stores c1_0 in the shared store
     e.select_context(convo)        # D builds its graph
-    # the filter minted a ref c1_0; D's expand_artifact reads it through the shared stash
-    out = json.loads(e.handle_tool_call("expand_artifact", {"reference": "c1_0"}))
+    # the filter minted a ref c1_0; D's cg_expand_artifact reads it through the shared stash
+    out = json.loads(e.handle_tool_call("cg_expand_artifact", {"reference": "c1_0"}))
     assert "row 399 total 1995" in out.get("result", "")
 
 

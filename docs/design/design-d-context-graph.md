@@ -198,7 +198,7 @@ The card keeps a reference, never content.
 reference, and the artifact card keeps that reference. The expansion is
 `retrieve_context(reference, line_range=...)`, which already exists — the `ContextManager`'s
 retrieval tool (`_context_manager/retrieval_tool.py:24`), not the offloader's, and distinct from the
-relevance filter's own `retrieve_all_context`, which reads back a payload the filter stored rather
+relevance filter's own `rf_retrieve_all_context`, which reads back a payload the filter stored rather
 than a `Stash` reference.
 
 The timing differs by host and it is worth being exact about it, because §5 leans on the distinction.
@@ -216,7 +216,7 @@ D reads both shapes, because both hosts write one:
   stash       ── [ref: tu-3_0]        or  [refs: tu-3_0, tu-3_1]
 ```
 
-`expand_artifact` resolves the stash by walking the agent's plugin registry for a `ContextManager`,
+`cg_expand_artifact` resolves the stash by walking the agent's plugin registry for a `ContextManager`,
 so the graph works next to a manager it was not told about — and answers with prose naming what was
 missing when there is none.
 
@@ -268,7 +268,7 @@ its `inputSchema` rather than the schema's machinery: you index what describes, 
 
 The `content_type` in that box is read off the placeholder — a `[image: png, …]` becomes
 `image/png`, a `[document: pdf, …]` becomes `application/pdf`. One asymmetry to know about: the
-recovery path is coarser than the description. When `expand_artifact` reads a stashed block that
+recovery path is coarser than the description. When `cg_expand_artifact` reads a stashed block that
 holds no text, it answers that the reference holds non-textual content **without naming the type** —
 the card describes the format, the tool's refusal does not repeat it.
 
@@ -562,27 +562,27 @@ where its position in the cycle pays for it.
 
 The automatic pass uses the user message as the question. That is not always enough, and B already
 solved the same problem: 94 truncated titles do not let the model decide which tool serves, and that
-is why B exposes a `find_tools(need)` beyond the catalog, with `get_tool_details(names)` to load what it
+is why B exposes a `ptd_find_tools(need)` beyond the catalog, with `ptd_get_tool_details(names)` to load what it
 finds.
 
 The STM has the identical problem. "That R$ 1.200 card entry" is not resolved by looking at fifteen
 titles.
 
 ```
-  B   catalog (pre-spec, always present)  +  find_tools(need)     ──▶  get_tool_details  ──▶  full spec
-  D   title (always present)              +  find_context(need)   ──▶  literal full content
+  B   catalog (pre-spec, always present)  +  ptd_find_tools(need)     ──▶  ptd_get_tool_details  ──▶  full spec
+  D   title (always present)              +  cg_find_context(need)   ──▶  literal full content
 ```
 
 What D had was only half: `expand(card)` requires the model to **already know which card it wants**.
-`find_context` is the route for when it knows what it is looking for but not where it is.
+`cg_find_context` is the route for when it knows what it is looking for but not where it is.
 
-`similar()` and `find_context` are the **same operation at different moments**, and the difference is
+`similar()` and `cg_find_context` are the **same operation at different moments**, and the difference is
 who formulates the question:
 
 | | Question | When | Cost |
 |---|---|---|---|
 | `similar()` | the user message | before the call | 0 cycles |
-| `find_context()` | what the **model** formulated | during the call | 1 cycle |
+| `cg_find_context()` | what the **model** formulated | during the call | 1 cycle |
 
 The model's is better: it knows what it is looking for after reasoning. It is the same argument as
 `design-a` §5, that concatenating the question with the tool arguments gives a better signal than
@@ -754,7 +754,7 @@ sequenceDiagram
     end
 
     opt the score got it wrong and the referent was from an old card
-        M-->>AG: toolUse — find_context, R$ 1.200 card entry
+        M-->>AG: toolUse — cg_find_context, R$ 1.200 card entry
         AG->>G: executes the search
         G-->>AG: candidate cards, scored by the description
         G->>G: adds score to that card, with decay
@@ -800,11 +800,11 @@ mechanism is made for turn 15, not for turn 1.
 
 ### The leak: recovery without feedback costs one cycle per turn
 
-If the score does not **learn** from the request, the same `find_context` fires every turn:
+If the score does not **learn** from the request, the same `cg_find_context` fires every turn:
 
 ```
-  turn N     the score got it wrong        ──▶  find_context  ──▶  1 cycle
-  turn N+1   the score got it wrong again  ──▶  find_context  ──▶  1 cycle
+  turn N     the score got it wrong        ──▶  cg_find_context  ──▶  1 cycle
+  turn N+1   the score got it wrong again  ──▶  cg_find_context  ──▶  1 cycle
   turn N+2   ...                                                    forever
 ```
 
@@ -981,7 +981,7 @@ That is what removes the defect D used to have to guard against. A card dropping
 the description **kept naming the tool** (`tools used: list_investment_positions ×3`) — the model read
 about a tool it could no longer call. With no history block left, a lowered card takes nothing away:
 the description is in the same position as a catalog line, and the route from a name to a callable
-tool is `get_tool_details`, the one route the catalog rule already teaches. A direct call is cancelled
+tool is `ptd_get_tool_details`, the one route the catalog rule already teaches. A direct call is cancelled
 with a message pointing there, and nothing is loaded on the model's behalf.
 
 So the two scales are independent instead of aligned, and neither has an "absent" level:
@@ -1050,7 +1050,7 @@ missing.
 | The search lights up too little | poor answer | the description is there, the model asks: one cycle |
 | A wrong similarity link fuses subjects | more context | favorable asymmetry, see §14 |
 | The derived description does not catch what mattered | poor answer | the full content is still in the card, the title is visible |
-| Model abuses `expand` or `find_context` | each recovery becomes resident history, and `find_context` costs one cycle even when it finds nothing | same risk the report points out in A: recovery pays twice. The score feedback (§9.1) is the countermeasure, and the curve of cycles per turn (§18) is how it is detected |
+| Model abuses `expand` or `cg_find_context` | each recovery becomes resident history, and `cg_find_context` costs one cycle even when it finds nothing | same risk the report points out in A: recovery pays twice. The score feedback (§9.1) is the countermeasure, and the curve of cycles per turn (§18) is how it is detected |
 | Evidence decays and the question was an aggregation | wrong answer, not poor | §3.1 names the case; the reference is in the title and `expand` reads by range. It is the most serious failure mode of the design, because it fails silently |
 | Classifier fails | message without a card | a message without a card goes in whole |
 | `similar()` fails or times out | no score | with no score, everything goes in whole: the no-plugin behavior. `SemanticTopicMatcher` already returns empty on any exception instead of propagating |
@@ -1073,11 +1073,11 @@ D exposes two recovery routes, and they answer different questions:
 | Tool | What the model knows | Use |
 |---|---|---|
 | `expand(card)` | **which** card it wants — it read the title | raises the resolution: literal messages for a subject, line range for an artifact |
-| `find_context(need, tag=None)` | **what** it is looking for, not where it is | semantic search over the descriptions, with optional exact tag filter (§7.1, §8.1) |
+| `cg_find_context(need, tag=None)` | **what** it is looking for, not where it is | semantic search over the descriptions, with optional exact tag filter (§7.1, §8.1) |
 
 A tool stays out of both, and §13.1 explains why: raising a tool from pre-specification to full
 specification is B's decision, taken from what the model has loaded, and D feeds no input to it. The
-model already has B's `find_tools` plus `get_tool_details` for any tool it wants, whether a card
+model already has B's `ptd_find_tools` plus `ptd_get_tool_details` for any tool it wants, whether a card
 mentions it or not. A third route to the same thing would be ambiguity, not convenience.
 
 Honest caveat about `expand`: subject and artifact have different parameters — line range and pattern
@@ -1096,12 +1096,12 @@ what the table above fixes.
 - Premature calls, against **B alone** and not against zero. The 15 to 17 that the
   `progressive_tool_disclosure` counter measured came from an earlier design, where an undisclosed tool
   still sat in `tool_specs` as a reduced entry with an empty `inputSchema`. With the catalog in the
-  system prompt, a cancellation that points at `get_tool_details`, and no load on the model's behalf,
+  system prompt, a cancellation that points at `ptd_get_tool_details`, and no load on the model's behalf,
   the counter should sit near zero, so the baseline to compare against is whatever B alone records on
   the current code. D's prediction is unchanged — *not to make it worse*: a description that names a
   tool is one more invitation to call it directly, and `premature_cancellations` is where that shows
   up.
-- **Curve of recovery cycles per turn** — `expand` plus `find_context`, across the session. It is the
+- **Curve of recovery cycles per turn** — `expand` plus `cg_find_context`, across the session. It is the
   metric that decides whether D works, more than tokens. A descending curve means the score learned
   from the request (§9.1); a flat curve means D traded tokens for latency, which is the result A
   delivered.
@@ -1153,7 +1153,7 @@ when they are not — a host that replaces the content elsewhere, or a hook orde
 the card comes from the second path, the scan of the preview text, which is the path the code declares
 makes hook order irrelevant (`strands_context_graph/plugin.py:876` docstring). Same card, at worst one event later.
 
-One thing A takes off D's hands entirely: A's own retrieval tool, `retrieve_all_context`, has its
+One thing A takes off D's hands entirely: A's own retrieval tool, `rf_retrieve_all_context`, has its
 exchanges removed from `agent.messages` at `AfterInvocationEvent`, once the turn has ended
 (`strands_relevance_filter/plugin.py:_on_after_invocation:589`). They are gone before the next
 `MessageAddedEvent` boundary closes a turn, so D's scan never sees them and no card is ever derived
@@ -1321,11 +1321,11 @@ The integrations are optional and degrade to less optimization, never to error:
    `design-a` §10 reached for its thresholds.
 5. ~~Does a requested expansion add permanent score, or is it valid only for the turn?~~ Decided in
    §9.1: **it adds score with decay**, and that is a requirement, not an optimization. Without
-   feedback, the same `find_context` fires every turn and D trades tokens for latency. What stays open
+   feedback, the same `cg_find_context` fires every turn and D trades tokens for latency. What stays open
    is only the **decay profile** — B expires exposure by cycle count, and it is worth reusing that
    shape before inventing another.
 6. Is `expand` one tool for subject and artifact, or two? §17 fixes the separation by **type of
-   question** — `expand` by title, `find_context` by description — and leaves open the granularity
+   question** — `expand` by title, `cg_find_context` by description — and leaves open the granularity
    inside `expand`: line range and pattern only apply to an artifact, so the single signature carries
    useless fields in half the cases. Three tool descriptions in the prompt against one confusing
    signature; measure the cost of both before choosing.

@@ -21,7 +21,7 @@ from test_plugin_init_agent import build
 
 from strands_context_graph import ContextGraph
 
-ALL_THREE = {"expand_card", "expand_artifact", "find_context"}
+ALL_THREE = {"cg_expand_card", "cg_expand_artifact", "cg_find_context"}
 """What the plugin registers by default (Requirement 1.2)."""
 
 
@@ -72,8 +72,8 @@ def test_excluding_the_artifact_tool_drops_exactly_it() -> None:
     """The conversation-facing tools are untouched: they do a job no offloader does."""
     plugin = ContextGraph(matcher=_Matcher(), include_artifact_tool=False)
 
-    assert registered(plugin) == {"expand_card", "find_context"}
-    assert set(plugin.retrieval_tool_names) == {"expand_card", "find_context"}
+    assert registered(plugin) == {"cg_expand_card", "cg_find_context"}
+    assert set(plugin.retrieval_tool_names) == {"cg_expand_card", "cg_find_context"}
 
 
 def test_the_exclusion_is_idempotent_across_agents() -> None:
@@ -81,7 +81,7 @@ def test_the_exclusion_is_idempotent_across_agents() -> None:
     plugin = ContextGraph(matcher=_Matcher(), include_artifact_tool=False)
     registered(plugin)
 
-    assert registered(plugin) == {"expand_card", "find_context"}
+    assert registered(plugin) == {"cg_expand_card", "cg_find_context"}
 
 
 def test_an_excluded_tool_is_not_advertised_to_the_model() -> None:
@@ -97,9 +97,9 @@ def test_an_excluded_tool_is_not_advertised_to_the_model() -> None:
 
     text = guidance(set(plugin.retrieval_tool_names))
 
-    assert "expand_artifact" not in text
-    assert "expand_card" in text
-    assert "find_context" in text
+    assert "cg_expand_artifact" not in text
+    assert "cg_expand_card" in text
+    assert "cg_find_context" in text
 
 
 @pytest.mark.parametrize("bad", [0, 1, "yes", None, ()])
@@ -125,16 +125,16 @@ def test_the_names_are_what_the_disclosure_wiring_needs() -> None:
 
     always_available = [*plugin.retrieval_tool_names]
 
-    assert always_available == ["expand_card", "find_context"]
+    assert always_available == ["cg_expand_card", "cg_find_context"]
 
 
 def test_the_names_are_read_at_call_time_not_fixed_at_construction() -> None:
     """A caller that de-registers by hand still gets a truthful answer, which is what the guidance depends on."""
     plugin = ContextGraph(matcher=_Matcher())
     registered(plugin)
-    plugin._tools = [tool for tool in plugin._tools if tool.tool_name != "find_context"]
+    plugin._tools = [tool for tool in plugin._tools if tool.tool_name != "cg_find_context"]
 
-    assert set(plugin.retrieval_tool_names) == {"expand_card", "expand_artifact"}
+    assert set(plugin.retrieval_tool_names) == {"cg_expand_card", "cg_expand_artifact"}
 
 
 def test_the_names_are_a_tuple_so_a_caller_cannot_mutate_the_registration() -> None:

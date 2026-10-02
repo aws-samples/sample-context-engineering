@@ -2,7 +2,7 @@
 
 Practice A rewrites an oversized tool result into a marker + disclaimer + verbatim relevance preview
 (+ a ``[ref]`` token) before it reaches the model, keeps the full result in a store, and exposes
-``retrieve_all_context`` to read it back.
+``rf_retrieve_all_context`` to read it back.
 
 Mapping the LangGraph middleware hooks onto the Hermes ABC:
 
@@ -10,9 +10,9 @@ Mapping the LangGraph middleware hooks onto the Hermes ABC:
   each tool result at production time. Instead ``on_turn_complete(messages)`` sees the finished turn's
   tool messages; A detects oversized results there, stores them, and records the rewrite.
 - LangGraph ``wrap_model_call`` → Hermes ``select_context(request_messages)``: build a request-only copy
-  with oversized results replaced by their marker/disclaimer/preview and closed ``retrieve_all_context``
+  with oversized results replaced by their marker/disclaimer/preview and closed ``rf_retrieve_all_context``
   exchanges dropped. Request-only, fail-open — exactly the ABC contract.
-- ``get_tool_schemas`` / ``handle_tool_call`` → the ``retrieve_all_context`` tool.
+- ``get_tool_schemas`` / ``handle_tool_call`` → the ``rf_retrieve_all_context`` tool.
 
 Every decision about *content* (chunking, scoring, preview assembly, search) is delegated to
 ``context_core.relevance``; what lives here is the Hermes seam wiring, the marker/disclaimer text, the
@@ -60,7 +60,7 @@ _DEFAULT_PREVIEW_TOKENS = 1_000
 _DEFAULT_CONTEXT_LINES = 5
 _CHARS_PER_TOKEN = 4
 _MAX_QUERY_CHARS = 2_000
-_RETRIEVAL_TOOL_NAME = "retrieve_all_context"
+_RETRIEVAL_TOOL_NAME = "rf_retrieve_all_context"
 
 
 def _run_to_completion(coroutine: Awaitable[Any]) -> Any:
@@ -110,7 +110,7 @@ class RelevanceFilterEngine(BaseEngine):
         max_result_tokens: Filter only results whose estimated token count exceeds this. Default 8000.
         config: Preview tuning (``reranker``, ``relevance_threshold``, ``chunk_tokens``,
             ``preview_tokens``, ``summarize_overflow``); every key optional.
-        include_retrieval_tool: Store raw content and register ``retrieve_all_context``. Default True.
+        include_retrieval_tool: Store raw content and register ``rf_retrieve_all_context``. Default True.
         store: Backend for raw sub-blocks (only the retrieval tool reads it). When None and the tool is
             on, an ``InMemoryStore`` is built.
     """
@@ -145,7 +145,7 @@ class RelevanceFilterEngine(BaseEngine):
         """Read-only view of this filter's store, so another practice can resolve a ``[ref]`` it minted.
 
         Used by ``hermes-all-three`` to let the context graph read filter references through
-        ``expand_artifact``. ``None`` when nothing is stored.
+        ``cg_expand_artifact``. ``None`` when nothing is stored.
         """
         return None if self._store is None else _RelevanceStash(self._store)
 
@@ -264,7 +264,7 @@ class RelevanceFilterEngine(BaseEngine):
         except ValueError as error:
             return json.dumps({"error": str(error)})
         except Exception as error:  # noqa: BLE001
-            logger.debug("retrieve_all_context failed", exc_info=True)
+            logger.debug("rf_retrieve_all_context failed", exc_info=True)
             return json.dumps({"error": f"retrieval failed: {error}"})
 
     async def _retrieve(
@@ -408,7 +408,7 @@ def _drop_tool_exchanges(messages: List[Dict[str, Any]], tool_name: str) -> Opti
 
 
 def _retrieval_args(args: Dict[str, Any]) -> Dict[str, Any]:
-    """Pick the known ``retrieve_all_context`` arguments out of the raw tool-call args."""
+    """Pick the known ``rf_retrieve_all_context`` arguments out of the raw tool-call args."""
     reference = args.get("reference")
     if not isinstance(reference, str) or not reference:
         raise ValueError("reference is required")
@@ -423,7 +423,7 @@ def _retrieval_args(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _retrieve_all_context_schema(name: str) -> Dict[str, Any]:
-    """OpenAI function-tool schema for ``retrieve_all_context``."""
+    """OpenAI function-tool schema for ``rf_retrieve_all_context``."""
     return {
         "type": "function",
         "function": {

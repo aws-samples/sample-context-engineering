@@ -11,7 +11,7 @@ Composition reuses the three single engines unchanged; nothing is reimplemented:
   **A rewrites** oversized tool results. Each stage is the same ``context_core`` call the single engine
   makes.
 - One **shared relevance store** is handed to D as its ``stash`` so a ``[ref: …]`` the filter minted
-  resolves through ``expand_artifact`` as well as ``retrieve_all_context``.
+  resolves through ``cg_expand_artifact`` as well as ``rf_retrieve_all_context``.
 - ``get_tool_schemas`` is the union of the six tools, the two retrieval tools scoped by name so the
   model does not read them as the same job.
 - ``handle_tool_call`` dispatches by tool name to the owning practice.
@@ -72,7 +72,7 @@ class AllThreeEngine(BaseEngine):
         self._disclosure = ProgressiveToolDisclosureEngine(
             tool_specs=tool_specs, catalog_chars=disclosure_catalog_chars
         )
-        # D reads A's store as its stash, so a filter [ref] resolves through expand_artifact too.
+        # D reads A's store as its stash, so a filter [ref] resolves through cg_expand_artifact too.
         self._graph = ContextGraphEngine(
             stash=self._relevance.stash, include_artifact_tool=True, **(graph_kwargs or {})
         )

@@ -238,7 +238,7 @@ def build_report(results: dict[str, dict[str, Any]], *, baseline: str = "baselin
         "### Tool activity",
         "",
         "Retrieval count is the variable that explains most of the token totals: every",
-        "retrieval call (`retrieve_all_context`, `expand_artifact`, `expand_card`, `find_context`)",
+        "retrieval call (`rf_retrieve_all_context`, `cg_expand_artifact`, `cg_expand_card`, `cg_find_context`)",
         "appends a result to the history, and the graph's results then ride along on every subsequent",
         "call (the relevance filter removes its own when the turn ends). A strategy that makes retrieval",
         "more attractive pays for it twice.",
@@ -319,7 +319,7 @@ def build_report(results: dict[str, dict[str, Any]], *, baseline: str = "baselin
         disclosure = counters.get("disclosure")
         if disclosure:
             lines.append(
-                f"- Disclosure: {disclosure.get('searches', '?')} find_tools searches, "
+                f"- Disclosure: {disclosure.get('searches', '?')} ptd_find_tools searches, "
                 f"{disclosure.get('premature_cancellations', '?')} premature calls recovered, "
                 f"{disclosure.get('exposed_count_at_end', '?')} tools exposed at end"
             )
@@ -754,7 +754,7 @@ def _interpretation(results: dict[str, dict[str, Any]], order: list[str], baseli
             f"- Schemas: {_delta(disclosure['tokens']['tool_spec_tokens_total'], base_tokens.get('tool_spec_tokens_total', 0))} "
             f"— the largest single-column move in this run.",
             f"- Calls: {_delta(disclosure['model_calls'], base.get('model_calls', 0))}. "
-            f"{counters.get('searches', '?')} were `find_tools` searches; "
+            f"{counters.get('searches', '?')} were `ptd_find_tools` searches; "
             f"{counters.get('premature_cancellations', '?')} were premature calls that had to be retried "
             f"once the schema loaded.",
             "- Premature cancellations are the number to watch. Each one costs a cycle, and a cycle",

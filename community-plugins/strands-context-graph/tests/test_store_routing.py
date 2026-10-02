@@ -34,14 +34,14 @@ REFERENCE = "mem_1_tu-3_0"
 CONTENT = "line one\nR$ 1.200,00 in March\nline three"
 
 ABSENT_PROSE = (
-    "expand_artifact | no artifact storage holds reference 'mem_1_tu-3_0' on this agent | nothing was ever offloaded "
-    "under that reference, which means the full results are already in the conversation"
+    "cg_expand_artifact | no artifact storage holds reference 'mem_1_tu-3_0' on this agent | nothing was ever "
+    "offloaded under that reference, which means the full results are already in the conversation"
 )
 """The exact answer for "nothing beyond the own store was there to ask" (Requirement 15.4)."""
 
 UNKNOWN_PROSE = (
-    "expand_artifact | unknown reference 'mem_1_tu-3_0' | copy a reference exactly as it was shown to you in a turn's "
-    "title or preview"
+    "cg_expand_artifact | unknown reference 'mem_1_tu-3_0' | copy a reference exactly as it was shown to you in a "
+    "turn's title or preview"
 )
 """The exact answer for "storage was asked and did not hold it"."""
 

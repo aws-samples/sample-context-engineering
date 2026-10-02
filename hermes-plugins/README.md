@@ -13,9 +13,9 @@ it. `context-core` is consumed **unchanged**.
 
 | | Practice | Package | Binding |
 |---|---|---|---|
-| **A** | Relevance filtering | [`hermes-relevance-filter`](hermes-relevance-filter/) | `on_turn_complete` + `select_context` + `retrieve_all_context` |
-| **B** | Progressive tool disclosure | [`hermes-progressive-tool-disclosure`](hermes-progressive-tool-disclosure/) | `select_context` (catalog + fold) + `find_tools` / `get_tool_details` |
-| **D** | Context graph | [`hermes-context-graph`](hermes-context-graph/) | `select_context` (project) + `on_turn_complete` + `expand_card` / `expand_artifact` / `find_context` |
+| **A** | Relevance filtering | [`hermes-relevance-filter`](hermes-relevance-filter/) | `on_turn_complete` + `select_context` + `rf_retrieve_all_context` |
+| **B** | Progressive tool disclosure | [`hermes-progressive-tool-disclosure`](hermes-progressive-tool-disclosure/) | `select_context` (catalog + fold) + `ptd_find_tools` / `ptd_get_tool_details` |
+| **D** | Context graph | [`hermes-context-graph`](hermes-context-graph/) | `select_context` (project) + `on_turn_complete` + `cg_expand_card` / `cg_expand_artifact` / `cg_find_context` |
 | **A+B+D** | All three | [`hermes-all-three`](hermes-all-three/) | one composed engine (single-select mandates it) |
 
 ## Why four packages — Hermes is single-select
@@ -33,9 +33,9 @@ run them together.
 
 | Practice | Strands surface | Hermes `ContextEngine` member | Verdict |
 |---|---|---|---|
-| **A** Relevance | `AfterToolCallEvent` (rewrite result) + `AfterInvocationEvent` (drop retrieval exchanges) | `on_turn_complete` detects + stores the oversized result · `select_context` replaces it with marker + disclaimer + verbatim preview (+ `[ref]`) and drops closed exchanges · `retrieve_all_context` tool | **Portable** |
-| **B** Disclosure | `InvokeModelStage.Input` (rewrite `tool_specs` + `system_prompt` + fold messages) | `select_context` injects the catalog into the system message and folds closed `get_tool_details` exchanges · `find_tools` / `get_tool_details` tools | **Portable, with a documented base-schema compromise — see below** |
-| **D** Context graph | `BeforeInvocation` + `MessageAdded` + `AfterToolCall` (project into Cards, record artifacts) | `select_context` runs `context_core.graph.project` · `on_turn_complete` records each tool return as an artifact · `expand_card` / `expand_artifact` / `find_context` tools | **Portable — and the single-select bonus below** |
+| **A** Relevance | `AfterToolCallEvent` (rewrite result) + `AfterInvocationEvent` (drop retrieval exchanges) | `on_turn_complete` detects + stores the oversized result · `select_context` replaces it with marker + disclaimer + verbatim preview (+ `[ref]`) and drops closed exchanges · `rf_retrieve_all_context` tool | **Portable** |
+| **B** Disclosure | `InvokeModelStage.Input` (rewrite `tool_specs` + `system_prompt` + fold messages) | `select_context` injects the catalog into the system message and folds closed `ptd_get_tool_details` exchanges · `ptd_find_tools` / `ptd_get_tool_details` tools | **Portable, with a documented base-schema compromise — see below** |
+| **D** Context graph | `BeforeInvocation` + `MessageAdded` + `AfterToolCall` (project into Cards, record artifacts) | `select_context` runs `context_core.graph.project` · `on_turn_complete` records each tool return as an artifact · `cg_expand_card` / `cg_expand_artifact` / `cg_find_context` tools | **Portable — and the single-select bonus below** |
 
 ### Parity with the Strands plugins
 
@@ -58,7 +58,7 @@ Strands and LangGraph implement disclosure by rewriting the model request's `too
 directly, so the model literally cannot see a tool until it is disclosed. **Hermes's `ContextEngine`
 exposes no hook to rewrite the agent's base tool catalog** — it owns only its own `get_tool_schemas()`
 and the message list via `select_context()`. So B runs the **portable** path: it injects the catalog and
-steers the model to `find_tools`/`get_tool_details`, but the base schemas Hermes assembled still reach the
+steers the model to `ptd_find_tools`/`ptd_get_tool_details`, but the base schemas Hermes assembled still reach the
 provider. This matches the LangGraph README's "Portable (LangChain ships a subset of this natively)" note.
 Stripping the base schemas (if a Hermes host hook is found) is a non-blocking follow-up, not a
 requirement.
@@ -79,9 +79,9 @@ The composed engine wires the three so the traps the LangGraph port hit cannot r
 1. **Composition order** is fixed at D (project) → B (catalog + fold) → A (rewrite), so each stage sees
    the output of the previous one.
 2. **One shared relevance store** is handed to D as its `stash`, so a `[ref: …]` the filter mints
-   resolves through `expand_artifact` as well as `retrieve_all_context` — not two stores the other cannot
+   resolves through `cg_expand_artifact` as well as `rf_retrieve_all_context` — not two stores the other cannot
    read.
-3. **The two retrieval tools are scoped by name** (`retrieve_all_context` vs `expand_artifact`) so the
+3. **The two retrieval tools are scoped by name** (`rf_retrieve_all_context` vs `cg_expand_artifact`) so the
    model does not read them as the same job.
 
 ## Install

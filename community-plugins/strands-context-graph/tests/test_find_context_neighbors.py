@@ -1,11 +1,11 @@
-"""``find_context`` listing the ``similar`` neighbours of each candidate it returns.
+"""``cg_find_context`` listing the ``similar`` neighbours of each candidate it returns.
 
 Until this existed the ``similar`` edge had no reader at all: it is measured on the write path and stored
 with its similarity as the weight, ``_STRUCTURAL_WEIGHTS`` omits it so it propagates no Note, and no
 retrieval path traversed it. These tests pin the traversal, the ordering, and the three cases where a
 neighbour must NOT be offered.
 
-The relation the edge holds is one the candidate ranking cannot see: ``find_context`` scores each
+The relation the edge holds is one the candidate ranking cannot see: ``cg_find_context`` scores each
 Description against the QUESTION, never against another Description, so two turns discussing the same
 thing in different words are invisible to each other there.
 """
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 from strands_context_graph.state import Link
-from strands_context_graph.tools import _similar_neighbors, find_context
+from strands_context_graph.tools import _similar_neighbors, cg_find_context
 
 from tests.test_tools import CYCLE, TTL, card, graph
 
@@ -54,7 +54,7 @@ def _link(state: object, source: str, target: str, weight: float, kind: str = "s
 
 
 def _find(state: object, need: str = "the balance", neighbors: int = 3, matcher: object = None) -> str:
-    return find_context(
+    return cg_find_context(
         state,  # type: ignore[arg-type]
         need,
         None,

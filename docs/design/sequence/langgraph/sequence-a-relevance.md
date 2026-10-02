@@ -21,14 +21,14 @@ All line references are into one of three trees, named per reference:
 > `llm -> tool -> filtered ToolMessage (+ disclaimer + reference) -> llm`, with a retrieval branch the
 > model may take when the question needs the whole result. The store is created
 > (`middleware.py:397`), a `[ref: ...]` token is emitted (`middleware.py:858-860`), and
-> `retrieve_all_context` is put on `self.tools` for LangGraph to compile in (`middleware.py:405`).
+> `rf_retrieve_all_context` is put on `self.tools` for LangGraph to compile in (`middleware.py:405`).
 > Passing `include_retrieval_tool=False` is the opt-out: no store, no reference token, no tool, no
 > cleanup.
 >
 > **Storage never gates filtering.** Chunking, reranking, selection and the rewrite of the
 > `ToolMessage` run identically with or without a store (`_filter_and_rewrite`,
 > `middleware.py:808`). The store is a step that runs first (`_store_raw`, `middleware.py:773`) and
-> exists only to serve `retrieve_all_context` (`middleware.py:395-397`).
+> exists only to serve `rf_retrieve_all_context` (`middleware.py:395-397`).
 >
 > **Four documented deviations from the Strands plugin.** The token count is the Strands default
 > `count_tokens` heuristic recomputed in the binding rather than asked of the model
@@ -57,7 +57,7 @@ The middleware subclasses `AgentMiddleware` — `class RelevanceFilterMiddleware
 (`_compat.py:8`), which is pinned to `langchain` 1.4.2 (`_compat.py:3`). It implements **four**
 hooks — `awrap_tool_call` (`middleware.py:682`), its sync twin `wrap_tool_call`
 (`middleware.py:701`), `after_agent` (`middleware.py:874`) and `aafter_agent`
-(`middleware.py:904`) — and ships **one** tool, `retrieve_all_context`, on the `tools` attribute
+(`middleware.py:904`) — and ships **one** tool, `rf_retrieve_all_context`, on the `tools` attribute
 LangGraph reads at compile time (`middleware.py:405`, built at `middleware.py:480`).
 
 Both tool hooks funnel into one body. `awrap_tool_call` awaits `handler`
@@ -106,7 +106,7 @@ The middleware attaches to the LangChain v1 `create_agent` middleware surface on
 | 2 | `wrap_tool_call` — the sync twin | `middleware.py:701` | Override. Calls `handler(request)` synchronously, **exactly once** (`middleware.py:716`), and drives the shared `_process_result` coroutine to completion (`middleware.py:717`) through `_run_to_completion` (`middleware.py:108`): `asyncio.run` on this thread when no loop is running here (`middleware.py:117-120`), on a one-worker `ThreadPoolExecutor` when one is (`middleware.py:121-122`). So `agent.invoke` filters exactly as `agent.ainvoke` does. | Same as #1 | Same as #1 |
 | 3 | `after_agent` — the `AfterInvocationEvent` analog | `middleware.py:874` | Override; returns a **state update dict** rather than writing anything. Fires when the run ends. | `self._include_retrieval_tool` (`middleware.py:895`); `state["messages"]` (`middleware.py:897`); `self.retrieval_tool_name` (`middleware.py:898`) | `state["messages"]`, via the returned `{"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}` (`middleware.py:902`). The reduced list is built by `_drop_tool_exchanges` (`middleware.py:199`). Nothing else. |
 | 4 | `aafter_agent` | `middleware.py:904` | Async form. The cleanup is pure list surgery, so it simply delegates to `after_agent` (`middleware.py:906`). | Same as #3 | Same as #3 |
-| 5 | `retrieve_all_context` on `self.tools` | `middleware.py:405`, built at `middleware.py:480`, decorated `@tool(_RETRIEVAL_TOOL_NAME)` at `middleware.py:491` | LangGraph reads `tools` at **compile time**; an empty sequence registers nothing, which is how the opt-out drops it (`middleware.py:404-405`). Built **per instance**, not as a class attribute, because it closes over *this* middleware's store and rankings (`middleware.py:483-485`). | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; `self._store` (`middleware.py:600`); `self._max_result_tokens` (`middleware.py:624`); `self._rankings` (`middleware.py:665`) | Nothing in state. Returns content to the model. |
+| 5 | `rf_retrieve_all_context` on `self.tools` | `middleware.py:405`, built at `middleware.py:480`, decorated `@tool(_RETRIEVAL_TOOL_NAME)` at `middleware.py:491` | LangGraph reads `tools` at **compile time**; an empty sequence registers nothing, which is how the opt-out drops it (`middleware.py:404-405`). Built **per instance**, not as a class attribute, because it closes over *this* middleware's store and rankings (`middleware.py:483-485`). | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; `self._store` (`middleware.py:600`); `self._max_result_tokens` (`middleware.py:624`); `self._rankings` (`middleware.py:665`) | Nothing in state. Returns content to the model. |
 
 **Construction is inert** (`middleware.py:321-323`). `__init__` (`middleware.py:360`) validates
 `max_result_tokens > 0` (`middleware.py:386-387`), calls `super().__init__()`
@@ -164,7 +164,7 @@ sequenceDiagram
     Note over Agent,MW: under agent.invoke the sync twin wrap_tool_call calls the same<br/>handler and drives the same _process_result to completion on a<br/>private loop  middleware.py:701, :716-717 and :108
 
     MW->>MW: guard 1 isinstance ToolMessage  middleware.py:724
-    MW->>MW: guard 2 name is not retrieve_all_context  middleware.py:732
+    MW->>MW: guard 2 name is not rf_retrieve_all_context  middleware.py:732
     MW->>MW: guard 3 not request.tool.return_direct  middleware.py:737
 
     MW->>Ad: _split_content_blocks(result)  middleware.py:740 and :925
@@ -267,7 +267,7 @@ string either way. The mark cannot reach this filter's own read in the first pla
 stack: the graph projects per call with `request.override(messages=...)` and never writes
 `state["messages"]`, while `wrap_tool_call` reads `request.state` (`middleware.py:842`, `_state_messages`
 at `middleware.py:909`). The fold exists for the middleware *inside* the graph — without it the
-disclosure fold read the digest as a fresh user turn, treated the turn's own `get_tool_details`
+disclosure fold read the digest as a fresh user turn, treated the turn's own `ptd_get_tool_details`
 exchange as closed and folded it away, so the model never saw its load and loaded again every cycle.
 
 Two core privates are imported directly because re-deriving them in the binding would be a second
@@ -276,7 +276,7 @@ implementation of core logic: `_assemble_preview`/`_chunk_text` (`middleware.py:
 
 ---
 
-## 4. The retrieval path — `retrieve_all_context`
+## 4. The retrieval path — `rf_retrieve_all_context`
 
 The tool loads the **whole** of a result the filter cut to an excerpt, for the one question an
 excerpt cannot answer: a maximum, minimum, total, count, average, ranking or any comparison across
@@ -324,8 +324,8 @@ sequenceDiagram
         participant Search as search.py
     end
 
-    Model->>Agent: tool_call retrieve_all_context(reference, pattern?, line_range?,<br/>context_lines?, max_chunks?, max_tokens?)
-    Agent->>MW: await retrieve_all_context(...)  middleware.py:492
+    Model->>Agent: tool_call rf_retrieve_all_context(reference, pattern?, line_range?,<br/>context_lines?, max_chunks?, max_tokens?)
+    Agent->>MW: await rf_retrieve_all_context(...)  middleware.py:492
     MW->>MW: await self._retrieve(...)  middleware.py:556 and :567
     MW->>MW: max_chunks / max_tokens integer over 0, bool rejected  middleware.py:596-598
     alt no store configured
@@ -428,9 +428,9 @@ sequenceDiagram
         MW->>State: messages = list(_state_messages(state))  middleware.py:897 and :909
         MW->>MW: kept = _drop_tool_exchanges(messages, tool_name)  middleware.py:898 and :199
         MW->>MW: answered = every ToolMessage tool_call_id  middleware.py:216
-        loop each AIMessage with a closed retrieve_all_context call
+        loop each AIMessage with a closed rf_retrieve_all_context call
             Note right of MW: closed means every matching id is answered<br/>somewhere in the history  middleware.py:222
-            alt all tool calls of the AIMessage are retrieve_all_context
+            alt all tool calls of the AIMessage are rf_retrieve_all_context
                 MW->>MW: drop the AIMessage whole, its interim text with it  middleware.py:225-226 and :233-234
                 MW->>MW: drop the answering ToolMessages  middleware.py:235-237
             else mixed with other tool calls
@@ -460,7 +460,7 @@ update at all — the `REMOVE_ALL_MESSAGES` sentinel is never emitted on a clean
 
 **The cleanup shortens the history another middleware counts cycles in.** Progressive tool disclosure
 derives its cycle number by counting `AIMessage` objects in the persisted history, so dropping a closed
-`retrieve_all_context` exchange lowers that count for every later turn of the same conversation. A tool
+`rf_retrieve_all_context` exchange lowers that count for every later turn of the same conversation. A tool
 whose load was recorded against the longer history then reads as loaded on a cycle *after* the one being
 decided, fails the "loaded on an earlier cycle" test and stays uncallable until the count catches up —
 and the model reloads it cycle after cycle. The disclosure binding absorbs that in `_last_used`, which
@@ -493,7 +493,7 @@ this middleware writes and removes only its own closed exchanges (`middleware.py
    empty-selection guard that keeps the best chunk anyway when no candidate clears the threshold
    (`preview.py:303-304`), but "best" may still be wrong.
 4. **Notices the gap markers and the trailing `[ref: ...]`/`[refs: ...]` token, and calls
-   `retrieve_all_context` with that exact reference.** These are the affordances telling the model
+   `rf_retrieve_all_context` with that exact reference.** These are the affordances telling the model
    there is more and how to reach it (`_format_gap_marker`, `preview.py:325`; token built at
    `middleware.py:859`; the disclaimer names the call and the reference at `middleware.py:185`).
    *Fails if:* the model does not parse the reference token, or fabricates one that was never issued
@@ -609,7 +609,7 @@ shape:
 ```text
 [Relevance: tool result, ~8,192 tokens]
 [Filtered: this is an EXCERPT, not the whole result | original: 1,204 lines, 5 chunks | shown: 2 chunk(s), lines 1-240, 601-840]
-An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any comparison across the whole result -- cannot be computed from this excerpt. For such an answer, call `retrieve_all_context` with reference "mem_1_call-123_0" and either a `pattern` (regex) that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole result (5 chunks, ~8,192 tokens). What you retrieve is removed from the conversation once you have answered, so state the figures you relied on in the answer.
+An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any comparison across the whole result -- cannot be computed from this excerpt. For such an answer, call `rf_retrieve_all_context` with reference "mem_1_call-123_0" and either a `pattern` (regex) that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole result (5 chunks, ~8,192 tokens). What you retrieve is removed from the conversation once you have answered, so state the figures you relied on in the answer.
 
 <the verbatim excerpt, with [... N lines omitted ...] gap markers>
 
@@ -656,7 +656,7 @@ markers are emitted in **both** modes, and also inside a `max_chunks` retrieval,
 (`middleware.py:673`). When the budget cannot hold a chunk at all, the dropped chunk and its
 preceding marker are folded into one merged marker (`preview.py:411-419`).
 
-### 6c. `retrieve_all_context` description / docstring
+### 6c. `rf_retrieve_all_context` description / docstring
 
 The `@tool` description is the function docstring (`middleware.py:500-554`). The model-facing body,
 quoted exactly:
@@ -710,11 +710,11 @@ In the opt-out the model sees none of it: `self.tools` is empty, so LangGraph co
 
 There is **no hand-written `inputSchema` literal in source**; the schema is derived by LangChain's
 `@tool` decorator (`middleware.py:491`) from the function signature and type hints. The signature —
-`async def retrieve_all_context` (`middleware.py:492`) — quoted exactly:
+`async def rf_retrieve_all_context` (`middleware.py:492`) — quoted exactly:
 
 ```python
 @tool(_RETRIEVAL_TOOL_NAME)
-async def retrieve_all_context(
+async def rf_retrieve_all_context(
     reference: str,
     pattern: str | None = None,
     line_range: LineRange | None = None,
@@ -808,7 +808,7 @@ between non-contiguous runs (`_format_lines`, `search.py:106`, rendering at `sea
 **The middleware does NOT write to the system prompt.** There is no `before_model`, no
 `wrap_model_call` and no system-message injection anywhere in the source; the only hooks are the ones
 in §2. The only text it puts into the conversation is the rewritten `ToolMessage` content (§6a–6b)
-and the `retrieve_all_context` return values (§6c–6e) — and the latter are removed again when the run
+and the `rf_retrieve_all_context` return values (§6c–6e) — and the latter are removed again when the run
 ends (`middleware.py:902`).
 
 ---
@@ -819,13 +819,13 @@ ends (`middleware.py:902`).
 
 | Parameter | Default | Source | Controls |
 |-----------|---------|--------|----------|
-| `store` | `None` → an `InMemoryStore` is created **in the constructor**, since the retrieval tool is on by default | `middleware.py:397` | Backend for the raw sub-blocks, used only by `retrieve_all_context` (and readable by another plugin through `stash`, `middleware.py:408`). Filtering never depends on it; with the tool off no store is built at all. |
+| `store` | `None` → an `InMemoryStore` is created **in the constructor**, since the retrieval tool is on by default | `middleware.py:397` | Backend for the raw sub-blocks, used only by `rf_retrieve_all_context` (and readable by another plugin through `stash`, `middleware.py:408`). Filtering never depends on it; with the tool off no store is built at all. |
 | `max_result_tokens` | `8_000` — `_DEFAULT_MAX_RESULT_TOKENS` | `middleware.py:77`, parameter at `middleware.py:364` | Estimated-token threshold above which a textual result is filtered; also the default bound on a retrieval response (`×4` chars, `middleware.py:624`). Must be `> 0` or `ValueError` (`middleware.py:386-387`). |
 | `config` | `None` → `{}`, typed by `RelevanceConfig` | `middleware.py:392`, type at `middleware.py:248` | Preview-tuning dict (below); read key-by-key with `dict.get` (`middleware.py:251-252`). |
-| `include_retrieval_tool` | **`True`** | `middleware.py:366` | Stores the raw content and puts `retrieve_all_context` on `self.tools`. `False` leaves `tools` empty (`middleware.py:405`), skips the store (`middleware.py:397`, `middleware.py:788-789`), suppresses the reference token (`middleware.py:858`), and short-circuits `after_agent` (`middleware.py:895-896`). Filtering runs the same either way. |
+| `include_retrieval_tool` | **`True`** | `middleware.py:366` | Stores the raw content and puts `rf_retrieve_all_context` on `self.tools`. `False` leaves `tools` empty (`middleware.py:405`), skips the store (`middleware.py:397`, `middleware.py:788-789`), suppresses the reference token (`middleware.py:858`), and short-circuits `after_agent` (`middleware.py:895-896`). Filtering runs the same either way. |
 | `should_filter` | `None` | `middleware.py:367`, protocol at `middleware.py:273` | Callback `(tool_name, token_count, **kwargs) -> bool`, sync or async (`middleware.py:754-755`); consulted only for over-threshold results (`middleware.py:751`); raising fails **open** — filtering anyway (`middleware.py:758-763`, rationale at `middleware.py:748-750`). |
 
-`self.retrieval_tool_name` is set from `_RETRIEVAL_TOOL_NAME` = `"retrieve_all_context"`
+`self.retrieval_tool_name` is set from `_RETRIEVAL_TOOL_NAME` = `"rf_retrieve_all_context"`
 (`middleware.py:100`, assigned at `middleware.py:403`) and is what every guard and the cleanup match
 on.
 
@@ -928,13 +928,13 @@ References in this section are into `validation/plugins-langgraph/src/`.
 | Middleware construction | `RelevanceFilterMiddleware(...)` | `runner.py:508` |
 | Store | `FileStore` under `.artifacts/<run tag>/<config>`, namespaced by tag so two concurrent runs cannot serve each other's sub-blocks | `runner.py:510`, `storage_root` at `runner.py:492`, `ARTIFACTS_DIR` at `config.py:575` |
 | Thresholds | `max_result_tokens=4_000`, `chunk_tokens=500`, `relevance_threshold=0.02`, `preview_tokens` from the window regime | `runner.py:512-517`; values at `config.py:425`, `config.py:427`, `config.py:428`, `config.py:426` |
-| Reference resolution shared with the graph | `stash=relevance.stash` on `ContextGraphMiddleware`, so a `[ref: mem_N_...]` this filter minted resolves through `expand_artifact` as well | `runner.py:550`, recorded at `runner.py:555` |
+| Reference resolution shared with the graph | `stash=relevance.stash` on `ContextGraphMiddleware`, so a `[ref: mem_N_...]` this filter minted resolves through `cg_expand_artifact` as well | `runner.py:550`, recorded at `runner.py:555` |
 | Middleware order | outermost first, `[graph, disclosure, relevance]`, a `None` simply absent | `runner.py:575` |
-| Disclosure passthrough | `retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's own tool names plus the literal `list_accounts` | `runner.py:567-570`, rationale at `runner.py:562-566` |
+| Disclosure passthrough | `rf_retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's own tool names plus the literal `list_accounts` | `runner.py:567-570`, rationale at `runner.py:562-566` |
 | Invocation style | `await agent.ainvoke(...)`, one per turn against one `thread_id` | `runner.py:846`, reasoning at `runner.py:277-283` |
 | Where the end-of-run write lands | the run's `InMemorySaver` (`_checkpointer`), which is what makes the turns one conversation and therefore what receives this middleware's `RemoveMessage(REMOVE_ALL_MESSAGES)` update | `runner.py:256`, stated at `runner.py:259-261`; its serde allowlist is built from the graph state classes rather than a module name (`runner.py:271`, `_graph_state_types` at `runner.py:237`) |
-| Loop tripwire in the log | any turn over 20 tool calls is logged as a `long turn` with the five most-called tool names, so a repeated `retrieve_all_context` names itself in the log rather than only in the run JSON | `runner.py:885-890` |
-| Arm description | "RelevanceFilter alone: an oversized tool result is stored and replaced by a reranker-scored, verbatim preview plus a reference the model can load in full through retrieve_all_context when a question needs every row" | `config.py:630-632`, arm at `config.py:625-628` |
+| Loop tripwire in the log | any turn over 20 tool calls is logged as a `long turn` with the five most-called tool names, so a repeated `rf_retrieve_all_context` names itself in the log rather than only in the run JSON | `runner.py:885-890` |
+| Arm description | "RelevanceFilter alone: an oversized tool result is stored and replaced by a reranker-scored, verbatim preview plus a reference the model can load in full through rf_retrieve_all_context when a question needs every row" | `config.py:630-632`, arm at `config.py:625-628` |
 
 Three consequences for reading results:
 

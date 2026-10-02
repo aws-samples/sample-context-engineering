@@ -20,7 +20,7 @@ private ones.
 **No referenced-source bridge.** ``ProgressiveToolDisclosure`` releases a loaded tool after
 ``ttl_cycles`` idle cycles and no longer keeps the tools the history references, so a Card that steps down has no
 schema to keep resident: its tools are catalog names like any other, loaded again with
-``get_tool_details`` when the model needs them. ``premature_cancellations`` is reported so a call
+``ptd_get_tool_details`` when the model needs them. ``premature_cancellations`` is reported so a call
 made off the catalog without loading stays visible.
 
 Every configuration runs with ``NullConversationManager``. For the graph that is a documented
@@ -198,7 +198,7 @@ records it, so a result can never be read without knowing which scorer produced 
 
 
 RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"
-"""Whether the relevance filter stores the raw content and registers ``retrieve_all_context``.
+"""Whether the relevance filter stores the raw content and registers ``rf_retrieve_all_context``.
 
 On by default, matching the plugin's own default. The tool is for the questions an excerpt cannot
 answer -- those needing every row -- and the plugin removes its exchanges from the history when the
@@ -242,14 +242,14 @@ class _MeteredMatcher(EmbeddingSimilarityMatcher):
         return super()._invoke(texts, purpose)  # type: ignore[arg-type]
 
 
-_GRAPH_ARTIFACT_TOOL = "expand_artifact"
+_GRAPH_ARTIFACT_TOOL = "cg_expand_artifact"
 """The graph's artifact-retrieval tool. Registered in every arm since the filter lost its own.
 
 Kept as the record of why it was ever dropped, because the reason was measured, not assumed. On the
 first 60-turn run the ``all`` configuration was the only one that
 could not answer A5 -- the turn whose answer is one row of a 90-character-per-line statement -- and
 the model said why in its own answer: "every export's artifact reference has come back unreachable
-... I can't read the stored artifacts". It had called ``expand_artifact`` with a reference the
+... I can't read the stored artifacts". It had called ``cg_expand_artifact`` with a reference the
 relevance filter had minted.
 
 At that time the two packages each shipped their own retrieval tool over their own store, and nothing
@@ -262,11 +262,11 @@ the reference, and got a miss back.
 
 So with both installed there were two plausible tools for one job and only one could resolve the
 reference, and dropping the graph's left exactly one artifact path. The filter's tool has since been
-narrowed and renamed: ``retrieve_all_context`` loads a whole result for a question that needs every
+narrowed and renamed: ``rf_retrieve_all_context`` loads a whole result for a question that needs every
 row, the filter's disclaimer names it, and it is kept out of the disclosure arm's ``always_available``,
-so ``expand_artifact`` and it no longer present as the same job. Whether the model still confuses
+so ``cg_expand_artifact`` and it no longer present as the same job. Whether the model still confuses
 them is measured by the ``all`` arm, not assumed here.
-The graph's two other tools -- ``expand_card`` and ``find_context`` -- were never part of this:
+The graph's two other tools -- ``cg_expand_card`` and ``cg_find_context`` -- were never part of this:
 they reach back into the conversation's own turns, a different job the relevance filter does not do.
 """
 
@@ -293,7 +293,7 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
         # Namespaced by run tag as well as configuration: the tag is what keeps two runs that
         # execute at the same time -- a benchmark sweeping one model per process, say -- from
         # writing into each other's stored sub-blocks and serving the wrong content back through
-        # retrieve_all_context. Configuration alone was enough only while one run existed at a time.
+        # rf_retrieve_all_context. Configuration alone was enough only while one run existed at a time.
         storage_root = ARTIFACTS_DIR / (metrics.RUN_TAG or "untagged") / config.name
         storage_root.mkdir(parents=True, exist_ok=True)
 
@@ -351,7 +351,7 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
             neighbors_per_candidate=tuning.neighbors_per_candidate,
             # Always on. This used to be ``not config.relevance``, to leave exactly one artifact
             # path when the filter's retrieval tool competed with this one over another store. The
-            # filter's tool is now retrieve_all_context, for whole results only, and it is named in
+            # filter's tool is now rf_retrieve_all_context, for whole results only, and it is named in
             # the filter's own disclaimer, so the two no longer present as one job.
             # See _GRAPH_ARTIFACT_TOOL for the measurement that motivated the old drop.
             include_artifact_tool=True,
@@ -370,7 +370,7 @@ def build_plugins(config: RunConfig, session: boto3.Session) -> list[Any]:
                 # A retrieval tool must never need discovery: the model is told to use it in the
                 # guidance text that replaces the payload, and a cycle spent loading it would be an
                 # artefact of the harness rather than of the strategy. The relevance filter's
-                # retrieve_all_context is the exception on purpose: it is for the rare question that
+                # rf_retrieve_all_context is the exception on purpose: it is for the rare question that
                 # needs a whole result, so it stays in the catalog and is loaded only then.
                 #
                 # Derived from the plugins rather than hard-coded, so excluding the graph's artifact
@@ -491,7 +491,7 @@ def _collect_plugin_counters(agent: Agent, config: RunConfig) -> dict[str, Any]:
                 counters["disclosure"] = {
                     "searches": state.searches,
                     "loads": state.loads,
-                    # Calls to a catalog tool that skipped get_tool_details, recovered by the guard.
+                    # Calls to a catalog tool that skipped ptd_get_tool_details, recovered by the guard.
                     "premature_cancellations": state.premature_cancellations,
                     "exposed_at_end": sorted(state.exposed),
                     "exposed_count_at_end": len(state.exposed),

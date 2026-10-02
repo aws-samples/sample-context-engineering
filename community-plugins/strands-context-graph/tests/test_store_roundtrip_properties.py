@@ -8,7 +8,7 @@ The claim is the cheapest one in the package to state and the most expensive one
 under a reference, resolving that reference and reading it whole hands back *that* text, character for character. No
 truncation, no reformatting, no normalization, and nothing belonging to a neighbouring reference. The round-trip runs
 against the shipped :class:`InMemoryReferenceStore` through ``resolve_artifact`` + ``read_artifact``, which is the path
-``expand_artifact`` reads through, so the property needs no AWS and no Stash.
+``cg_expand_artifact`` reads through, so the property needs no AWS and no Stash.
 
 Three claims per generated store:
 
@@ -138,7 +138,7 @@ def _snapshot(state: _GraphState) -> tuple[object, ...]:
 
 
 def _round_trip(store: InMemoryReferenceStore, reference: str) -> tuple[str, str | None, str | None]:
-    """Resolve ``reference`` against ``store`` and read it whole, as ``expand_artifact`` does.
+    """Resolve ``reference`` against ``store`` and read it whole, as ``cg_expand_artifact`` does.
 
     Args:
         store: The plugin's own store. Read only.

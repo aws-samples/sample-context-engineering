@@ -524,8 +524,8 @@ def rebuild(
 
     Out comes one subject Card per closed turn, in turn order, each ordinal being the position of its boundary among the
     closed turns. Artifact Cards are not rebuilt: they own no durable identity, the subject-side ``artifact`` edge
-    resolves whether or not its target exists, and ``expand_artifact`` reads the reference store either way. Their
-    absence costs a listing in ``find_context`` until the next offloaded result registers them, never a value.
+    resolves whether or not its target exists, and ``cg_expand_artifact`` reads the reference store either way. Their
+    absence costs a listing in ``cg_find_context`` until the next offloaded result registers them, never a value.
 
     A turn whose messages all lack a ``tracking_id`` yields no Card (Requirement 3.5) but still consumes its ordinal, so
     a gap never shifts later ordinals. An empty conversation, one with no closed turn, and one with such a gap all
@@ -690,7 +690,7 @@ def derive_artifact_cards(
     """Derive one artifact Card per reference the offloaded ``result`` names (Requirement 3.7).
 
     The Card holds the reference and nothing else the tool returned; the raw return belongs to the reference store and
-    is read back through ``expand_artifact``. Stored here is the address, the two facts the placeholder states about it
+    is read back through ``cg_expand_artifact``. Stored here is the address, the two facts the placeholder states about it
     (``content_type`` and ``size_bytes``), and for textual content the numeric lines of the preview, by literal line
     selection and never as a copy of the return. Non-textual content gets no lines rather than a sibling block's preview
     lines (Requirement 4.8).

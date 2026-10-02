@@ -54,7 +54,7 @@ where the composition has to hold.
   (`langgraph_relevance_filter/middleware.py:682`) and its sync twin `wrap_tool_call`
   (`langgraph_relevance_filter/middleware.py:701`) run the tool through `handler`, then rewrite the
   returned `ToolMessage`; `after_agent` (`langgraph_relevance_filter/middleware.py:874`) removes the
-  middleware's own closed `retrieve_all_context` exchanges at the end of the run. It does **not**
+  middleware's own closed `rf_retrieve_all_context` exchanges at the end of the run. It does **not**
   override `wrap_model_call`: the test asserts the identity
   `type(relevance).wrap_model_call is AgentMiddleware.wrap_model_call`
   (`test_composition.py:77`), so A inherits the base no-op and cannot reach the `ModelRequest` at all.
@@ -224,7 +224,7 @@ digest to the most recent `user`-role message
 and a tool result *is* a `user`-role message in the neutral shape
 (`langgraph_context_graph/_adapter.py:126`–`langgraph_context_graph/_adapter.py:127`) — so mid-turn the
 digest lands on a tool result rather than on the question. Read back without the join, the marked digest
-opened a fresh turn *inside* the turn in flight, so B's fold saw this turn's own `get_tool_details` exchange
+opened a fresh turn *inside* the turn in flight, so B's fold saw this turn's own `ptd_get_tool_details` exchange
 as closed, folded it to a sentence, and the model — never shown the load it had just asked for — loaded the
 same tool again, cycle after cycle. Neither binding is wrong on its own: the fault was that the neutral
 message B read was not the neutral message D produced. The regression is pinned as a fold-level test rather
@@ -255,13 +255,13 @@ and both are properties of the nesting rather than of either binding alone:
 2. **Each neutral message B reads is the neutral message D produced**, because a `HumanMessage` marked with
    `ATTACHED_TEXT_KEY` is folded back onto the tool-result message it was split from
    (`langgraph_progressive_tool_disclosure/_adapter.py:158`). Without that, D's digest attached to a
-   mid-turn tool result read to B as a fresh user turn, B's fold treated the turn's own `get_tool_details`
+   mid-turn tool result read to B as a fresh user turn, B's fold treated the turn's own `ptd_get_tool_details`
    exchange as closed, and the model reloaded the tool forever.
 
 §3 states both at the boundary that enforces them.
 
 **B counts cycles on the persisted history, and D is the reason.** `request.messages` is what D projected,
-so counting `AIMessage` objects there yields a cycle number behind the one `get_tool_details` recorded from
+so counting `AIMessage` objects there yields a cycle number behind the one `ptd_get_tool_details` recorded from
 state — and a load that never becomes callable, which the model answers by reloading forever. `_rewrite`
 therefore reads `state["messages"]` for the cycle and the renewals and keeps `request.messages` only for
 the fold it returns: `history` (`langgraph_progressive_tool_disclosure/middleware.py:774`), `_cycle(history)`
@@ -276,8 +276,8 @@ purpose — B folds what D projected, and counts what the checkpointer holds.
 
 **Counting the persisted history is not enough on its own, because A shortens it.** The cycle is derived
 rather than stored, so it is only as stable as the `AIMessage` count it counts — and A's `after_agent`
-removes its own closed `retrieve_all_context` exchanges from `state["messages"]` at the end of every run
-(`langgraph_relevance_filter/middleware.py:902`). A load that `get_tool_details` numbered on the longer
+removes its own closed `rf_retrieve_all_context` exchanges from `state["messages"]` at the end of every run
+(`langgraph_relevance_filter/middleware.py:902`). A load that `ptd_get_tool_details` numbered on the longer
 history therefore reads, on the next run, as a load from a cycle that has not happened. `_last_used`
 (`langgraph_progressive_tool_disclosure/middleware.py:283`) treats such a load as loaded on the cycle just
 before the one being decided — `used if used <= before else before - 1`
@@ -291,7 +291,7 @@ of the three that derives a number from the message list, and A is the only one 
 an A-and-B coupling that neither arm alone can exhibit.
 
 **Neither one deletes anything.** D's projection is per call, so `state["messages"]` comes out as it went
-in — which is what lets `expand_card` raise a collapsed Card back up. B's fold is per call for the same
+in — which is what lets `cg_expand_card` raise a collapsed Card back up. B's fold is per call for the same
 reason. The single place either package writes persisted message state is A's `after_agent`, and it only
 ever removes its own closed retrieval exchanges
 (`langgraph_relevance_filter/middleware.py:895`–`langgraph_relevance_filter/middleware.py:902`).
@@ -310,7 +310,7 @@ the number of `AIMessage` objects in the call. So the two state keys are disjoin
 
 **Both state keys carry a reducer, and for D the reason is parallel tool calls.** LangGraph refuses two
 writes to one state key in one superstep unless the key declares how to combine them, and a model is free
-to put two of D's retrieval tools in a single `AIMessage` — `expand_card` beside `find_context`, say. Each
+to put two of D's retrieval tools in a single `AIMessage` — `cg_expand_card` beside `cg_find_context`, say. Each
 answers with a `Command` carrying the graph, so the step writes `context_graph` twice and LangGraph raises
 `InvalidUpdateError: Can receive only one value per step`, failing the whole turn. `context_graph` is
 therefore annotated with `_latest_graph` (`langgraph_context_graph/middleware.py:216`, the reducer itself at
@@ -332,7 +332,7 @@ carry the bytes, and only the addresses are persisted.
 
 ## 5. One full turn, all three, across the bands
 
-Default combined arm: D outermost, B inside it, A on the tool surface with `retrieve_all_context`
+Default combined arm: D outermost, B inside it, A on the tool surface with `rf_retrieve_all_context`
 registered (`runner.py:505`), the metrics middleware innermost, and the whole run under `ainvoke`.
 
 ```mermaid
@@ -401,14 +401,14 @@ sequenceDiagram
     D-->>Model: the rewritten ToolMessage, returned unchanged, graph mw 567
 
     Note over Model: needs the whole result, or an earlier turn it cannot see
-    Model->>A: retrieve_all_context with the ref token
+    Model->>A: rf_retrieve_all_context with the ref token
     A-->>Model: the requested chunks, span or pattern, relevance mw 567
-    Model->>D: expand_card, find_context or expand_artifact, graph mw 793 814 838
+    Model->>D: cg_expand_card, cg_find_context or cg_expand_artifact, graph mw 793 814 838
     Note over D: two of them in one AIMessage write context_graph twice<br/>in one step, and the _latest_graph reducer takes the later,<br/>graph mw 195 and 216
-    Note over D: expand_artifact asks the own store first, then the stash,<br/>graph mw 1010 - so a ref the filter minted resolves here too
+    Note over D: cg_expand_artifact asks the own store first, then the stash,<br/>graph mw 1010 - so a ref the filter minted resolves here too
     D-->>Model: candidates, a confirmation, or the artifact text
 
-    Note over A: after_agent, relevance mw 874<br/>drops the closed retrieve_all_context exchanges, relevance mw 902<br/>which shortens the history B counts cycles on
+    Note over A: after_agent, relevance mw 874<br/>drops the closed rf_retrieve_all_context exchanges, relevance mw 902<br/>which shortens the history B counts cycles on
     Note over D: next turn - project again from the checkpointed graph
 ```
 
@@ -501,12 +501,12 @@ Annotated handlers, in the order the diagram reaches them:
   references noted at `…:631`). A failure on this path is logged and leaves the graph with no artifact
   Card, and the result the model receives is unaffected either way.
 - **D's retrieval tools** — three of them, built by `_build_tools`
-  (`langgraph_context_graph/middleware.py:778`) in the Strands registration order: `expand_card`
-  (`langgraph_context_graph/middleware.py:793`), then `expand_artifact` when `include_artifact_tool` is
+  (`langgraph_context_graph/middleware.py:778`) in the Strands registration order: `cg_expand_card`
+  (`langgraph_context_graph/middleware.py:793`), then `cg_expand_artifact` when `include_artifact_tool` is
   true (`langgraph_context_graph/middleware.py:833`, built at `langgraph_context_graph/middleware.py:838`),
-  then `find_context` (`langgraph_context_graph/middleware.py:814`). `expand_card` and `find_context`
+  then `cg_find_context` (`langgraph_context_graph/middleware.py:814`). `cg_expand_card` and `cg_find_context`
   return a `Command` so the elevation outlives the tool call — which is also why two of them in one
-  `AIMessage` need the `context_graph` reducer (§4). `expand_artifact` is a `StructuredTool` with
+  `AIMessage` need the `context_graph` reducer (§4). `cg_expand_artifact` is a `StructuredTool` with
   two bodies (`langgraph_context_graph/middleware.py:871`), one sync and one async, and the description
   the model reads is `_EXPAND_ARTIFACT_DESCRIPTION` (`langgraph_context_graph/middleware.py:166`) rather
   than either body's docstring, so the text cannot depend on which body a run reaches. All three spend
@@ -515,7 +515,7 @@ Annotated handlers, in the order the diagram reaches them:
   (`_exhausted`, `langgraph_context_graph/middleware.py:1087`).
 - **A's end-of-run cleanup** — `after_agent` (`langgraph_relevance_filter/middleware.py:874`), with
   `aafter_agent` (`langgraph_relevance_filter/middleware.py:904`) delegating to it. With
-  `retrieve_all_context` registered it drops the closed retrieval exchanges with `_drop_tool_exchanges`
+  `rf_retrieve_all_context` registered it drops the closed retrieval exchanges with `_drop_tool_exchanges`
   (`langgraph_relevance_filter/middleware.py:199`) and expresses the removal as
   `RemoveMessage(id=REMOVE_ALL_MESSAGES)` followed by the reduced list
   (`langgraph_relevance_filter/middleware.py:902`), because the `messages` reducer merges a returned list
@@ -560,14 +560,14 @@ The invariant the test pins is the complementary one about the model-call layer:
 
 Both A and D ship a retrieval tool over their own store:
 
-- A registers `retrieve_all_context` (`_RETRIEVAL_TOOL_NAME`,
+- A registers `rf_retrieve_all_context` (`_RETRIEVAL_TOOL_NAME`,
   `langgraph_relevance_filter/middleware.py:100`; tool built at
   `langgraph_relevance_filter/middleware.py:480`, body at
   `langgraph_relevance_filter/middleware.py:567`) and `include_retrieval_tool` defaults to `True`
   (`langgraph_relevance_filter/middleware.py:366`), which is also what creates the default store
   (`langgraph_relevance_filter/middleware.py:397`) and populates `tools`
   (`langgraph_relevance_filter/middleware.py:405`).
-- D registers `expand_card`, `expand_artifact` and `find_context`
+- D registers `cg_expand_card`, `cg_expand_artifact` and `cg_find_context`
   (`langgraph_context_graph/middleware.py:832`–`langgraph_context_graph/middleware.py:835`, built at
   `langgraph_context_graph/middleware.py:778`), the middle one under `include_artifact_tool`.
 
@@ -581,7 +581,7 @@ the same content, not by removing one of them.** D takes an explicit `stash` —
   `retrieve` (`langgraph_relevance_filter/middleware.py:305`) decodes text and JSON to a string and
   answers `None` for anything else. It is `None` when the filter has no store.
 - `ContextGraphMiddleware.__init__` keeps it (`langgraph_context_graph/middleware.py:396`) after
-  validating that it has a callable `retrieve`, and `expand_artifact` passes it as the second layer:
+  validating that it has a callable `retrieve`, and `cg_expand_artifact` passes it as the second layer:
   `await resolve_artifact(store, None, reference, stash=self._stash)`
   (`langgraph_context_graph/middleware.py:1010`).
 - The core's resolution order is own store first, second layer only for what the own store does not hold
@@ -618,10 +618,10 @@ either way because it changes what the model could reach (`runner.py:688`). Whet
 recorded beside it (`runner.py:555`).
 
 The test asserts both halves of the resolution. First that both retrieval paths are registered: A ships
-`retrieve_all_context` and D ships all three of its tools
+`rf_retrieve_all_context` and D ships all three of its tools
 (`test_composition.py:81`–`test_composition.py:89`, with the stack built at
 `test_composition.py:44`–`test_composition.py:50`). Then that the paths meet over one content — a
-reference the filter minted for a 4,000-row payload resolves through `expand_artifact`, and the same
+reference the filter minted for a 4,000-row payload resolves through `cg_expand_artifact`, and the same
 reference is absent from a graph built without the stash
 (`test_composition.py:93`–`test_composition.py:126`).
 
@@ -638,7 +638,7 @@ always_available=[
 ```
 
 `list_accounts` is the one literal, and it is a domain tool of the scenario rather than any middleware's.
-`retrieve_all_context` is deliberately not in the list: it stays in the catalog and is loaded only for the
+`rf_retrieve_all_context` is deliberately not in the list: it stays in the catalog and is loaded only for the
 question that needs a whole result, which is the harness's stated reason for leaving it there
 (`runner.py:502`–`runner.py:504`).
 
@@ -655,7 +655,7 @@ The pairs, each verifiable:
 |---|---|---|
 | D, model call | `langgraph_context_graph/middleware.py:436` | `langgraph_context_graph/middleware.py:480` |
 | D, tool call | `langgraph_context_graph/middleware.py:520` | `langgraph_context_graph/middleware.py:548` |
-| D, `expand_artifact` tool body | `langgraph_context_graph/middleware.py:847` | `langgraph_context_graph/middleware.py:859` |
+| D, `cg_expand_artifact` tool body | `langgraph_context_graph/middleware.py:847` | `langgraph_context_graph/middleware.py:859` |
 | B, model call | `langgraph_progressive_tool_disclosure/middleware.py:641` | `langgraph_progressive_tool_disclosure/middleware.py:666` |
 | B, tool call | `langgraph_progressive_tool_disclosure/middleware.py:821` | `langgraph_progressive_tool_disclosure/middleware.py:849` |
 | B, catalog priming | `langgraph_progressive_tool_disclosure/middleware.py:725` | `langgraph_progressive_tool_disclosure/middleware.py:733` |
@@ -672,7 +672,7 @@ recorder is shared outright (`langgraph_context_graph/middleware.py:545`, `…:5
 completion through `_run_to_completion` (`langgraph_relevance_filter/middleware.py:717`, helper at
 `langgraph_relevance_filter/middleware.py:108`), on this thread when no loop is running here and on a
 short-lived worker thread otherwise. A's cleanup is pure list surgery, so `aafter_agent` delegates
-(`langgraph_relevance_filter/middleware.py:904`). D's `expand_artifact` resolution is the one genuinely
+(`langgraph_relevance_filter/middleware.py:904`). D's `cg_expand_artifact` resolution is the one genuinely
 awaitable step in that package, because the store contract allows a read to cross a process boundary
 (`langgraph_context_graph/middleware.py:986`), and the sync tool body drives it with `_driven`
 (`langgraph_context_graph/middleware.py:856`).
@@ -707,8 +707,8 @@ combined arm exactly, including `stash=relevance.stash` and the construction ord
 | `test_stack_constructs_with_the_documented_nesting` | `test_composition.py:53` | The list is `ContextGraphMiddleware`, `ProgressiveToolDisclosureMiddleware`, `RelevanceFilterMiddleware`, outermost first (§2) |
 | `test_b_and_d_hook_the_same_stage_but_disjoint_request_fields` | `test_composition.py:62` | D and B each expose both the sync and the async model-call hook (§4, §8) |
 | `test_a_is_on_the_tool_surface_not_the_model_call_layer` | `test_composition.py:69` | A overrides `awrap_tool_call` and inherits the base `wrap_model_call`, so it cannot touch the `ModelRequest` (§1) |
-| `test_the_combined_arm_carries_both_retrieval_paths_over_one_content` | `test_composition.py:81` | `retrieve_all_context` is present on A, and `expand_card` / `expand_artifact` / `find_context` on D (§7) |
-| `test_a_reference_the_filter_mints_resolves_through_expand_artifact` | `test_composition.py:93` | A reference A minted resolves through D's `expand_artifact` via the stash, and is absent from a graph built without it (§7) |
+| `test_the_combined_arm_carries_both_retrieval_paths_over_one_content` | `test_composition.py:81` | `rf_retrieve_all_context` is present on A, and `cg_expand_card` / `cg_expand_artifact` / `cg_find_context` on D (§7) |
+| `test_a_reference_the_filter_mints_resolves_through_expand_artifact` | `test_composition.py:93` | A reference A minted resolves through D's `cg_expand_artifact` via the stash, and is absent from a graph built without it (§7) |
 | `test_graph_async_hook_closes_the_sync_async_gap` | `test_composition.py:129` | D exposes `awrap_model_call` — the regression the harness found (§8) |
 | `test_disclosure_and_graph_async_hooks_both_await_the_handler` | `test_composition.py:136` | Both async model-call hooks are coroutine functions, so nesting them under `ainvoke` is coherent (§8) |
 
@@ -721,7 +721,7 @@ each is reproducible against one package once the nesting's input is described: 
 (`langgraph-plugins/langgraph-progressive-tool-disclosure/tests/test_middleware.py:818`) drives
 `_fold_messages` directly with a marked `HumanMessage` behind a tool result, and the parallel-tool step
 (`langgraph-plugins/langgraph-context-graph/tests/test_artifacts.py:551`) drives a scripted model that calls
-`expand_artifact` beside `find_context` in one `AIMessage`. The load a shorter history left uncallable is
+`cg_expand_artifact` beside `cg_find_context` in one `AIMessage`. The load a shorter history left uncallable is
 pinned the same way (`langgraph-plugins/langgraph-progressive-tool-disclosure/tests/test_middleware.py:803`),
 with the removal that shortens it stated rather than performed.
 
@@ -760,7 +760,7 @@ from a registry each binding fills at its boundary. D registers one at import:
 (`_register_host_symbols`, `langgraph_context_graph/middleware.py:96`, with the `setdefault` at
 `langgraph_context_graph/middleware.py:112`, registry defined at
 `context-core/src/context_core/graph/store.py:97`). Without it every `line_range` or `pattern` read through
-`expand_artifact` degrades to prose saying targeted reads are unavailable, and whole reads are unaffected.
+`cg_expand_artifact` degrades to prose saying targeted reads are unavailable, and whole reads are unaffected.
 
 Two entries are deliberately left empty, and the combined stack is where that matters: `"extract_text"`,
 because the core publishes no neutral text-recovery helper and a bare `str` is read as the text it plainly

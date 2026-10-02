@@ -166,7 +166,7 @@ SCENARIO: tuple[Turn, ...] = (
             "What is the average duration of the Lambda function over the last 24 hours? "
             "And how much would the connector cost per month at that volume?"
         ),
-        rationale="Needs two tools not yet used, so disclosure must spend a find_tools cycle.",
+        rationale="Needs two tools not yet used, so disclosure must spend a ptd_find_tools cycle.",
     ),
     Turn(
         label="C4-iam",

@@ -101,7 +101,7 @@ def record_reuse(state: _GraphState, title: str, cycle: int, *, reuse_ttl_cycles
     (Requirement 13.8), by the caller not reaching here rather than by a branch inside. Granting and renewing are the
     same write, so a Card already holding a fed-back Note has its countdown restarted (Requirement 13.5).
     ``reuse_ttl_cycles == 0`` writes nothing: the fed-back Note is only ever read across turns (Requirement 13.6), and
-    the elevation for the rest of the current turn is :func:`~.tools.expand_card`'s own doing, not this map's.
+    the elevation for the rest of the current turn is :func:`~.tools.cg_expand_card`'s own doing, not this map's.
 
     Args:
         state: Graph state of the agent. Mutated in place, and the only place the fed-back Note ever lives
@@ -346,7 +346,7 @@ def distribute(
     a Card for the turn now running.
 
     An artifact Card never reaches Full Content here, whatever its Note: its content is the reference store's, reached
-    with ``expand_artifact``, and it addresses no message, so Full Content would be a rung with nothing on it. It is
+    with ``cg_expand_artifact``, and it addresses no message, so Full Content would be a rung with nothing on it. It is
     short-circuited before the debit, so the budget it would have spent is left for a Card that can use it.
 
     Args:

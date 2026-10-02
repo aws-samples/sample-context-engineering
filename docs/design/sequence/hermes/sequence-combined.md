@@ -15,8 +15,8 @@
 ## 1. What the composed engine does, mechanically
 
 - **Construction** instantiates the three single engines and hands A's store to D as its `stash`
-  (`engine.py` constructor), so a `[ref: …]` the filter mints resolves through `expand_artifact` as well
-  as `retrieve_all_context`. It builds a `tool_name -> owner` dispatch map from the three engines'
+  (`engine.py` constructor), so a `[ref: …]` the filter mints resolves through `cg_expand_artifact` as well
+  as `rf_retrieve_all_context`. It builds a `tool_name -> owner` dispatch map from the three engines'
   schemas.
 - `select_context(request_messages)` (`engine.py:90`): pipeline the message list in order **D (project)
   → B (catalog + fold) → A (rewrite)**, each stage the same `context_core` call the single engine makes.
@@ -52,7 +52,7 @@ sequenceDiagram
     A3->>A: on_turn_complete (store + record)
     A3->>D: on_turn_complete (index artifacts)
     Note over M,A3: six tools, dispatched by name to the owning practice
-    M->>H: retrieve_all_context · find_tools · get_tool_details · expand_card · expand_artifact · find_context
+    M->>H: rf_retrieve_all_context · ptd_find_tools · ptd_get_tool_details · cg_expand_card · cg_expand_artifact · cg_find_context
     H->>A3: handle_tool_call(name, args)
     A3-->>M: owner practice answers (JSON string)
 ```
@@ -62,9 +62,9 @@ sequenceDiagram
 1. **Composition order** is fixed at D → B → A, so each stage sees the previous stage's output. A
    hand-rolled pipeline in the wrong order folds away context the next stage needed.
 2. **One shared relevance store** — A's store is handed to D as its `stash`, so a filter reference
-   resolves through `expand_artifact` too. Two separate stores would leave a reference resolvable in
+   resolves through `cg_expand_artifact` too. Two separate stores would leave a reference resolvable in
    neither.
-3. **Distinct retrieval tools** — `retrieve_all_context` (A) and `expand_artifact` (D) are scoped by name
+3. **Distinct retrieval tools** — `rf_retrieve_all_context` (A) and `cg_expand_artifact` (D) are scoped by name
    and description so the model does not read them as one job.
 
 The relevance threshold default here is **`0.02`** (the benchmark value — a distribution position, not an

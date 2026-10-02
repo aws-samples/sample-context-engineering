@@ -601,11 +601,15 @@ def score_run(turns: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-_MEMORY_TOOLS = frozenset(RETRIEVAL_TOOLS) | {"find_tools", "get_tool_details"}
+# Recorded runs (results/*.json) predate the plugin prefixes; their names still count as memory.
+_LEGACY_MEMORY_TOOLS = frozenset(
+    {"retrieve_all_context", "expand_artifact", "expand_card", "find_context", "find_tools", "get_tool_details"}
+)
+_MEMORY_TOOLS = frozenset(RETRIEVAL_TOOLS) | {"ptd_find_tools", "ptd_get_tool_details"} | _LEGACY_MEMORY_TOOLS
 """Tools that read the conversation or the tool catalog back, not the outside world.
 
-A memory probe answered through one of these still counts as recall -- the graph's ``expand_card`` or
-``find_context`` IS its memory. Any other tool call means the fact was fetched again from its source.
+A memory probe answered through one of these still counts as recall -- the graph's ``cg_expand_card`` or
+``cg_find_context`` IS its memory. Any other tool call means the fact was fetched again from its source.
 """
 
 

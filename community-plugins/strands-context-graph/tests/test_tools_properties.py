@@ -12,14 +12,14 @@ that is not a usable regex.
 
 Three claims are held over every one of them:
 
-- **Every call answers with a string.** ``expand_card``, ``expand_artifact`` and ``find_context`` return prose on every
+- **Every call answers with a string.** ``cg_expand_card``, ``cg_expand_artifact``, ``cg_find_context``: prose on every
   path; nothing raises, because a raise would report the *tool* broken rather than the *request*
   (Requirements 12.3, 12.6, 12.7, 12.12, 16.8). Hypothesis surfaces a raise as the failure itself.
 - **The answer names what was missing.** The Title asked for, the reference asked for, or the ``need`` searched for is
   quoted back, so the model can tell which of its requests came back empty.
 - **A miss writes nothing.** On every error path the frozen Turn Choice is the same object — so no Card's Resolution
-  moved — and ``state.reuse`` is unchanged, so no fed-back Note was recorded (Requirement 13.8). ``expand_artifact`` and
-  ``find_context`` are held to the Resolution half on *every* path, success included: neither is allowed to move a
+  moved — and ``state.reuse`` is unchanged, so no fed-back Note was recorded (Req. 13.8). ``cg_expand_artifact`` and
+  ``cg_find_context`` are held to the Resolution half on *every* path, success included: neither is allowed to move a
   Resolution at all.
 
 The matcher is always a table or a deliberately broken object, and the agent stub trips on every attribute a model call
@@ -41,7 +41,7 @@ from strands_context_graph.store import (
     non_textual_message,
     unknown_message,
 )
-from strands_context_graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
+from strands_context_graph.tools import _MAX_CANDIDATES, cg_expand_artifact, cg_expand_card, cg_find_context
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,
@@ -300,7 +300,7 @@ def _assert_wrote_nothing(
     assert state.reuse == reuse_before
 
 
-# ---- expand_card ------------------------------------------------------------------------------
+# ---- cg_expand_card ------------------------------------------------------------------------------
 
 
 @given(case=card_requests(), cycle=st.integers(min_value=0, max_value=50), ttl=st.integers(0, 5))
@@ -315,7 +315,7 @@ def test_expand_card_answers_and_a_miss_writes_nothing(case: tuple[_GraphState, 
     reuse_before = dict(state.reuse)
     titles_before = set(state.cards)
 
-    answer = _answered(expand_card(state, title, cycle=cycle, reuse_ttl_cycles=ttl))
+    answer = _answered(cg_expand_card(state, title, cycle=cycle, reuse_ttl_cycles=ttl))
 
     # Whatever happened, the Title asked for is named back and the graph itself is untouched.
     assert f"'{title}'" in answer
@@ -339,15 +339,15 @@ def test_expand_card_answers_and_a_miss_writes_nothing(case: tuple[_GraphState, 
         assert state.reuse[title] == (1.0, cycle + ttl)
 
 
-# ---- expand_artifact --------------------------------------------------------------------------
+# ---- cg_expand_artifact --------------------------------------------------------------------------
 
 
 def _artifact_missed(answer: str, reference: str) -> bool:
     """Whether the answer is one of the misses: no storage, unknown, non-textual, or an unusable read request."""
     return (
         answer in {absent_message(reference), unknown_message(reference), non_textual_message(reference)}
-        or answer.startswith("expand_artifact | line_range=")
-        or answer.startswith(f"expand_artifact | reference '{reference}' | ")
+        or answer.startswith("cg_expand_artifact | line_range=")
+        or answer.startswith(f"cg_expand_artifact | reference '{reference}' | ")
     )
 
 
@@ -376,7 +376,7 @@ def test_expand_artifact_answers_and_never_moves_a_resolution(
 
     answer = _answered(
         asyncio.run(
-            expand_artifact(
+            cg_expand_artifact(
                 state,
                 store,
                 Agent(),
@@ -395,14 +395,14 @@ def test_expand_artifact_answers_and_never_moves_a_resolution(
     if _artifact_missed(answer, reference):
         # Every miss names what was missing — the reference, or the unusable range that was asked for — and records no
         # fed-back Note. A malformed range is named rather than the reference, since the reference never got looked at.
-        if answer.startswith("expand_artifact | line_range="):
+        if answer.startswith("cg_expand_artifact | line_range="):
             assert f"line_range=<{line_range!r}>" in answer
         else:
             assert f"'{reference}'" in answer
         assert state.reuse == reuse_before
 
 
-# ---- find_context -----------------------------------------------------------------------------
+# ---- cg_find_context -----------------------------------------------------------------------------
 
 
 @given(
@@ -425,7 +425,7 @@ def test_find_context_answers_and_a_miss_writes_nothing(
     reuse_before = dict(state.reuse)
 
     answer = _answered(
-        find_context(
+        cg_find_context(
             state,
             need,
             tag,

@@ -78,8 +78,8 @@ three.** The ones that apply to both frameworks:
 2. **Nothing may delete from the history behind the graph.** In Strands that means
    `NullConversationManager`; in LangGraph, no summarization or trimming middleware. Either can drop
    what the graph only meant to fold.
-3. **Two retrieval tools read two stores.** The filter's `retrieve_all_context` and the graph's
-   `expand_artifact` must not look like the same job to the model; the guides show how they are scoped
+3. **Two retrieval tools read two stores.** The filter's `rf_retrieve_all_context` and the graph's
+   `cg_expand_artifact` must not look like the same job to the model; the guides show how they are scoped
    and, in LangGraph, how the graph reads the filter's store through `stash=`.
 
 The packages are not on PyPI yet. Install them from a clone of this repository:
@@ -302,6 +302,6 @@ the agent models listed in [`BENCHMARK.md`](BENCHMARK.md), plus `cohere.rerank-v
 
 ## Status
 
-Draft for discussion. The ideas are stable at A/B/D. All seven packages are at `0.1.0` and are not yet
+Draft for discussion. The ideas are stable at A/B/D. All eleven packages are at `0.1.0` and are not
 published to PyPI; install them from this repository. The benchmarks run against live Bedrock; a recorded
 run's report re-renders with no credentials at all.

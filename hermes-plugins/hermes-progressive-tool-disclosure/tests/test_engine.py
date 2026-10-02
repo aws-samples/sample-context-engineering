@@ -32,7 +32,7 @@ def test_is_context_engine() -> None:
 
 def test_tool_schemas() -> None:
     names = [s["function"]["name"] for s in _engine().get_tool_schemas()]
-    assert names == ["find_tools", "get_tool_details"]
+    assert names == ["ptd_find_tools", "ptd_get_tool_details"]
 
 
 def test_handle_unknown_tool_json() -> None:
@@ -71,26 +71,26 @@ def test_no_specs_is_noop() -> None:
     assert e.select_context([{"role": "user", "content": "hi"}]) is None
 
 
-# ---- find_tools / get_tool_details ----
+# ---- ptd_find_tools / ptd_get_tool_details ----
 
 def test_find_tools_resolves_against_seeded_set() -> None:
-    out = json.loads(_engine().handle_tool_call("find_tools", {"need": "search ledger for refunds"}))
+    out = json.loads(_engine().handle_tool_call("ptd_find_tools", {"need": "search ledger for refunds"}))
     names = [m["name"] for m in out["matches"]]
     assert "query_ledger" in names
 
 
 def test_find_tools_requires_need() -> None:
-    assert json.loads(_engine().handle_tool_call("find_tools", {"need": ""}))["error"]
+    assert json.loads(_engine().handle_tool_call("ptd_find_tools", {"need": ""}))["error"]
 
 
 def test_get_tool_details_returns_full_spec() -> None:
-    out = json.loads(_engine().handle_tool_call("get_tool_details", {"names": ["send_email"]}))
+    out = json.loads(_engine().handle_tool_call("ptd_get_tool_details", {"names": ["send_email"]}))
     assert out["tools"]["send_email"]["description"].startswith("Send an email")
     assert "inputSchema" in out["tools"]["send_email"]
 
 
 def test_get_tool_details_unknown_name() -> None:
-    out = json.loads(_engine().handle_tool_call("get_tool_details", {"names": ["ghost"]}))
+    out = json.loads(_engine().handle_tool_call("ptd_get_tool_details", {"names": ["ghost"]}))
     assert out["tools"]["ghost"]["error"] == "unknown tool"
 
 
@@ -98,19 +98,19 @@ def test_get_tool_details_unknown_name() -> None:
 
 def test_fold_removes_stale_detail_exchange() -> None:
     e = _engine()
-    # expand a tool so it is active, then build a closed get_tool_details exchange
-    e.handle_tool_call("get_tool_details", {"names": ["read_file"]})
+    # expand a tool so it is active, then build a closed ptd_get_tool_details exchange
+    e.handle_tool_call("ptd_get_tool_details", {"names": ["read_file"]})
     msgs = [
         {"role": "system", "content": "s"},
         {"role": "user", "content": "do the task"},
         {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "d1", "type": "function", "function": {"name": "get_tool_details", "arguments": '{"names":["read_file"]}'}}]},
+            {"id": "d1", "type": "function", "function": {"name": "ptd_get_tool_details", "arguments": '{"names":["read_file"]}'}}]},
         {"role": "tool", "tool_call_id": "d1", "content": '{"tools": {"read_file": {}}}'},
         {"role": "assistant", "content": "ok let me continue"},
         {"role": "user", "content": "next"},
     ]
     selected = e.select_context(msgs)
     assert selected is not None
-    # the get_tool_details call shape should be folded away (no tool_call with name get_tool_details remains active)
+    # the ptd_get_tool_details call shape should be folded away (no tool_call with name ptd_get_tool_details remains active)
     serialized = json.dumps(selected)
     assert '"d1"' not in serialized

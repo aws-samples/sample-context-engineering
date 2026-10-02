@@ -6,11 +6,11 @@ Authority: `community-plugins/strands-context-graph/src/strands_context_graph/`.
 
 ## 1. What the plugin does, mechanically
 
-`ContextGraph` (`plugin.py:446`) is a Strands `Plugin` that projects an agent's short-term memory as a graph of **Cards** — one Card per *closed* turn (`plugin.py:800`, `cards.py:closed_turn_ranges:153`), each Card holding **addresses** (durable `tracking_id`s and a reference key), never message content (`state.py:Card:64`). It never mutates `agent.messages`; instead it registers one `InvokeModelStage.Input` delivery handler plus three hooks (`plugin.py:init_agent:616`), and each turn it computes a per-Card **Note** from the cosine similarity between the turn's question and each Card's Description (`scoring.py:compute_notes:194`), propagates that Note exactly one jump along the structural links (`scoring.py:_propagate:234`), and from the resulting Note picks a **Resolution** per Card on a three-rung ladder — Full Content / Description / Title (`scoring.py:distribute:319`). At delivery it *removes* the collapsed messages from the call's own message list and *folds* a `<collapsed_turns>` block describing what left into the last user message (`projection.py:deliver:185`, `compaction.py:render_final_block:94`). The Resolution steps down only when the body budget runs out, never as a verdict (`scoring.py:distribute:319`, budget branch `scoring.py:385`). Three retrieval tools (`expand_card`, `expand_artifact`, `find_context`) let the model reach back into a Card the choice collapsed (`plugin.py:1077`, `plugin.py:1105`, `plugin.py:1148`).
+`ContextGraph` (`plugin.py:446`) is a Strands `Plugin` that projects an agent's short-term memory as a graph of **Cards** — one Card per *closed* turn (`plugin.py:800`, `cards.py:closed_turn_ranges:153`), each Card holding **addresses** (durable `tracking_id`s and a reference key), never message content (`state.py:Card:64`). It never mutates `agent.messages`; instead it registers one `InvokeModelStage.Input` delivery handler plus three hooks (`plugin.py:init_agent:616`), and each turn it computes a per-Card **Note** from the cosine similarity between the turn's question and each Card's Description (`scoring.py:compute_notes:194`), propagates that Note exactly one jump along the structural links (`scoring.py:_propagate:234`), and from the resulting Note picks a **Resolution** per Card on a three-rung ladder — Full Content / Description / Title (`scoring.py:distribute:319`). At delivery it *removes* the collapsed messages from the call's own message list and *folds* a `<collapsed_turns>` block describing what left into the last user message (`projection.py:deliver:185`, `compaction.py:render_final_block:94`). The Resolution steps down only when the body budget runs out, never as a verdict (`scoring.py:distribute:319`, budget branch `scoring.py:385`). Three retrieval tools (`cg_expand_card`, `cg_expand_artifact`, `cg_find_context`) let the model reach back into a Card the choice collapsed (`plugin.py:1077`, `plugin.py:1105`, `plugin.py:1148`).
 
 **Two mechanics are documented below as first-class, not footnotes:**
 
-1. `find_context` traverses the `similar` edge. `_similar_neighbors` (`tools.py:454`) is the **first and only reader of that edge anywhere in the plugin** — before it, the edge was measured on the write path, stored with its similarity as the weight, propagated no Note, and was walked by nothing at all. Each candidate carries its strongest neighbours as a `related turns:` line whenever `neighbors_per_candidate > 0` (`tools.py:527`). See §3 and §6.2.
+1. `cg_find_context` traverses the `similar` edge. `_similar_neighbors` (`tools.py:454`) is the **first and only reader of that edge anywhere in the plugin** — before it, the edge was measured on the write path, stored with its similarity as the weight, propagated no Note, and was walked by nothing at all. Each candidate carries its strongest neighbours as a `related turns:` line whenever `neighbors_per_candidate > 0` (`tools.py:527`). See §3 and §6.2.
 2. The harness runs `body_budget` at `40_000` instead of `None`, set through `VALIDATION_GRAPH_BODY_BUDGET` (`config.py:501`), which is what makes the **budget-driven step down** in `distribute` an exercised path rather than dead code. `None` is not "no ceiling"; it is *the step down turned off* (`scoring.py:382`). See §5.1.
 
 ---
@@ -30,11 +30,11 @@ Tools registered (auto-discovered as the three `@tool` members, `plugin.py:1073`
 
 | Tool | Defined | Decorator | Delegates to |
 |---|---|---|---|
-| `expand_card` | `plugin.py:1077` | `@tool(context=True)` (`plugin.py:1076`) | `tools.expand_card` (`tools.py:94`) |
-| `expand_artifact` | `plugin.py:1105` | `@tool(context=True)` (`plugin.py:1104`) | `tools.expand_artifact` (`tools.py:192`) |
-| `find_context` | `plugin.py:1148` | `@tool(context=True)` (`plugin.py:1147`) | `tools.find_context` (`tools.py:329`) |
+| `cg_expand_card` | `plugin.py:1077` | `@tool(context=True)` (`plugin.py:1076`) | `tools.cg_expand_card` (`tools.py:94`) |
+| `cg_expand_artifact` | `plugin.py:1105` | `@tool(context=True)` (`plugin.py:1104`) | `tools.cg_expand_artifact` (`tools.py:192`) |
+| `cg_find_context` | `plugin.py:1148` | `@tool(context=True)` (`plugin.py:1147`) | `tools.cg_find_context` (`tools.py:329`) |
 
-`expand_artifact` is de-registered when `include_artifact_tool=False`, matched by `tool_name` (`plugin.py:_drop_artifact_tool_if_excluded:653`, called at `plugin.py:645`, dropped at `plugin.py:672`).
+`cg_expand_artifact` is de-registered when `include_artifact_tool=False`, matched by `tool_name` (`plugin.py:_drop_artifact_tool_if_excluded:653`, called at `plugin.py:645`, dropped at `plugin.py:672`).
 
 **System prompt:** the plugin writes NOTHING to `system_prompt`. `init_agent` states "`system_prompt`, `messages` and the tool registry come out as they went in, the retrieval tools aside" (`plugin.py:626` docstring); the only text placed in front of the model is the folded `<collapsed_turns>` block appended to the last **user** message via the SDK injection primitive (`projection.py:148`, `compaction.py`). See §8.
 
@@ -69,13 +69,13 @@ Until `_similar_neighbors` was written, the `similar` edge was **paid for and re
 
 1. It is measured on the write path — a real cosine similarity, stored as the Link's `weight` (`state.py:114`), computed twice over (`cards.py:427` at registration, `cards.py:1062` in the second pass).
 2. It propagates **zero** Note, because `_STRUCTURAL_WEIGHTS` (`scoring.py:71`) carries only `follows` and `artifact`, and `_spread_over_card_edges` skips every kind the mapping does not name (`scoring.py:283`).
-3. No retrieval path traversed it. `expand_card` (`tools.py:94`) reads `state.cards` / `state.choice` / `state.reuse` / `state.retrieval_cycles`; `expand_artifact` (`tools.py:192`) reads the reference store and `state.reuse`; `find_context` (`tools.py:329`) scored Descriptions from scratch and touched no Link.
+3. No retrieval path traversed it. `cg_expand_card` (`tools.py:94`) reads `state.cards` / `state.choice` / `state.reuse` / `state.retrieval_cycles`; `cg_expand_artifact` (`tools.py:192`) reads the reference store and `state.reuse`; `cg_find_context` (`tools.py:329`) scored Descriptions from scratch and touched no Link.
 
-`_similar_neighbors` (`tools.py:454`) is the reader that closes (3). It is the **only** one: `state.links` is still read by nothing else in `tools.py`. (1) and (2) are unchanged — the edge still carries no Note, and nothing in `scoring.py` was touched. What changed is that `find_context` spends the measurement instead of discarding it.
+`_similar_neighbors` (`tools.py:454`) is the reader that closes (3). It is the **only** one: `state.links` is still read by nothing else in `tools.py`. (1) and (2) are unchanged — the edge still carries no Note, and nothing in `scoring.py` was touched. What changed is that `cg_find_context` spends the measurement instead of discarding it.
 
 `link_newly_measurable` (`cards.py:1020`) still writes exclusively `similar` edges: it calls only `_link(state, title, "similar", …)` / `_link(state, other_title, "similar", …)` (`cards.py:1062`–`1063`). It exists because the `MessageAddedEvent` hook is network-free, so a Card's own Description vector is not yet cached when the Card is registered; this second pass (invoked from `_cache_description_vectors`, `plugin.py:1001` → `plugin.py:1049`) measures the pairs that became measurable once the reading half embedded the Descriptions (`cards.py:1020` docstring).
 
-**Why the edge answers something the ranking cannot.** `find_context` scores each candidate's Description against the **question** and never against another Description (`tools.py:_similarities:398`, one `matcher.score(need, descriptions)` call at `tools.py:423`). Two turns that cover the same ground in different words are therefore invisible to each other in that ranking. The `similar` edge holds exactly that Description-to-Description relation, already measured. That is the argument recorded in the constructor docstring (`plugin.py:467`) and in `_DEFAULT_NEIGHBORS_PER_CANDIDATE` (`plugin.py:102`).
+**Why the edge answers something the ranking cannot.** `cg_find_context` scores each candidate's Description against the **question** and never against another Description (`tools.py:_similarities:398`, one `matcher.score(need, descriptions)` call at `tools.py:423`). Two turns that cover the same ground in different words are therefore invisible to each other in that ranking. The `similar` edge holds exactly that Description-to-Description relation, already measured. That is the argument recorded in the constructor docstring (`plugin.py:467`) and in `_DEFAULT_NEIGHBORS_PER_CANDIDATE` (`plugin.py:102`).
 
 ---
 
@@ -124,7 +124,7 @@ sequenceDiagram
 
 Key sequencing facts: link construction for `similar` cannot complete on the `MessageAddedEvent` hook (it is network-free), so the Card's own vector is embedded only on the *next* `BeforeInvocationEvent`, and `link_newly_measurable` closes the gap there (`plugin.py:1045` computes `newly_measurable`, `plugin.py:1049` spends it). `link_newly_measurable` writes `similar` edges only (§3). The rung per Card is produced by `distribute` (`scoring.py:319`), not by the write hook.
 
-**Consequence for that reader.** Because the edge forms one turn late, the first turn a Card exists has no `similar` neighbours to offer, and a `find_context` call on that turn renders no `related turns:` line for it. That is not a failure path — `_similar_neighbors` returns an empty list and the render skips the line because `neighbors` is falsy (`tools.py:525`).
+**Consequence for that reader.** Because the edge forms one turn late, the first turn a Card exists has no `similar` neighbours to offer, and a `cg_find_context` call on that turn renders no `related turns:` line for it. That is not a failure path — `_similar_neighbors` returns an empty list and the render skips the line because `neighbors` is falsy (`tools.py:525`).
 
 ---
 
@@ -218,9 +218,9 @@ From `render_final_block` (`compaction.py:94`) and `_entry` (`compaction.py:199`
 sequenceDiagram
     autonumber
     participant Model
-    participant EC as expand_card<br/>(tools.py:94)
-    participant EA as expand_artifact<br/>(tools.py:192)
-    participant FC as find_context<br/>(tools.py:329)
+    participant EC as cg_expand_card<br/>(tools.py:94)
+    participant EA as cg_expand_artifact<br/>(tools.py:192)
+    participant FC as cg_find_context<br/>(tools.py:329)
     participant MA as matcher.score
     participant SN as _similar_neighbors<br/>(tools.py:454)
     participant ST as store.resolve_artifact<br/>(store.py:270)
@@ -229,13 +229,13 @@ sequenceDiagram
 
     Note over EC,FC: every tool first checks _exhausted (tools.py:67) then state.retrieval_cycles += 1
 
-    Model->>EC: expand_card(titles)
+    Model->>EC: cg_expand_card(titles)
     EC->>STATE: look up each title in state.cards · kind must be 'subject' (tools.py:144)
     EC->>STATE: rewrite state.choice → CardChoice(dialogue='full', evidence='full') for found (tools.py:150)
     EC->>SC: record_reuse per found title (tools.py:159)
     EC-->>Model: confirmation naming turns raised (tools.py:167) or error naming misses (tools.py:162)
 
-    Model->>EA: expand_artifact(reference, line_range?, pattern?)
+    Model->>EA: cg_expand_artifact(reference, line_range?, pattern?)
     EA->>ST: resolve_artifact(store, agent, reference) — own store, then Stash bridge
     alt whole read
         EA-->>Model: notice + verbatim text (tools.py:_whole_artifact:265)
@@ -245,7 +245,7 @@ sequenceDiagram
     EA->>SC: record_reuse on artifact Card title if one exists (tools.py:_artifact_title:305)
     EA-->>Model: requested part, or error naming what was missing (absent/unknown/non_textual)
 
-    Model->>FC: find_context(need, tag?)
+    Model->>FC: cg_find_context(need, tag?)
     FC->>STATE: candidate titles (optionally filtered by normalized tag) (tools.py:377)
     FC->>MA: matcher.score(need, [card.description for each candidate]) — ONE embedding round (tools.py:423)
     FC->>FC: keep similarities >= collapse_floor, sort, cap at _MAX_CANDIDATES (tools.py:385-387)
@@ -256,25 +256,25 @@ sequenceDiagram
 ```
 
 - **What is scored / returned:**
-  - `expand_card` scores nothing — it looks Cards up by exact title and raises **both** axes to `full` for the rest of the turn (`tools.py:150`); several titles cost one retrieval cycle (`tools.py:94` docstring).
-  - `expand_artifact` scores nothing — it resolves the reference through the store (own store first, optional `ContextManager` Stash second, `store.py:resolve_artifact:270`) and returns the content inline; it raises **no** Resolution (`tools.py:192` docstring, "raises nothing: the content comes back inline").
-  - `find_context` **does one embedding round trip over every candidate Card Description**: `_similarities` (`tools.py:398`) builds `descriptions = tuple(state.cards[title].description …)` (`tools.py:421`) and calls `matcher.score(need, descriptions)` exactly once (`tools.py:423`), over the same matcher/index the Turn Choice uses (`tools.py:341` docstring, "Scored over the index the Turn Choice already uses and no other"). It returns at most `_MAX_CANDIDATES` = 5 (`tools.py:_MAX_CANDIDATES:86`).
-- **Reuse-Note feedback:** all three call `record_reuse` (`scoring.py:97`) on **success only** — an error path never reaches it (`tools.py:1` header). `record_reuse` grants `_REUSE_BONUS` = `1.0` undecayed (`scoring.py:_REUSE_BONUS:92`) with expiry `cycle + reuse_ttl_cycles`, which is added in Pass 1 of the *next* turn's `compute_notes` (`scoring.py:194`). `expand_card` additionally elevates the current turn directly by rewriting `state.choice` (`tools.py:150`); the fed-back Note carries the request into the turn *after* (`tools.py:19`, Req 12.14).
+  - `cg_expand_card` scores nothing — it looks Cards up by exact title and raises **both** axes to `full` for the rest of the turn (`tools.py:150`); several titles cost one retrieval cycle (`tools.py:94` docstring).
+  - `cg_expand_artifact` scores nothing — it resolves the reference through the store (own store first, optional `ContextManager` Stash second, `store.py:resolve_artifact:270`) and returns the content inline; it raises **no** Resolution (`tools.py:192` docstring, "raises nothing: the content comes back inline").
+  - `cg_find_context` **does one embedding round trip over every candidate Card Description**: `_similarities` (`tools.py:398`) builds `descriptions = tuple(state.cards[title].description …)` (`tools.py:421`) and calls `matcher.score(need, descriptions)` exactly once (`tools.py:423`), over the same matcher/index the Turn Choice uses (`tools.py:341` docstring, "Scored over the index the Turn Choice already uses and no other"). It returns at most `_MAX_CANDIDATES` = 5 (`tools.py:_MAX_CANDIDATES:86`).
+- **Reuse-Note feedback:** all three call `record_reuse` (`scoring.py:97`) on **success only** — an error path never reaches it (`tools.py:1` header). `record_reuse` grants `_REUSE_BONUS` = `1.0` undecayed (`scoring.py:_REUSE_BONUS:92`) with expiry `cycle + reuse_ttl_cycles`, which is added in Pass 1 of the *next* turn's `compute_notes` (`scoring.py:194`). `cg_expand_card` additionally elevates the current turn directly by rewriting `state.choice` (`tools.py:150`); the fed-back Note carries the request into the turn *after* (`tools.py:19`, Req 12.14).
 - Retrieval-budget exhaustion is checked **before** the counter increments (`tools.py:_exhausted:67`, "a ceiling of `n` admits exactly `n` calls"); default ceiling `max_retrieval_cycles` = 8 (`plugin.py:_DEFAULT_MAX_RETRIEVAL_CYCLES:127`).
 
-### 6.2 `find_context` WITH neighbours — the `similar` edge's first reader
+### 6.2 `cg_find_context` WITH neighbours — the `similar` edge's first reader
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Model
-    participant FC as find_context<br/>(tools.py:329)
+    participant FC as cg_find_context<br/>(tools.py:329)
     participant MA as matcher.score<br/>(tools.py:423)
     participant RC as _render_candidates<br/>(tools.py:489)
     participant SN as _similar_neighbors<br/>(tools.py:454)
     participant L as state.links
 
-    Model->>FC: find_context(need="allocation split by segment")
+    Model->>FC: cg_find_context(need="allocation split by segment")
     FC->>MA: ONE score(need, every candidate Description)
     MA-->>FC: one similarity per candidate
     FC->>FC: >= collapse_floor, sorted, capped at 5 (tools.py:385-387)
@@ -295,7 +295,7 @@ sequenceDiagram
             RC->>RC: "  related turns: " + ", ".join(f"{t} ({w:.2f})") (tools.py:526-527)
         end
     end
-    RC-->>Model: block ending "call expand_card with one of these titles…" (tools.py:528)
+    RC-->>Model: block ending "call cg_expand_card with one of these titles…" (tools.py:528)
 ```
 
 The rendered line, literally (`tools.py:527`, format `f"  related turns: {rendered}"` over `f"{neighbor} ({weight:.2f})"` from `tools.py:526`):
@@ -317,8 +317,8 @@ placed after the candidate's Description lines and before the next `- title:` en
 **Three deliberate decisions, each verified in source:**
 
 1. **A candidate is never listed as another candidate's neighbour.** `_render_candidates` computes `already = set(chosen)` once (`tools.py:515`) and passes that `already` set on every call (`tools.py:524`) as the `exclude` argument; `_similar_neighbors` filters on `link.target not in exclude` (`tools.py:481`). The comment at `tools.py:513` gives the reason: a candidate is already being rendered in full, so offering it again as somebody's neighbour spends tokens to say nothing. Note the set is the **whole** chosen list, not "the ones already printed" — so the exclusion is symmetric and independent of rank order.
-2. **A neighbour gets NO reuse Note.** `record_reuse` is called only over `chosen` (`tools.py:392`–`393`), before `_render_candidates` is reached (`tools.py:395`). Nothing in `_similar_neighbors` (`tools.py:454`) or `_render_candidates` (`tools.py:489`) touches `state.reuse` or `state.choice`. A neighbour is therefore a **hint, not evidence**: it does not raise, it does not persist, and its content does not arrive. The model must call `expand_card` with that title to get anything — which is exactly what the closing line tells it to do (`tools.py:528`), and a title is precisely the argument that tool takes (`plugin.py:1077`).
-3. **`neighbors_per_candidate` defaults to 3, and `0` reproduces the previous response byte for byte.** The default is `_DEFAULT_NEIGHBORS_PER_CANDIDATE` = 3 (`plugin.py:102`), threaded constructor → instance → tool call (`plugin.py:524`, `plugin.py:1173`) → `tools.find_context` (`tools.py:339`) → `_render_candidates` (`tools.py:395`). At `0`, `_similar_neighbors` returns `[]` on its first guard (`tools.py:475`), `neighbors` is falsy, and the `related turns:` append is skipped (`tools.py:525`) — the rendered block is identical to the pre-change one, character for character. The harness relies on that: `GRAPH_TUNING` holds `neighbors_per_candidate` at `0` (`config.py:505`) and `VALIDATION_GRAPH_NEIGHBORS=3` is what turns the edge on for a sweep (`config.py:493`), because **every published token figure was measured with the edge unread**, so a run with neighbours on is not token-comparable to them (`config.py:492`).
+2. **A neighbour gets NO reuse Note.** `record_reuse` is called only over `chosen` (`tools.py:392`–`393`), before `_render_candidates` is reached (`tools.py:395`). Nothing in `_similar_neighbors` (`tools.py:454`) or `_render_candidates` (`tools.py:489`) touches `state.reuse` or `state.choice`. A neighbour is therefore a **hint, not evidence**: it does not raise, it does not persist, and its content does not arrive. The model must call `cg_expand_card` with that title to get anything — which is exactly what the closing line tells it to do (`tools.py:528`), and a title is precisely the argument that tool takes (`plugin.py:1077`).
+3. **`neighbors_per_candidate` defaults to 3, and `0` reproduces the previous response byte for byte.** The default is `_DEFAULT_NEIGHBORS_PER_CANDIDATE` = 3 (`plugin.py:102`), threaded constructor → instance → tool call (`plugin.py:524`, `plugin.py:1173`) → `tools.cg_find_context` (`tools.py:339`) → `_render_candidates` (`tools.py:395`). At `0`, `_similar_neighbors` returns `[]` on its first guard (`tools.py:475`), `neighbors` is falsy, and the `related turns:` append is skipped (`tools.py:525`) — the rendered block is identical to the pre-change one, character for character. The harness relies on that: `GRAPH_TUNING` holds `neighbors_per_candidate` at `0` (`config.py:505`) and `VALIDATION_GRAPH_NEIGHBORS=3` is what turns the edge on for a sweep (`config.py:493`), because **every published token figure was measured with the edge unread**, so a run with neighbours on is not token-comparable to them (`config.py:492`).
 
 Validation of the parameter is its own branch rather than `_validate_count`, because `0` must be admissible where a count must be ≥ 1: `plugin.py:554`–`561` rejects a `bool`, a non-`int`, or a negative, and the message is at `plugin.py:560`.
 
@@ -326,11 +326,11 @@ Validation of the parameter is its own branch rather than `_validate_count`, bec
 
 ## 7. Expected model behaviour, and where the assumption fails
 
-The plugin's central assumption (`tools.py:1` header, `plugin.py:446` docstring): when a Card arrives collapsed as a **Title** or a **Description**, a wrong automatic guess "leaves the model not with a worse answer but with a Title, an explicit invitation to ask" (`tools.py:4`). The design treats a folded Card as a *deferred* loss the model recovers via `expand_card` / `find_context` / `expand_artifact` — the `<collapsed_turns>` guidance names those tools explicitly (`compaction.py:_RETRIEVAL_PHRASES:62`, `compaction.py:guidance:160`) precisely so the model knows the invitation exists.
+The plugin's central assumption (`tools.py:1` header, `plugin.py:446` docstring): when a Card arrives collapsed as a **Title** or a **Description**, a wrong automatic guess "leaves the model not with a worse answer but with a Title, an explicit invitation to ask" (`tools.py:4`). The design treats a folded Card as a *deferred* loss the model recovers via `cg_expand_card` / `cg_find_context` / `cg_expand_artifact` — the `<collapsed_turns>` guidance names those tools explicitly (`compaction.py:_RETRIEVAL_PHRASES:62`, `compaction.py:guidance:160`) precisely so the model knows the invitation exists.
 
-**Where it fails:** the assumption requires the model to *act on the invitation*. **Measured fact (attributed as a measurement):** across the Opus 4.8 60-turn runs, `retrievals=0` and `expand_card` was called **0 or 1 times per run** — the model almost never retrieves. In practice a folded Card is therefore a **permanent** loss, not a deferred one: the recovery path the whole design leans on is essentially unused, so any content the choice put below `full` is simply gone from the model's effective context for the rest of that turn. The ceiling logic (`plugin.py:_DEFAULT_MAX_RETRIEVAL_CYCLES:127`) guards the *opposite* failure — a model that retrieves too much (one measured turn spent 346 retrieval calls / 21 minutes, `plugin.py:133`) — but does nothing for the far more common case of a model that never retrieves at all.
+**Where it fails:** the assumption requires the model to *act on the invitation*. **Measured fact (attributed as a measurement):** across the Opus 4.8 60-turn runs, `retrievals=0` and `cg_expand_card` was called **0 or 1 times per run** — the model almost never retrieves. In practice a folded Card is therefore a **permanent** loss, not a deferred one: the recovery path the whole design leans on is essentially unused, so any content the choice put below `full` is simply gone from the model's effective context for the rest of that turn. The ceiling logic (`plugin.py:_DEFAULT_MAX_RETRIEVAL_CYCLES:127`) guards the *opposite* failure — a model that retrieves too much (one measured turn spent 346 retrieval calls / 21 minutes, `plugin.py:133`) — but does nothing for the far more common case of a model that never retrieves at all.
 
-**The neighbour line does not fix this, and is not claimed to.** It makes *one* retrieval call worth more — at `neighbors_per_candidate=3` a single `find_context` returns up to 5 candidates plus up to 15 neighbour titles instead of 5 candidates — but it still only pays off on a turn where the model calls a retrieval tool at all, and the harness holds the knob at `0` (`config.py:505`). Unmeasured: the `similar` edge had no reader in any published run (`config.py:492`).
+**The neighbour line does not fix this, and is not claimed to.** It makes *one* retrieval call worth more — at `neighbors_per_candidate=3` a single `cg_find_context` returns up to 5 candidates plus up to 15 neighbour titles instead of 5 candidates — but it still only pays off on a turn where the model calls a retrieval tool at all, and the harness holds the knob at `0` (`config.py:505`). Unmeasured: the `similar` edge had no reader in any published run (`config.py:492`).
 
 ---
 
@@ -340,9 +340,9 @@ The plugin's central assumption (`tools.py:1` header, `plugin.py:446` docstring)
 
 ### 8.1 Registered tool docstrings and input schemas
 
-The `@tool` decorator derives the tool description from the docstring and the input schema from the typed signature. Signatures: `expand_card(self, titles: list[str], tool_context)` (`plugin.py:1077`); `expand_artifact(self, reference: str, tool_context, line_range: dict[str, int] | None = None, pattern: str | None = None)` (`plugin.py:1105`); `find_context(self, need: str, tool_context, tag: str | None = None)` (`plugin.py:1148`). `tool_context` is framework-injected, not part of the model-facing schema.
+The `@tool` decorator derives the tool description from the docstring and the input schema from the typed signature. Signatures: `cg_expand_card(self, titles: list[str], tool_context)` (`plugin.py:1077`); `cg_expand_artifact(self, reference: str, tool_context, line_range: dict[str, int] | None = None, pattern: str | None = None)` (`plugin.py:1105`); `cg_find_context(self, need: str, tool_context, tag: str | None = None)` (`plugin.py:1148`). `tool_context` is framework-injected, not part of the model-facing schema.
 
-`expand_card` docstring (`plugin.py:1078`–`1094`):
+`cg_expand_card` docstring (`plugin.py:1078`–`1094`):
 
 ```text
 Bring back the full content of one or more earlier turns, by their titles.
@@ -363,7 +363,7 @@ Returns:
     Confirmation that the turn will arrive in full, or an error naming the title asked for.
 ```
 
-`expand_artifact` docstring (`plugin.py:1105`, body at lines 1109–1129):
+`cg_expand_artifact` docstring (`plugin.py:1105`, body at lines 1109–1129):
 
 ```text
 Read a stored artifact that an earlier turn of THIS conversation referred to by address.
@@ -389,7 +389,7 @@ Returns:
     The requested part of the artifact, or an error naming what was missing.
 ```
 
-`find_context` docstring (`plugin.py:1149`–`1162`) — **unchanged by the neighbour work.** The neighbour line is not advertised in the schema; the model discovers it in the answer, and the answer's own closing line tells it what to do with a title:
+`cg_find_context` docstring (`plugin.py:1149`–`1162`) — **unchanged by the neighbour work.** The neighbour line is not advertised in the schema; the model discovers it in the answer, and the answer's own closing line tells it what to do with a title:
 
 ```text
 Find earlier turns of this conversation that match what you need, described in your words.
@@ -433,9 +433,9 @@ The turns above left this call in collapsed form; their numeric lines are copied
 Per-tool clauses (`compaction.py:_RETRIEVAL_PHRASES:62`), emitted only for tools currently registered:
 
 ```text
-expand_card: call expand_card with a title to get that turn's messages back
-expand_artifact: call expand_artifact with a reference to read an artifact
-find_context: call find_context with what you need to search the turns by description
+cg_expand_card: call cg_expand_card with a title to get that turn's messages back
+cg_expand_artifact: call cg_expand_artifact with a reference to read an artifact
+cg_find_context: call cg_find_context with what you need to search the turns by description
 ```
 
 Assembly (`compaction.py:guidance:160`): one clause → `f"{_PREAMBLE} To close the gap, {clauses}."`; several → clauses joined with `", "` and a final `", or "`. When **no** retrieval tool is registered, `compaction.py:_NOTHING_TO_CALL:75` is used instead:
@@ -452,12 +452,12 @@ Searchable-gap announcement when the selection addressed only some Cards (`compa
 
 (rendered by `_trailer` as `_SEARCHABLE.format(count=…) + " " + guidance(...)`, `compaction.py:182`).
 
-### 8.4 `find_context` answer text
+### 8.4 `cg_find_context` answer text
 
 Candidate rendering (`tools.py:_render_candidates:489`). First line (`tools.py:512`):
 
 ```text
-find_context | {len(chosen)} earlier turn(s) match '{need}', best first:
+cg_find_context | {len(chosen)} earlier turn(s) match '{need}', best first:
 ```
 
 Then per candidate: `- title: {title}` (`tools.py:518`), an optional `  tags: {', '.join(card.tags)}` (`tools.py:520`), the Description lines indented by two spaces (`tools.py:523`), and the neighbour line when `neighbors_per_candidate > 0` and the Card has `similar` edges (`tools.py:527`):
@@ -471,13 +471,13 @@ Two spaces of indent, the literal words `related turns: `, then `", "`-joined `T
 Closing line (`tools.py:528`), unchanged:
 
 ```text
-call expand_card with one of these titles to bring that turn back in full
+call cg_expand_card with one of these titles to bring that turn back in full
 ```
 
 "Nothing found" text (`tools.py:_nothing_found:433`, assembled at `tools.py:447`), with `{narrowed}` = `", among the turns tagged '{tag}'"` when a tag was given else empty (`tools.py:446`):
 
 ```text
-find_context | nothing in this conversation matches '{need}'{narrowed} | the titles already in front of you are the whole conversation, so what you need was either never discussed or is in a turn you can name directly with expand_card
+cg_find_context | nothing in this conversation matches '{need}'{narrowed} | the titles already in front of you are the whole conversation, so what you need was either never discussed or is in a turn you can name directly with cg_expand_card
 ```
 
 ### 8.5 Retrieval-budget-exhausted refusal
@@ -490,56 +490,56 @@ find_context | nothing in this conversation matches '{need}'{narrowed} | the tit
 
 ### 8.6 Other literal strings the tools put in front of the model
 
-`expand_card` — no title given (`tools.py:138`):
+`cg_expand_card` — no title given (`tools.py:138`):
 
 ```text
-expand_card | no title given | pass the titles you need, copied exactly as they were shown to you
+cg_expand_card | no title given | pass the titles you need, copied exactly as they were shown to you
 ```
 
-`expand_card` — no match (`tools.py:163`):
+`cg_expand_card` — no match (`tools.py:163`):
 
 ```text
-expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | copy a title exactly as it was shown to you, or use find_context to describe what you need
+cg_expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | copy a title exactly as it was shown to you, or use cg_find_context to describe what you need
 ```
 
-`expand_card` — success (`tools.py:168`):
+`cg_expand_card` — success (`tools.py:168`):
 
 ```text
-expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results together
+cg_expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results together
 ```
 
 with, when some titles missed (`tools.py:172`): ` | no turn is titled {_quoted(missing)}, so nothing was raised for it`. `_quoted` wraps each title in single quotes, comma-separated (`tools.py:_quoted:177`).
 
-`expand_artifact` — whole-artifact notice (`tools.py:_whole_artifact:265`), returned as `f"{notice}\n\n{text}"`:
+`cg_expand_artifact` — whole-artifact notice (`tools.py:_whole_artifact:265`), returned as `f"{notice}\n\n{text}"`:
 
 ```text
-expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire token count, about {estimate_tokens(text)} tokens, and it stays in the conversation for the rest of the turn | next time pass line_range or pattern to read only the part you need
+cg_expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire token count, about {estimate_tokens(text)} tokens, and it stays in the conversation for the rest of the turn | next time pass line_range or pattern to read only the part you need
 ```
 
-`expand_artifact` — malformed `line_range` (`tools.py:248`):
+`cg_expand_artifact` — malformed `line_range` (`tools.py:248`):
 
 ```text
-expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass {"start": <int>, "end": <int>}, 1-indexed and inclusive
+cg_expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass {"start": <int>, "end": <int>}, 1-indexed and inclusive
 ```
 
-`expand_artifact` — search error (`tools.py:255`): `expand_artifact | reference '{reference}' | {error}`.
+`cg_expand_artifact` — search error (`tools.py:255`): `cg_expand_artifact | reference '{reference}' | {error}`.
 
 The three store miss messages. `absent_message` (`store.py:368`):
 
 ```text
-expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever offloaded under that reference, which means the full results are already in the conversation
+cg_expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever offloaded under that reference, which means the full results are already in the conversation
 ```
 
 `unknown_message` (`store.py:386`):
 
 ```text
-expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a turn's title or preview
+cg_expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a turn's title or preview
 ```
 
 `non_textual_message` (`store.py:401`):
 
 ```text
-expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not apply to it, and it cannot be returned as text
+cg_expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not apply to it, and it cannot be returned as text
 ```
 
 `read_artifact` — targeted reads unavailable (`store.py:read_artifact:303`):
@@ -560,7 +560,7 @@ The two wiring-time `warnings.warn` strings (`plugin.py:_ORDERING_WARNING:141`, 
 | `collapse_floor` | `plugin.py:_DEFAULT_COLLAPSE_FLOOR:91` = 0.45 | No — ratio; must be `<= expand_threshold`, checked at `plugin.py:547` |
 | `description_tokens` | `plugin.py:_DEFAULT_DESCRIPTION_TOKENS:96` = 100 | No — int `>= 1` (`_validate_count:344`) |
 | `tags_per_card` | `plugin.py:_DEFAULT_TAGS_PER_CARD:99` = 5 | No — int `>= 1` |
-| **`neighbors_per_candidate`** | `plugin.py:_DEFAULT_NEIGHBORS_PER_CANDIDATE:102` = 3 | No — int `>= 0`, validated inline at `plugin.py:554`–`561` rather than by `_validate_count`, because `0` must be admissible; `0` lists no neighbours and reproduces the pre-change `find_context` answer exactly |
+| **`neighbors_per_candidate`** | `plugin.py:_DEFAULT_NEIGHBORS_PER_CANDIDATE:102` = 3 | No — int `>= 0`, validated inline at `plugin.py:554`–`561` rather than by `_validate_count`, because `0` must be admissible; `0` lists no neighbours and reproduces the pre-change `cg_find_context` answer exactly |
 | `body_budget` | `plugin.py:_DEFAULT_BODY_BUDGET:115` = `None` | **Yes** — `None` or int `>= 1` (`_validate_body_budget:361`). `None` disables the step down (§5.2) |
 | `min_cards` | `plugin.py:_DEFAULT_MIN_CARDS:118` = 3 | No — int `>= 1` |
 | `link_threshold` | `plugin.py:_DEFAULT_LINK_THRESHOLD:121` = 0.50 | No — ratio. Governs which `similar` edges exist at all, hence what `_similar_neighbors` can find |
@@ -587,9 +587,9 @@ The ruling is a design argument rather than a measurement, and it is recorded in
 
 So the filter makes the graph's input *smaller*, not *different in kind*, and a knob that decides how aggressively to fold a history has no business reading whether some other plugin trimmed that history first. The measurement that originally justified the split is also confounded — it ran `preview_tokens` at 800 against payloads ten to thirty times that size, so the Cards were starved by the **first** cut in the chain and a larger Description budget had nothing left to preserve. `preview_tokens` is regime-dependent — 2,000 on a tight window (`config.py:TIGHT_WINDOW:319`) and 800 on a large one (`config.py:LARGE_WINDOW:296`), selected into `config.py:BUDGETS:354` — so the docstring's own "the preview is 2,000" (`config.py:450`) holds for a tight-window run and NOT for a large-window one, where the 800 that starved the Cards is still the value in force.
 
-No coupling to the filter remains. The last one was not a tuning value: `include_artifact_tool=not config.relevance`, kept because two retrieval tools over two stores that do not know each other is a model-facing ambiguity rather than a folding decision. It is gone, and not because the filter stopped registering a tool — `include_retrieval_tool` defaults to `True` and the harness leaves it on (`runner.py:315`, `runner.py:200`). What removed the ambiguity is that the filter's tool is `retrieve_all_context`, scoped to the rare question that needs a whole result, named in the filter's own disclaimer, and kept out of the disclosure arm's `always_available` so it is reached through the catalog (`runner.py:370`–`374`, `runner.py:205`). The graph's own retrieval tools and that one therefore no longer present as one job, so the harness passes `include_artifact_tool=True` in every arm and records the drop as not taken (`runner.py:357`, `runner.py:352`–`356`, `runner.py:360`).
+No coupling to the filter remains. The last one was not a tuning value: `include_artifact_tool=not config.relevance`, kept because two retrieval tools over two stores that do not know each other is a model-facing ambiguity rather than a folding decision. It is gone, and not because the filter stopped registering a tool — `include_retrieval_tool` defaults to `True` and the harness leaves it on (`runner.py:315`, `runner.py:200`). What removed the ambiguity is that the filter's tool is `rf_retrieve_all_context`, scoped to the rare question that needs a whole result, named in the filter's own disclaimer, and kept out of the disclosure arm's `always_available` so it is reached through the catalog (`runner.py:370`–`374`, `runner.py:205`). The graph's own retrieval tools and that one therefore no longer present as one job, so the harness passes `include_artifact_tool=True` in every arm and records the drop as not taken (`runner.py:357`, `runner.py:352`–`356`, `runner.py:360`).
 
-One consequence belongs here rather than in §4, because it decides what the graph can see: the filter removes its `retrieve_all_context` exchanges from `agent.messages` at `AfterInvocationEvent`, once the turn has ended (`strands_relevance_filter/plugin.py:_on_after_invocation:589`, dropping them through `_drop_tool_exchanges` at `strands_relevance_filter/plugin.py:605`). Those exchanges are gone before the next `MessageAddedEvent` boundary closes a turn, so `closed_turn_ranges` (`cards.py:153`) never scans them and the graph derives no Card from one. A retrieval through the filter is paid for once and leaves no Card behind.
+One consequence belongs here rather than in §4, because it decides what the graph can see: the filter removes its `rf_retrieve_all_context` exchanges from `agent.messages` at `AfterInvocationEvent`, once the turn has ended (`strands_relevance_filter/plugin.py:_on_after_invocation:589`, dropping them through `_drop_tool_exchanges` at `strands_relevance_filter/plugin.py:605`). Those exchanges are gone before the next `MessageAddedEvent` boundary closes a turn, so `closed_turn_ranges` (`cards.py:153`) never scans them and the graph derives no Card from one. A retrieval through the filter is paid for once and leaves no Card behind.
 
 ### 10.2 The unified values
 
@@ -604,7 +604,7 @@ One consequence belongs here rather than in §4, because it decides what the gra
 | **`body_budget`** | **40000** (was `None`) | `VALIDATION_GRAPH_BODY_BUDGET` (`config.py:501`), `=none` restores the old config | this is what exercises the step down — §5.2 |
 | `max_retrieval_cycles` | 4 tight / 8 large | `VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES` (`config.py:502`) | from the same regime object |
 | `reuse_ttl_cycles` | 5 | `VALIDATION_GRAPH_REUSE_TTL` (`config.py:503`) | package default, restated so a sweep can reach it |
-| `tags_per_card` | 5 | `VALIDATION_GRAPH_TAGS` (`config.py:504`) | what `find_context` filters on |
+| `tags_per_card` | 5 | `VALIDATION_GRAPH_TAGS` (`config.py:504`) | what `cg_find_context` filters on |
 | **`neighbors_per_candidate`** | **0** (the package default is 3) | `VALIDATION_GRAPH_NEIGHBORS` (`config.py:505`), `=3` turns the edge on for a sweep | held at `0` so the figures stay comparable with every published one, which was produced with the edge unread (`config.py:492`–`493`) — §6.2 |
 
 These reach the plugin one-for-one in `build_plugins`: `expand_threshold` (`runner.py:342`), `collapse_floor` (`runner.py:343`), `description_tokens` (`runner.py:345`), `body_budget` (`runner.py:346`), `neighbors_per_candidate` (`runner.py:351`).

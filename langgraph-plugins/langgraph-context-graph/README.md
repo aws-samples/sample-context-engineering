@@ -41,18 +41,18 @@ Source, design notes and benchmarks:
 
 | Tool | Reaches | Switch |
 | --- | --- | --- |
-| `expand_card` | an earlier turn of this conversation, by title | none |
-| `expand_artifact` | a stored artifact, by the address a placeholder carried | `include_artifact_tool` |
-| `find_context` | earlier turns, searched by description in the model's own words | none |
+| `cg_expand_card` | an earlier turn of this conversation, by title | none |
+| `cg_expand_artifact` | a stored artifact, by the address a placeholder carried | `include_artifact_tool` |
+| `cg_find_context` | earlier turns, searched by description in the model's own words | none |
 
 All three answer with text on every miss and share one `max_retrieval_cycles` budget per turn. The
 guidance block folded into a projected call names exactly the tools that are registered, so excluding one
 stops it being advertised without a second switch.
 
-`include_artifact_tool=False` leaves `expand_artifact` unregistered. Pass it when a middleware that
+`include_artifact_tool=False` leaves `cg_expand_artifact` unregistered. Pass it when a middleware that
 offloads tool results is installed beside this one — typically `RelevanceFilterMiddleware` — because each
 then ships a retrieval tool over a store the other cannot read, and the model has two plausible tools for
-one job. `expand_card` and `find_context` reach back into the conversation's own turns, which is a job no
+one job. `cg_expand_card` and `cg_find_context` reach back into the conversation's own turns, which is a job no
 offloader does, so they have no switch.
 
 ## Where an artifact lives

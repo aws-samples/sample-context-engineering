@@ -176,7 +176,7 @@ def offloaded_turns() -> list[dict[str, Any]]:
     """Tool pairs whose results an offloader replaced, in both placeholder shapes.
 
     The inline ``| ref: ...`` is what the offloader leaves behind; the standalone ``[refs: a, b]`` is the Stash's. Both
-    are what give the ``AfterToolCallEvent`` half and ``expand_artifact`` something to work on, and neither may cost a
+    are what give the ``AfterToolCallEvent`` half and ``cg_expand_artifact`` work to do, and neither may cost a
     call of any kind.
     """
     return [
@@ -249,7 +249,7 @@ def context_over(agent: Agent) -> InvokeModelContext:
 def tool_context(agent: Agent) -> ToolContext:
     """The context a retrieval tool is called with, carrying the agent whose graph it reads."""
     return ToolContext(
-        tool_use={"toolUseId": "tu-retrieval", "name": "expand_card", "input": {}},
+        tool_use={"toolUseId": "tu-retrieval", "name": "cg_expand_card", "input": {}},
         agent=agent,
         invocation_state={},
     )
@@ -316,11 +316,11 @@ def drive_lifecycle(graph: ContextGraph, agent: Agent, incoming: list[dict[str, 
     state = graph._states[agent]
     context = tool_context(agent)
     titles = [title for title, card in state.cards.items() if card.kind == "subject"]
-    asyncio.run(graph.expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
-    asyncio.run(graph.find_context(need=first_question(agent.messages), tool_context=context))
+    asyncio.run(graph.cg_expand_card(titles=[titles[0] if titles else "no such turn"], tool_context=context))
+    asyncio.run(graph.cg_find_context(need=first_question(agent.messages), tool_context=context))
     references = [card.reference for card in state.cards.values() if card.kind == "artifact" and card.reference]
     asyncio.run(
-        graph.expand_artifact(reference=references[0] if references else "mem_1_absent_0", tool_context=context)
+        graph.cg_expand_artifact(reference=references[0] if references else "mem_1_absent_0", tool_context=context)
     )
 
     asyncio.run(graph._projection.deliver(context_over(agent)))
@@ -392,7 +392,7 @@ def test_construction_and_wiring_reach_no_client_no_network_and_no_async_task(aw
     assert graph._resolved_matcher is None
     # The wiring did happen, so the empty lists above are about what was not called and not about what was not set up.
     assert agent in graph._states
-    assert {"expand_card", "expand_artifact", "find_context"} <= set(agent.tool_registry.registry)
+    assert {"cg_expand_card", "cg_expand_artifact", "cg_find_context"} <= set(agent.tool_registry.registry)
 
 
 def test_the_default_matchers_embedding_is_the_only_call_the_contract_allows(aws_trap):

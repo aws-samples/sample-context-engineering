@@ -1,8 +1,8 @@
 """Progressive tool disclosure: what one LangChain model call is told about tools.
 
 Every call carries, in ``request.tools``, only the tools that are callable on it: the two disclosure
-tools (``find_tools`` and ``get_tool_details``), the always-available ones and the ones loaded by
-``get_tool_details`` and still in use. A loaded tool is released after ``ttl_cycles`` cycles without a
+tools (``ptd_find_tools`` and ``ptd_get_tool_details``), the always-available ones and the ones loaded by
+``ptd_get_tool_details`` and still in use. A loaded tool is released after ``ttl_cycles`` cycles without a
 call, and every call renews it, so a tool used in a stretch stays loaded without reloading and the tool
 list still goes back to the mandatory set once the work moves on. Every other registered tool reaches
 the model as one line of a catalog appended to the system prompt — its name and a summary of its
@@ -125,7 +125,7 @@ _PREMATURE_CALL_MESSAGE = (
     + GET_TOOL_DETAILS_NAME
     + '` with ["{name}"] first, then call \'{name}\' with its real parameters.'
 )
-"""Cancellation message of a guessed call. Names the tool and points at ``get_tool_details``. The guard
+"""Cancellation message of a guessed call. Names the tool and points at ``ptd_get_tool_details``. The guard
 does NOT load the tool on the model's behalf: a recovery that loaded it would teach the model that
 calling a catalog name directly works, which is the very shortcut the catalog rule forbids."""
 
@@ -138,7 +138,7 @@ calling a catalog name directly works, which is the very shortcut the catalog ru
 def _merge_loads(left: Mapping[str, int] | None, right: Mapping[str, int] | None) -> dict[str, int]:
     """Merge two ``loaded_tools`` maps, keeping the later cycle for a name present in both.
 
-    A reducer rather than a replacement, because several ``get_tool_details`` calls can land in one
+    A reducer rather than a replacement, because several ``ptd_get_tool_details`` calls can land in one
     superstep and a plain assignment would let one of them win outright. Keeping the *maximum* cycle is
     what makes the merge order-independent: the same set of loads produces the same map whichever order
     the writes arrive in.
@@ -163,7 +163,7 @@ class DisclosureState(AgentState):
     """Agent state extended with the disclosure bookkeeping.
 
     Attributes:
-        loaded_tools: Tool name to the cycle ``get_tool_details`` loaded it on. Absent until the first
+        loaded_tools: Tool name to the cycle ``ptd_get_tool_details`` loaded it on. Absent until the first
             load, which is the state of an agent that has not needed a hidden tool yet.
     """
 
@@ -335,7 +335,7 @@ def _active_names(
 
     A load or a use counts only when it happened on an EARLIER cycle than ``cycle``. That one
     inequality does two jobs: it is trivially true for the normal path — a tool loaded on cycle *k* is
-    callable from *k+1* — and it is what makes the guard correct, because a sibling ``get_tool_details``
+    callable from *k+1* — and it is what makes the guard correct, because a sibling ``ptd_get_tool_details``
     that ran in the same batch as a guessed call recorded the *current* cycle and so cannot make the
     guess look sanctioned.
 
@@ -542,14 +542,14 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
     """Send a catalog in the system prompt plus two small tools on each call, instead of every full schema.
 
     Every tool stays bound to the agent and stays callable. What changes is what one call is told: the
-    tool list carries only ``find_tools``, ``get_tool_details``, the tools configured as always available
+    tool list carries only ``ptd_find_tools``, ``ptd_get_tool_details``, the tools configured as always available
     and the tools loaded and still in use, and every other tool is one line of a catalog appended to the
     system prompt — its name and a summary of its description.
 
-    The flow is catalog -> ``get_tool_details([names])`` -> call. A loaded tool is released after
+    The flow is catalog -> ``ptd_get_tool_details([names])`` -> call. A loaded tool is released after
     ``ttl_cycles`` cycles without a call and every call renews it, so the tool list goes back to the
-    mandatory set once the work moves on. ``find_tools`` stays for a need the model cannot map to a
-    listed name: it searches and lists matches, and loading them is still ``get_tool_details``' job. In
+    mandatory set once the work moves on. ``ptd_find_tools`` stays for a need the model cannot map to a
+    listed name: it searches and lists matches, and loading them is still ``ptd_get_tool_details``' job. In
     the messages a call sends, the exchanges of tools it does not carry are folded to plain sentences.
 
     No failure here leaves the model without tools. A summary that cannot be written falls back to a
@@ -596,7 +596,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
                 truncation at a sentence or word boundary.
             ttl_cycles: Cycles a loaded tool survives without a call. Each call renews it.
             always_available: Names that are callable on every call, skipping the discovery cycle.
-            index: Search implementation behind ``find_tools``. Defaults to
+            index: Search implementation behind ``ptd_find_tools``. Defaults to
                 :class:`~context_core.disclosure.LexicalToolIndex`, which needs no network.
             top_k: How many tools one search lists.
 
@@ -768,7 +768,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
         messages = list(request.messages or ())
         # The cycle and the renewals are read off the PERSISTED history, not off ``request.messages``: a
         # middleware wrapping this one (the context graph) may have projected the call's messages down,
-        # and counting cycles on a projection puts the current cycle behind the one ``get_tool_details``
+        # and counting cycles on a projection puts the current cycle behind the one ``ptd_get_tool_details``
         # recorded from state -- the load then never becomes callable and the model reloads forever.
         # The Strands plugin reads ``event_loop_metrics.cycle_count``, which no projection touches either.
         history = list((request.state or {}).get("messages") or messages)
@@ -827,7 +827,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
 
         A guessed call is a name the model read in the catalog and called without loading it first.
         Whether the schema was visible is recomputed for the cycle the model chose on — the cycle of the
-        ``AIMessage`` that issued this call — so a ``get_tool_details`` that ran in the same batch cannot
+        ``AIMessage`` that issued this call — so a ``ptd_get_tool_details`` that ran in the same batch cannot
         make the guess look sanctioned, and a tool that expired since is not mistaken for a guess either.
 
         Nothing is loaded on the model's behalf: a recovery that loaded the tool would teach the model
@@ -912,7 +912,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
     # ---------------------------------------------------------------------------------------------
 
     def _build_tools(self) -> list[BaseTool]:
-        """Build ``find_tools`` and ``get_tool_details``, bound to this instance.
+        """Build ``ptd_find_tools`` and ``ptd_get_tool_details``, bound to this instance.
 
         Closures rather than methods: the ``@tool`` decorator derives the model-facing schema from the
         signature, and a bound ``self`` in it would surface as a parameter the model is asked to fill.
@@ -923,13 +923,13 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
         middleware = self
 
         @tool(FIND_TOOLS_NAME)
-        def find_tools(need: str, runtime: ToolRuntime) -> str:
+        def ptd_find_tools(need: str, runtime: ToolRuntime) -> str:
             """Search for tools that can do what you need, when no name in the tool catalog fits.
 
             This only finds tools; it does not load them. It answers with matching tool names and one
-            line about each. To use any of them, call `get_tool_details` with their names, then call them.
+            line about each. To use any of them, call `ptd_get_tool_details` with their names, then call them.
 
-            If a name in the catalog already fits what you need, skip this and call `get_tool_details`
+            If a name in the catalog already fits what you need, skip this and call `ptd_get_tool_details`
             directly.
 
             Args:
@@ -945,7 +945,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
             return middleware._search(need, runtime)
 
         @tool(GET_TOOL_DETAILS_NAME)
-        def get_tool_details(names: list[str], runtime: ToolRuntime) -> Command:
+        def ptd_get_tool_details(names: list[str], runtime: ToolRuntime) -> Command:
             """Load the full parameters of one or more tools from the catalog, so you can call them.
 
             Pass every tool you are about to need in one call. They arrive complete in your tool list on
@@ -953,7 +953,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
             this again with its name.
 
             Args:
-                names: Exact tool names, as written in the catalog or in a `find_tools` result.
+                names: Exact tool names, as written in the catalog or in a `ptd_find_tools` result.
                 runtime: Injected by the framework. Not user-facing.
 
             Returns:
@@ -962,12 +962,12 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
             """
             return middleware._load(names, runtime)
 
-        return [find_tools, get_tool_details]
+        return [ptd_find_tools, ptd_get_tool_details]
 
     def _search(self, need: str, runtime: ToolRuntime) -> str:
         """Rank the bound tools against ``need`` and report the matches by name and summary.
 
-        Nothing is loaded here: loading is ``get_tool_details``' one job, so the model always takes the
+        Nothing is loaded here: loading is ``ptd_get_tool_details``' one job, so the model always takes the
         same path to a schema whether it started from the catalog or from a search.
 
         Args:

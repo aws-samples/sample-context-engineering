@@ -39,7 +39,7 @@ _CHARS_PER_TOKEN = 4
 
 _TITLE_TOKENS = 12
 """Token ceiling of a Title. A Title is an address, not content: long enough for the model to tell two turns apart and
-to name in ``expand_card``, short enough that every Card's Title fits in every call (Requirement 4.1)."""
+to name in ``cg_expand_card``, short enough that every Card's Title fits in every call (Requirement 4.1)."""
 
 _DIGIT_SEPARATORS = ".,\u00a0\u202f\u2009"
 """Characters that may sit between digit groups: decimal point, comma, and the three unicode spaces used as thousands
@@ -111,7 +111,7 @@ _SENTENCE_ENDINGS = ".!?"
 _OMISSION = "(+{count} numeric lines omitted)"
 """What the Description records when the selected lines do not fit the budget (Requirement 4.6). The count is the point:
 a Description keeping the first three of eleven balances reads complete and is not, and the count turns that into a gap
-the model can close with ``expand_artifact``."""
+the model can close with ``cg_expand_artifact``."""
 
 _TEXTUAL_CONTENT_TYPES = frozenset(
     {

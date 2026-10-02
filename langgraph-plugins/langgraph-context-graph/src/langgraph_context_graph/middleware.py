@@ -8,7 +8,7 @@ the projected list to the provider with ``request.override(messages=…)``.
 
 :meth:`ContextGraphMiddleware.wrap_tool_call` is the artifact surface, the ``AfterToolCallEvent`` analog:
 after a tool has run it records the return in the conversation's reference store and derives the artifact
-Cards of any reference the return names, so ``expand_artifact`` has both an address to be asked for and
+Cards of any reference the return names, so ``cg_expand_artifact`` has both an address to be asked for and
 content to answer with. Two properties of the Strands hook are kept: the Card holds the **address** and the
 store holds the block, so nothing in the graph rots when the content changes; and a return naming no
 reference registers no artifact Card, which is the ordinary nothing-offloaded path rather than a
@@ -130,7 +130,7 @@ _DEFAULT_MAX_RETRIEVAL_CYCLES = 8
 _DEFAULT_RARITY_WEIGHT = 0.70
 
 _MAX_CANDIDATES = 5
-"""Candidates ``find_context`` returns at most: a search that answers with the whole graph has re-injected
+"""Candidates ``cg_find_context`` returns at most: a search that answers with the whole graph has re-injected
 the very thing the graph collapsed."""
 
 _PRUNING_MARKERS = ("summariz", "summaris", "prun", "trim", "compact")
@@ -185,7 +185,7 @@ Args:
 
 Returns:
     The requested part of the artifact, or an error naming what was missing."""
-"""What the model reads about ``expand_artifact``: the Strands plugin's docstring verbatim, ``tool_context``
+"""What the model reads about ``cg_expand_artifact``: the Strands plugin's docstring verbatim, ``tool_context``
 renamed to ``runtime``, which is the parameter LangChain injects the call's context through.
 
 Held as a constant rather than written as the tool body's docstring because the tool carries two bodies --
@@ -195,7 +195,7 @@ one sync, one async -- and the text the model sees must not depend on which of t
 def _latest_graph(left: GraphState | None, right: GraphState | None) -> GraphState | None:
     """Reducer for ``context_graph``: the later write wins.
 
-    Parallel retrieval calls (``expand_card`` beside ``find_context``, say) each answer with a
+    Parallel retrieval calls (``cg_expand_card`` beside ``cg_find_context``, say) each answer with a
     ``Command`` carrying the graph, in the same step. Without a reducer LangGraph refuses the second
     write (``InvalidUpdateError: Can receive only one value per step``) and the whole turn fails. Every
     tool mutates the one graph object the step's state holds, so the writes are the same object with
@@ -279,7 +279,7 @@ class ContextGraphMiddleware(AgentMiddleware):
 
     The graph derives a Card per closed turn by deterministic scan and decides a Resolution per Card --
     Title, Description or Full Content -- against this turn's question. Only the projected list reaches the
-    provider; ``state["messages"]`` is left whole, so ``expand_card`` and ``find_context`` can raise a Card
+    provider; ``state["messages"]`` is left whole, so ``cg_expand_card`` and ``cg_find_context`` can raise a Card
     the choice collapsed and have something to raise it to.
 
     Do **not** co-install a summarization or pruning middleware that rewrites ``state["messages"]``. That is
@@ -296,7 +296,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             ``expand_threshold``.
         description_tokens: Token ceiling of a Description. Defaults to ``100``.
         tags_per_card: How many identifiers define a Card. Defaults to ``5``.
-        neighbors_per_candidate: How many ``similar`` neighbours ``find_context`` lists under each candidate.
+        neighbors_per_candidate: How many ``similar`` neighbours ``cg_find_context`` lists under each candidate.
             Defaults to ``3``. It answers a question the ranking cannot: candidates are scored against the
             *question* and never against each other, while the edge already holds that relation. ``0`` lists
             none.
@@ -309,13 +309,13 @@ class ContextGraphMiddleware(AgentMiddleware):
             the turn that fed it back.
         max_retrieval_cycles: Retrieval calls one turn may spend before the tools refuse and tell the model
             to answer from what it has. Defaults to ``8``. ``None`` restores unbounded retrieval.
-        include_artifact_tool: Register ``expand_artifact``. Defaults to ``True``. Beside a middleware that
+        include_artifact_tool: Register ``cg_expand_artifact``. Defaults to ``True``. Beside a middleware that
             offloads tool results -- typically ``RelevanceFilterMiddleware`` -- pass that middleware's
             ``stash`` so both retrieval tools read the same content; without it each ships a tool over a store
-            the other cannot read. ``expand_card`` and ``find_context`` are unaffected and have no switch: they
+            the other cannot read. ``cg_expand_card`` and ``cg_find_context`` are unaffected and have no switch: they
             reach back into the conversation's own turns, which is a job no offloader does.
         rarity_weight: How much rarity counts when Tags are selected. Defaults to ``0.70``.
-        stash: Second layer for ``expand_artifact``, asked for a reference this binding's own store does not
+        stash: Second layer for ``cg_expand_artifact``, asked for a reference this binding's own store does not
             hold -- anything with an awaitable ``retrieve(reference)`` answering text. Pass
             ``RelevanceFilterMiddleware.stash`` so the ``[ref: mem_N_...]`` the filter mints resolves here
             too; this is the role the ``ContextManager`` Stash plays for the Strands plugin. ``None`` (the
@@ -448,7 +448,7 @@ class ContextGraphMiddleware(AgentMiddleware):
         the handler with the **original** request: no ``override``, so the call is identical to the
         no-middleware one rather than merely equal to it.
 
-        The updated graph is written twice. Into ``request.state``, so ``expand_card`` and ``find_context``
+        The updated graph is written twice. Into ``request.state``, so ``cg_expand_card`` and ``cg_find_context``
         called out of this very turn see the graph the choice was taken from; and through a ``Command`` on
         the way out, which is the write the checkpointer keeps. Neither write touches ``messages``.
 
@@ -575,7 +575,7 @@ class ContextGraphMiddleware(AgentMiddleware):
         1. **The return's blocks go into the conversation's store**, keyed ``<tool_call_id>_<index>`` -- the
            same key format the relevance filter hands its own store. Strands records a *name with nothing
            behind it* here, because by the time its hook runs the offloader has replaced the content and
-           there is no block to pair; ``expand_artifact`` then falls through to the ``ContextManager`` Stash
+           there is no block to pair; ``cg_expand_artifact`` then falls through to the ``ContextManager`` Stash
            for the content itself. This binding has no Stash to fall through to, so a reference that
            resolves to nothing would make the tool answerable in no configuration at all. Wrapping the tool
            is what makes the difference: the return is in hand here, so it is stored rather than named.
@@ -783,15 +783,15 @@ class ContextGraphMiddleware(AgentMiddleware):
         and return a ``Command``, which is how a tool persists a state change in LangGraph: the elevation
         and the fed-back note have to outlive the tool call to be read by the next projection.
 
-        ``expand_artifact`` is built with **two** bodies, one sync and one async, because LangChain bridges
+        ``cg_expand_artifact`` is built with **two** bodies, one sync and one async, because LangChain bridges
         neither direction: a coroutine-only tool raises ``NotImplementedError`` under ``invoke`` and a
         sync-only one would run in a worker thread under ``ainvoke``. Its resolution is the only awaitable
         step in this package -- the store's ``retrieve`` is async by contract, since a foreign store's read
         may cross a process boundary -- so the sync body drives that one coroutine to completion itself.
         """
 
-        @tool("expand_card")
-        def expand_card(titles: list[str], runtime: ToolRuntime) -> Command:
+        @tool("cg_expand_card")
+        def cg_expand_card(titles: list[str], runtime: ToolRuntime) -> Command:
             """Bring back the full content of one or more earlier turns, by their titles.
 
             Earlier turns may reach you as a title and a short description instead of their messages. When
@@ -809,10 +809,10 @@ class ContextGraphMiddleware(AgentMiddleware):
                 Confirmation that the turns will arrive in full, or an error naming the title asked for.
             """
             state = self._graph_of(runtime)
-            return self._answer(runtime, state, self.expand_card(state, titles))
+            return self._answer(runtime, state, self.cg_expand_card(state, titles))
 
-        @tool("find_context")
-        def find_context(need: str, runtime: ToolRuntime, tag: str | None = None) -> Command:
+        @tool("cg_find_context")
+        def cg_find_context(need: str, runtime: ToolRuntime, tag: str | None = None) -> Command:
             """Find earlier turns of this conversation that match what you need, described in your words.
 
             Use this when you suspect the conversation already covered something but you cannot see it in
@@ -827,16 +827,16 @@ class ContextGraphMiddleware(AgentMiddleware):
                 naming the need received.
             """
             state = self._graph_of(runtime)
-            return self._answer(runtime, state, self.find_context(state, need, tag))
+            return self._answer(runtime, state, self.cg_find_context(state, need, tag))
 
-        built: list[BaseTool] = [expand_card]
+        built: list[BaseTool] = [cg_expand_card]
         if self._include_artifact_tool:
             built.append(self._build_artifact_tool())
-        built.append(find_context)
+        built.append(cg_find_context)
         return built
 
     def _build_artifact_tool(self) -> BaseTool:
-        """Build ``expand_artifact``, whose description is :data:`_EXPAND_ARTIFACT_DESCRIPTION` verbatim.
+        """Build ``cg_expand_artifact``, whose description is :data:`_EXPAND_ARTIFACT_DESCRIPTION` verbatim.
 
         Built only when ``include_artifact_tool`` is true, so an excluded tool is never registered rather
         than registered and then removed. The guidance block reads the registered set on every render, so
@@ -844,7 +844,7 @@ class ContextGraphMiddleware(AgentMiddleware):
         agent does not hold is what sent a measured run after something it could not call.
         """
 
-        def expand_artifact(
+        def cg_expand_artifact(
             reference: str,
             runtime: ToolRuntime,
             line_range: dict[str, int] | None = None,
@@ -853,7 +853,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             """Sync body. The model reads ``_EXPAND_ARTIFACT_DESCRIPTION``, not this line."""
             state = self._graph_of(runtime)
             store = self._store_for(_thread_of(runtime))
-            answer = _driven(self.expand_artifact(state, store, reference, line_range, pattern))
+            answer = _driven(self.cg_expand_artifact(state, store, reference, line_range, pattern))
             return self._answer(runtime, state, answer)
 
         async def aexpand_artifact(
@@ -865,13 +865,13 @@ class ContextGraphMiddleware(AgentMiddleware):
             """Async body. The model reads ``_EXPAND_ARTIFACT_DESCRIPTION``, not this line."""
             state = self._graph_of(runtime)
             store = self._store_for(_thread_of(runtime))
-            answer = await self.expand_artifact(state, store, reference, line_range, pattern)
+            answer = await self.cg_expand_artifact(state, store, reference, line_range, pattern)
             return self._answer(runtime, state, answer)
 
         return StructuredTool.from_function(
-            func=expand_artifact,
+            func=cg_expand_artifact,
             coroutine=aexpand_artifact,
-            name="expand_artifact",
+            name="cg_expand_artifact",
             description=_EXPAND_ARTIFACT_DESCRIPTION,
         )
 
@@ -894,7 +894,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             }
         )
 
-    def expand_card(self, state: GraphState, titles: Sequence[str] | str) -> str:
+    def cg_expand_card(self, state: GraphState, titles: Sequence[str] | str) -> str:
         """Raise every Subject Card in ``titles`` to Full Content for the remainder of the turn.
 
         Both axes, dialogue *and* evidence. The elevation rewrites the frozen choice rather than adding a
@@ -917,7 +917,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             Confirmation naming the turns that will arrive whole, an error naming the titles that matched
             nothing, or the refusal when the turn's retrieval budget is spent.
         """
-        refusal = self._exhausted("expand_card", state)
+        refusal = self._exhausted("cg_expand_card", state)
         if refusal is not None:
             return refusal
 
@@ -925,7 +925,7 @@ class ContextGraphMiddleware(AgentMiddleware):
 
         wanted = [titles] if isinstance(titles, str) else list(titles)
         if not wanted:
-            return "expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
+            return "cg_expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
 
         found: list[str] = []
         missing: list[str] = []
@@ -953,12 +953,12 @@ class ContextGraphMiddleware(AgentMiddleware):
 
         if not found:
             return (
-                f"expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
-                "copy a title exactly as it was shown to you, or use find_context to describe what you need"
+                f"cg_expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
+                "copy a title exactly as it was shown to you, or use cg_find_context to describe what you need"
             )
 
         confirmation = (
-            f"expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool "
+            f"cg_expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool "
             "results together"
         )
         if missing:
@@ -966,7 +966,7 @@ class ContextGraphMiddleware(AgentMiddleware):
 
         return confirmation
 
-    async def expand_artifact(
+    async def cg_expand_artifact(
         self,
         state: GraphState,
         store: InMemoryReferenceStore,
@@ -998,7 +998,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             unknown reference, non-textual content, or a line range outside the content -- with nothing
             recorded and no Resolution changed.
         """
-        refusal = self._exhausted("expand_artifact", state)
+        refusal = self._exhausted("cg_expand_artifact", state)
         if refusal is not None:
             return refusal
 
@@ -1021,13 +1021,13 @@ class ContextGraphMiddleware(AgentMiddleware):
             span = _span_of(line_range)
             if line_range is not None and span is None:
                 return (
-                    f"expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
+                    f"cg_expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
                     '{"start": <int>, "end": <int>}, 1-indexed and inclusive'
                 )
             try:
                 answer = read_artifact(resolved.text, line_range=span, pattern=pattern)
             except ValueError as error:
-                return f"expand_artifact | reference '{reference}' | {error}"
+                return f"cg_expand_artifact | reference '{reference}' | {error}"
 
         title = _artifact_title(state, reference)
         if title is not None:
@@ -1035,7 +1035,7 @@ class ContextGraphMiddleware(AgentMiddleware):
 
         return answer
 
-    def find_context(self, state: GraphState, need: str, tag: str | None = None) -> str:
+    def cg_find_context(self, state: GraphState, need: str, tag: str | None = None) -> str:
         """Score every candidate Card's Description against ``need`` and answer with the best five.
 
         Scored over the same index the turn choice uses and no other: one ``score`` call against the
@@ -1053,7 +1053,7 @@ class ContextGraphMiddleware(AgentMiddleware):
             At most five candidates with their title, tags and description, or an empty result naming the
             ``need`` received, in which case no fed-back note was recorded and no Resolution changed.
         """
-        refusal = self._exhausted("find_context", state)
+        refusal = self._exhausted("cg_find_context", state)
         if refusal is not None:
             return refusal
 
@@ -1110,7 +1110,7 @@ class ContextGraphMiddleware(AgentMiddleware):
                 raise ValueError(f"similarity count=<{len(scores)}> | expected=<{len(descriptions)}>")
             return {title: float(scores[index]) for index, title in enumerate(titles)}
         except Exception:
-            logger.debug("find_context similarity unavailable for %d candidate(s)", len(descriptions), exc_info=True)
+            logger.debug("cg_find_context similarity unavailable for %d candidate(s)", len(descriptions), exc_info=True)
             return None
 
 
@@ -1199,7 +1199,7 @@ def _whole_artifact(reference: str, text: str) -> str:
     reformatting -- so the answer contains it character for character.
     """
     notice = (
-        f"expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire "
+        f"cg_expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire "
         f"token count, about {estimate_tokens(text)} tokens, and it stays in the conversation for the rest of the "
         "turn | next time pass line_range or pattern to read only the part you need"
     )
@@ -1241,9 +1241,9 @@ def _nothing_found(need: str, tag: str | None) -> str:
     """
     narrowed = f", among the turns tagged '{tag}'" if tag is not None else ""
     return (
-        f"find_context | nothing in this conversation matches '{need}'{narrowed} | "
+        f"cg_find_context | nothing in this conversation matches '{need}'{narrowed} | "
         "the titles already in front of you are the whole conversation, so what you need was "
-        "either never discussed or is in a turn you can name directly with expand_card"
+        "either never discussed or is in a turn you can name directly with cg_expand_card"
     )
 
 
@@ -1276,7 +1276,7 @@ def _render_candidates(state: GraphState, need: str, chosen: list[str], neighbor
     graph's own statement that two turns discuss related things, which the ranking cannot see, since it
     compares each Description to the QUESTION and never to another Description.
     """
-    lines = [f"find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
+    lines = [f"cg_find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
     # Every chosen title is excluded from every neighbourhood: a candidate is already being rendered in
     # full, so offering it again as somebody's neighbour would spend tokens to say nothing.
     already = frozenset(chosen)
@@ -1292,5 +1292,5 @@ def _render_candidates(state: GraphState, need: str, chosen: list[str], neighbor
         if neighbors:
             rendered = ", ".join(f"{neighbor} ({weight:.2f})" for neighbor, weight in neighbors)
             lines.append(f"  related turns: {rendered}")
-    lines.append("call expand_card with one of these titles to bring that turn back in full")
+    lines.append("call cg_expand_card with one of these titles to bring that turn back in full")
     return "\n".join(lines)

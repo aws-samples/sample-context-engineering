@@ -269,7 +269,7 @@ def test_a_resolution_raise_does_not_survive_the_next_turn():
     plugin = ContextGraph(matcher=CountingMatcher(0.0))
     agent = _Agent()
     state = wired(plugin, agent, *three_cards(), turn=3)
-    # What ``expand_card`` leaves behind: the frozen choice of the turn in progress, with one Card raised.
+    # What ``cg_expand_card`` leaves behind: the frozen choice of the turn in progress, with one Card raised.
     state.choice = TurnChoice(
         by_title=MappingProxyType({"First": CardChoice(dialogue="full", evidence="full")}),
         full_pass=False,

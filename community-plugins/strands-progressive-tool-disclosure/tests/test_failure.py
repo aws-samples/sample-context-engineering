@@ -272,7 +272,7 @@ def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
 def _incoming_specs(agent: Agent, names: Sequence[str]) -> list[dict[str, Any]]:
     """The specifications a call arrives with: both plugin tools first, then ``names``, deep-copied.
 
-    Both are present because the projection only applies when both are: without ``get_tool_details`` the model has no
+    Both are present since the projection applies only when both are: without ``ptd_get_tool_details`` the model has no
     way to load a hidden schema, so a call missing either one is passed through and no degradation could be observed.
 
     Copies rather than the registry's own objects, so an example that mutates or wraps an incoming specification cannot
@@ -498,7 +498,7 @@ def test_a_failing_search_returns_guidance_with_exactly_one_warning_and_records_
     before = dict(state.exposed)
 
     with _captured_logs() as captured:
-        result = asyncio.run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+        result = asyncio.run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     assert result == plugin_module._SEARCH_FAILED_GUIDANCE
     assert index.searches == 1, "the search was not attempted exactly once"

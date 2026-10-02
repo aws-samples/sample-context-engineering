@@ -1,4 +1,4 @@
 name: context-graph
 version: 0.1.0
-description: "Practice D — project closed turns into a graph of Cards at full/description/title resolution, with expand_card/expand_artifact/find_context recovery, over agent-context-core. Select with context.engine: context-graph."
+description: "Practice D — project closed turns into a graph of Cards at full/description/title resolution, with cg_expand_card/cg_expand_artifact/cg_find_context recovery, over agent-context-core. Select with context.engine: context-graph."
 author: Cristiano Scandura

@@ -3,7 +3,7 @@ requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-# Distribution name on PyPI. The import name stays `context_core`.
+# Distribution name (not published to PyPI). The import name stays `context_core`.
 name = "agent-context-core"
 version = "0.1.0"
 description = "Framework-agnostic core for context-engineering practices (relevance filtering, progressive tool disclosure, context graph). No agent-framework dependency."

@@ -8,8 +8,8 @@ whether the turn uses one tool or none. No window management touches it: summari
 conversation, while tool schema is a separate parameter of the call.
 
 Progressive tool disclosure sends a **lean catalog** — each tool as a name plus a one-line summary,
-listed in the **system prompt** — together with two small tools: `get_tool_details`, which loads the
-full schema of one or more tools by name, and `find_tools`, which searches when no listed name fits.
+listed in the **system prompt** — together with two small tools: `ptd_get_tool_details`, which loads the
+full schema of one or more tools by name, and `ptd_find_tools`, which searches when no listed name fits.
 The model loads what it needs, uses it, and the detail is **forgotten through inactivity** after a
 few cycles. Because the conversation branches, forgetting is what keeps the cost flat — if every tool
 ever touched stayed resident, the floor would grow without bound again.
@@ -100,7 +100,7 @@ entry can carry is `{"type": "object", "properties": {}}`, which reads as "takes
 model believes it, calls the tool by name, and the call has to be cancelled and retried: a full round
 trip carrying no information. In the system prompt the name makes no claim about its arguments, and
 the rule governing it arrives in the same block: the listed tools must not be called directly, a
-direct call is rejected, and the road to one is `get_tool_details` with the names as a list, then the
+direct call is rejected, and the road to one is `ptd_get_tool_details` with the names as a list, then the
 call itself on the next model call. `tool_specs` carries only what is callable on the call.
 
 ## 4. Hook point
@@ -133,10 +133,10 @@ sequenceDiagram
 
     Note over AG,B: InvokeModelStage.Input middleware
     AG->>B: assembles tool_specs and system_prompt
-    B-->>AG: tool_specs = find_tools + get_tool_details + in use<br/>system_prompt += catalog (name: summary)<br/>messages: exchanges of released tools folded to a sentence
+    B-->>AG: tool_specs = ptd_find_tools + ptd_get_tool_details + in use<br/>system_prompt += catalog (name: summary)<br/>messages: exchanges of released tools folded to a sentence
 
     AG->>M: call
-    M-->>AG: get_tool_details(["list_investment_transactions"])
+    M-->>AG: ptd_get_tool_details(["list_investment_transactions"])
     AG->>B: loads the named tools
     B-->>AG: "Loaded" (the schema travels in tool_specs, not in the result)
     AG->>M: call — costs one cycle, full inputSchema now in tool_specs
@@ -147,20 +147,20 @@ sequenceDiagram
     Note over B: a call that ran renews the schema TTL
 
     Note over M,B: fallback, when no catalog name fits
-    M-->>AG: find_tools("list investment transactions")
+    M-->>AG: ptd_find_tools("list investment transactions")
     AG->>B: search the index
     B-->>AG: matching names + summaries, nothing loaded
-    M-->>AG: get_tool_details([...]) — then as above
+    M-->>AG: ptd_get_tool_details([...]) — then as above
 ```
 
-The common path is **catalog → `get_tool_details` → call**. `find_tools` only finds; loading is always
-`get_tool_details`, so the model takes the same road to a schema wherever it started. A load takes a
+The common path is **catalog → `ptd_get_tool_details` → call**. `ptd_find_tools` only finds; loading is always
+`ptd_get_tool_details`, so the model takes the same road to a schema wherever it started. A load takes a
 list, so every tool a step needs is loaded in one cycle.
 
 ### Composition of each call
 
 ```
-tool_specs    = find_tools ∪ get_tool_details
+tool_specs    = ptd_find_tools ∪ ptd_get_tool_details
               ∪ always_available
               ∪ in_use (TTL, renewed on every use)
 
@@ -191,7 +191,7 @@ it — and once the tool has left `tool_specs`, that copy is a call to a tool th
 So in the messages each call sends, every closed exchange of a tool not callable on that call is
 folded: the `toolUse` block goes, and its result becomes a plain sentence, `The tool X was called and
 the result was: Y` (or `... failed with: Y`). Image and document parts of the result are kept as they
-are. The plugin's own `find_tools` and `get_tool_details` exchanges are dropped with no sentence: they
+are. The plugin's own `ptd_find_tools` and `ptd_get_tool_details` exchanges are dropped with no sentence: they
 matter on the call right after them and are dead weight past it. The evidence survives, the call shape
 does not.
 
@@ -232,14 +232,14 @@ shortlist.
 ## 6. Deterministic guards
 
 - **`tool_specs` is never empty.** The provider rejects an empty `toolConfig` when the history
-  has tool blocks — the SDK already works around it by injecting a `noop`. With `find_tools` and
-  `get_tool_details` always present, the case does not occur.
+  has tool blocks — the SDK already works around it by injecting a `noop`. With `ptd_find_tools` and
+  `ptd_get_tool_details` always present, the case does not occur.
 - **A released tool leaves no call shape in the history it can be copied from.** Its exchanges are
   folded to a sentence (§ 5), and the fold's output is validated before it is sent: a broken
   `toolUse`/`toolResult` adjacency falls back to the messages as received.
 - **A call to a catalog name that skipped the load is cancelled.** The name is not in `tool_specs`,
   so the common path never produces it. If a model calls one anyway, the call is cancelled with a
-  message pointing at `get_tool_details`, and nothing is loaded on its behalf — a recovery that
+  message pointing at `ptd_get_tool_details`, and nothing is loaded on its behalf — a recovery that
   loaded the tool would teach the model that calling a catalog name directly works. The decision is
   read off the names the last projection actually carried. A tool whose parameters are all optional
   is exempt: it is callable with no arguments, so the call is not a guess.
@@ -253,8 +253,8 @@ shortlist.
 | Model does not load and answers without a tool | denies a capability it has | catalog in the system prompt, `catalog_chars` != None |
 | Summary drops what tells two tools apart | the wrong tool is loaded, one cycle lost | the model loads another; raise `catalog_chars` or supply a `summarizer` |
 | Summarizer fails | none visible | the line falls back to a boundary cut |
-| No catalog name fits the need | one search cycle | `find_tools`, then `get_tool_details` |
-| Need maps to a combination of tools | several tools needed at once | `get_tool_details` takes a list: one load for all of them |
+| No catalog name fits the need | one search cycle | `ptd_find_tools`, then `ptd_get_tool_details` |
+| Need maps to a combination of tools | several tools needed at once | `ptd_get_tool_details` takes a list: one load for all of them |
 | Thrash on repeated use | extra cycles | `ttl_cycles`, renewed on every call that runs |
 | Model copies a `toolUse` of a released tool | call to a tool not in `tool_specs` | the exchange is folded to a sentence, leaving no template |
 | Fold produces an unforeseen message shape | the saving on that call | pair check on the fold's output, fall back to the messages as received |

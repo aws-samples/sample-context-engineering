@@ -13,8 +13,8 @@ carries a line reference; literal strings are quoted verbatim from source.
 On every model call the plugin rewrites **three** fields of the invocation context.
 
 `tool_specs` is reduced to the tools that are callable on this call, each one a **full verbatim spec**:
-the two plugin tools `find_tools` and `get_tool_details`, the `always_available` names, and the tools
-whose schema was **loaded** by a prior `get_tool_details` and is still live under a TTL measured in
+the two plugin tools `ptd_find_tools` and `ptd_get_tool_details`, the `always_available` names, and the tools
+whose schema was **loaded** by a prior `ptd_get_tool_details` and is still live under a TTL measured in
 event-loop cycles. Every other registered tool reaches the model as **one line of a catalog appended to
 the system prompt** — its name and a summary of its description, at most `catalog_chars` characters
 (`_compose_projection` `plugin.py:934`, `_project` `plugin.py:977`, `_catalog_prompt_block`
@@ -42,13 +42,13 @@ the rule that governs it arrives in the same block as the name (`_CATALOG_PROMPT
 built from the projection's own names, so no tool appears in both and none is missing from both
 (`plugin.py:1008`, `_catalog_prompt_block` docstring `plugin.py:187`).
 
-**The common path is catalog → `get_tool_details([names])` → call.** The model reads a name in the
-system prompt, calls `get_tool_details` with the names it wants, which loads them into `state.exposed`
+**The common path is catalog → `ptd_get_tool_details([names])` → call.** The model reads a name in the
+system prompt, calls `ptd_get_tool_details` with the names it wants, which loads them into `state.exposed`
 (`_renew` `plugin.py:1336`) and answers with a short confirmation; the full schemas arrive on the *next*
-model call. `find_tools` is the **fallback** for a need no catalog name fits: it ranks the specs through
+model call. `ptd_find_tools` is the **fallback** for a need no catalog name fits: it ranks the specs through
 the `LexicalToolIndex` (`index.py:168`) term-frequency `search` (`index.py:205`) and lists names plus
-summaries, and it **exposes nothing** — loading is `get_tool_details`' one job, so the model takes the
-same road to a schema wherever it started (`find_tools` `plugin.py:1242`, comment `plugin.py:1297`).
+summaries, and it **exposes nothing** — loading is `ptd_get_tool_details`' one job, so the model takes the
+same road to a schema wherever it started (`ptd_find_tools` `plugin.py:1242`, comment `plugin.py:1297`).
 
 Two hooks maintain the TTL and the guard. `AfterToolCallEvent` (`_on_after_tool_call`
 `plugin.py:1383`) renews a loaded tool that actually **ran**, so a stretch of work on one tool never
@@ -66,8 +66,8 @@ schema from the next projection, it does not unregister anything (`_expire` docs
 | 1 | `Plugin` base class (subclassed) | `plugin.py:1017` `class ProgressiveToolDisclosure(Plugin)` | `Plugin` auto-registers `@hook` and `@tool` members but NOT middleware (per docstring `plugin.py:1108`) | — | — |
 | 2 | `init_agent(agent)` lifecycle callback | `plugin.py:1105` | Called by the SDK when an agent is initialized | `agent._middleware_registry` | Adds one middleware to `InvokeModelStage.Input` (`plugin.py:1122`) |
 | 3 | `InvokeModelStage.Input` middleware — the projection | `plugin.py:1122` (registration), `_projection_handler` `plugin.py:1124` (handler) | Middleware stage `InvokeModelStage.Input`; the seam is reached only through `_compat.py`, which imports `InvokeModelContext` and `InvokeModelStage` from `strands._middleware.stages` (`_compat.py:9`). **No explicit order is set** — the handler is appended in wiring order, so it runs after any middleware that forced itself to the front (see §10). | `context.tool_specs`, `context.messages`, `context.system_prompt`, `context.agent`, `agent.tool_registry.registry`, `agent.event_loop_metrics.cycle_count`, `agent.model` (default summarizer) | Returns a NEW context via `replace(context, tool_specs=..., messages=..., system_prompt=...)` (`plugin.py:1009`), or `tool_specs` and `messages` alone when the catalog is suppressed (`plugin.py:1006`); writes `state.projected` (`plugin.py:1157`) and mutates per-agent `_DisclosureState` (`_expire` `plugin.py:607`) plus the shared summary cache and index fingerprint (`_ensure_index` `plugin.py:1164`). Does NOT touch the registry or `agent.messages`. |
-| 4 | `@tool(context=True)` vended tool `get_tool_details` | `plugin.py:1301` decorator, `plugin.py:1302` method | Auto-registered by `Plugin`, by the `_PluginRegistry` AFTER `init_agent` returns (`plugin.py:1115` docstring), so early calls can arrive without it — covered by `_should_passthrough` (`plugin.py:898`). | `tool_context.agent`, `agent.event_loop_metrics.cycle_count`, `agent.tool_registry.registry`, the `names` argument | Increments `state.loads` (`plugin.py:1319`); writes `state.exposed` via `_renew` for each known name (`plugin.py:1336`). Returns a text result string. |
-| 5 | `@tool(context=True)` vended tool `find_tools` | `plugin.py:1241` decorator, `plugin.py:1242` method | Auto-registered by `Plugin`, same post-`init_agent` window as row 4. | `tool_context.agent`, `agent.tool_registry.registry`, the `need` argument, the index | Increments `state.searches` (`_record_search` `plugin.py:684`, called `plugin.py:1265`). **Writes no exposure** — it only reads the index and the registry. |
+| 4 | `@tool(context=True)` vended tool `ptd_get_tool_details` | `plugin.py:1301` decorator, `plugin.py:1302` method | Auto-registered by `Plugin`, by the `_PluginRegistry` AFTER `init_agent` returns (`plugin.py:1115` docstring), so early calls can arrive without it — covered by `_should_passthrough` (`plugin.py:898`). | `tool_context.agent`, `agent.event_loop_metrics.cycle_count`, `agent.tool_registry.registry`, the `names` argument | Increments `state.loads` (`plugin.py:1319`); writes `state.exposed` via `_renew` for each known name (`plugin.py:1336`). Returns a text result string. |
+| 5 | `@tool(context=True)` vended tool `ptd_find_tools` | `plugin.py:1241` decorator, `plugin.py:1242` method | Auto-registered by `Plugin`, same post-`init_agent` window as row 4. | `tool_context.agent`, `agent.tool_registry.registry`, the `need` argument, the index | Increments `state.searches` (`_record_search` `plugin.py:684`, called `plugin.py:1265`). **Writes no exposure** — it only reads the index and the registry. |
 | 6 | `BeforeToolCallEvent` hook | `plugin.py:1346` `@hook`, `_on_before_tool_call` `plugin.py:1347` | Sync hook (the `# type: ignore` note at `plugin.py:1346` says the `@hook` overloads only infer async). Auto-registered by `Plugin`. Fires before each tool call. No numeric order documented. | `event.tool_use["name"]`, `event.agent`, `agent.tool_registry.registry`, `state.projected`, `self._always_available`, `_requires_parameters(spec)` (`plugin.py:335`) | On a premature call sets `event.cancel_tool` (`plugin.py:1379`) and increments `state.premature_cancellations` (`_record_premature_cancellation` `plugin.py:708`, called `plugin.py:1380`). **Writes no exposure at all** — it never calls `_renew`. |
 | 7 | `AfterToolCallEvent` hook | `plugin.py:1382` `@hook`, `_on_after_tool_call` `plugin.py:1383` | Sync hook, same `# type: ignore` note. Auto-registered by `Plugin`. Fires after each tool call. | `event.cancel_message` (`plugin.py:1392`), `event.tool_use["name"]`, `event.agent`, `state.exposed` | Renews an already-loaded tool via `_renew` (`plugin.py:1399`). A cancelled call returns first (`plugin.py:1393`), so it keeps nothing loaded. |
 
@@ -93,9 +93,9 @@ calls it, folds the messages, and then places whatever is left into the system p
 
 | Order | Class | Membership source (`file.py:LINE`) | What the model receives |
 |-------|-------|-------------------------------------|--------------------------|
-| 1 | `{find_tools, get_tool_details}` | frozenset `_PLUGIN_TOOL_NAMES` (`plugin.py:65`), first block of the tuple `plugin.py:967` (names from `FIND_TOOLS_NAME` `plugin.py:56` and `GET_TOOL_DETAILS_NAME` `plugin.py:59`) | **Full verbatim spec** — emitted first and unconditionally, which is what makes the projection non-empty on every projected path |
+| 1 | `{ptd_find_tools, ptd_get_tool_details}` | frozenset `_PLUGIN_TOOL_NAMES` (`plugin.py:65`), first block of the tuple `plugin.py:967` (names from `FIND_TOOLS_NAME` `plugin.py:56` and `GET_TOOL_DETAILS_NAME` `plugin.py:59`) | **Full verbatim spec** — emitted first and unconditionally, which is what makes the projection non-empty on every projected path |
 | 2 | `always_available` | `self._always_available` tuple, passed at `plugin.py:1154`; set in ctor `plugin.py:1094` | **Full verbatim spec** on every call |
-| 3 | `exposed` | `state.exposed` map (post-`_expire` `plugin.py:607`), passed at `plugin.py:1153`; written only by `_renew` (`plugin.py:630`), called from `get_tool_details` (`plugin.py:1302`) at `plugin.py:1336` and from the post-call hook (`plugin.py:1399`) | **Full verbatim spec** while the load is live under the TTL |
+| 3 | `exposed` | `state.exposed` map (post-`_expire` `plugin.py:607`), passed at `plugin.py:1153`; written only by `_renew` (`plugin.py:630`), called from `ptd_get_tool_details` (`plugin.py:1302`) at `plugin.py:1336` and from the post-call hook (`plugin.py:1399`) | **Full verbatim spec** while the load is live under the TTL |
 | 4 | catalog residue | every incoming name **not** in the projection, computed from the projection itself (`plugin.py:1008`); skipped entirely when `catalog_chars is None` (`plugin.py:1005`) | **Nothing in `tool_specs`.** One line `- name: summary` in the system prompt (`plugin.py:214`), under the header at `plugin.py:218` |
 
 There is deliberately **no history-referenced block**. A tool the conversation already used is a catalog
@@ -116,8 +116,8 @@ block rather than being flattened (`plugin.py:332`).
 
 **Passthrough is structural, not a flag.** `_should_passthrough` (`plugin.py:898`) returns `True` when
 any incoming name is absent from the registry — forced structured output swaps in a synthetic spec —
-and when **either** plugin tool is missing from the call: without `get_tool_details` there is no way to
-load a hidden schema and without `find_tools` no way to find one, so there is nothing to hide
+and when **either** plugin tool is missing from the call: without `ptd_get_tool_details` there is no way to
+load a hidden schema and without `ptd_find_tools` no way to find one, so there is nothing to hide
 (`plugin.py:926`, `plugin.py:931`).
 
 ## 4. The message fold — every exchange the call cannot repeat
@@ -142,7 +142,7 @@ What is folded, and what is not:
 - **The result becomes a sentence.** `_fold_note` (`plugin.py:723`) renders `The tool X was called and
   the result was: Y`, or `... failed with: Y` when the result's status is an error (`plugin.py:739`);
   image and document parts of the result are kept as they are (`plugin.py:864`).
-- **The plugin's own exchanges go entirely**, with no sentence: a `find_tools` or `get_tool_details`
+- **The plugin's own exchanges go entirely**, with no sentence: a `ptd_find_tools` or `ptd_get_tool_details`
   exchange matters on the call right after it and is dead weight past that (`plugin.py:862`).
 
 The rewrite then has to leave a shape Converse accepts. Emptied messages are dropped
@@ -264,7 +264,7 @@ sequenceDiagram
     Handler->>Handler: state.projected = the projected names [plugin.py:1157]
     Handler->>Handler: _log_projection(projected.tool_specs) [plugin.py:1158,666]
     Handler-->>Stage: the new context
-    Note over Provider: toolConfig = find_tools + get_tool_details + always_available + loaded
+    Note over Provider: toolConfig = ptd_find_tools + ptd_get_tool_details + always_available + loaded
     Note over Provider: system = operator's prompt + the catalog heading + one line per remaining tool
     Note over Provider: messages = the folded copy · no call shape for a tool that is not in toolConfig
 ```
@@ -272,9 +272,9 @@ sequenceDiagram
 ## 6. The common path — catalog, load, call
 
 Two model calls and no guessing: the names live in the system prompt, the schemas arrive through
-`get_tool_details`, and the call itself renews the TTL once it has returned.
+`ptd_get_tool_details`, and the call itself renews the TTL once it has returned.
 
-`get_tool_details` tolerates the two shapes a model actually sends: a bare string instead of a list
+`ptd_get_tool_details` tolerates the two shapes a model actually sends: a bare string instead of a list
 (`plugin.py:1323`) and duplicates, which are de-duplicated with order kept (`plugin.py:1324`). A call
 that named nothing usable answers with `_DETAILS_EMPTY_GUIDANCE` (`plugin.py:1326`). A name the registry
 does not have is collected and reported rather than silently dropped (`plugin.py:1334`,
@@ -292,7 +292,7 @@ sequenceDiagram
     Note over Model: Call N — reads the catalog in the system prompt
     Stage->>Plugin: _projection_handler(context) [plugin.py:1124]
     Plugin-->>Stage: tool_specs = callable tools · system_prompt += catalog · messages folded [plugin.py:1009]
-    Model->>Plugin: get_tool_details(["list_investment_transactions"]) [plugin.py:1302]
+    Model->>Plugin: ptd_get_tool_details(["list_investment_transactions"]) [plugin.py:1302]
     Plugin->>Plugin: state.loads += 1 [plugin.py:1319]
     Plugin->>Plugin: normalize · bare string tolerated · duplicates dropped [plugin.py:1323,1324]
     loop each requested name
@@ -310,13 +310,13 @@ sequenceDiagram
     Plugin->>Plugin: AfterToolCallEvent · _renew · the TTL window restarts here [plugin.py:1399]
 ```
 
-`get_tool_details` takes a **list**, which is what keeps a step that needs three tools to one cycle
+`ptd_get_tool_details` takes a **list**, which is what keeps a step that needs three tools to one cycle
 rather than three (docstring `plugin.py:1303`).
 
-## 7. The fallback — `find_tools` searches, it does not load
+## 7. The fallback — `ptd_find_tools` searches, it does not load
 
-`find_tools` exists for a need the model cannot map to any listed name. It ranks specs and reports
-names plus summaries, and then stops: the model still goes through `get_tool_details`, so there is one
+`ptd_find_tools` exists for a need the model cannot map to any listed name. It ranks specs and reports
+names plus summaries, and then stops: the model still goes through `ptd_get_tool_details`, so there is one
 road to a schema instead of two (comment `plugin.py:1297`).
 
 Every invocation is counted, including a blank need and a failed search, because each costs the cycle
@@ -334,7 +334,7 @@ sequenceDiagram
     participant Reg as ToolRegistry
 
     Note over Model: no catalog name fits the need
-    Model->>Plugin: find_tools("list investment transactions") [plugin.py:1242]
+    Model->>Plugin: ptd_find_tools("list investment transactions") [plugin.py:1242]
     Plugin->>Plugin: _record_search(state) · searches += 1 [plugin.py:1265,684]
     alt need is blank
         Plugin-->>Model: _EMPTY_NEED_GUIDANCE [plugin.py:1270,117]
@@ -352,7 +352,7 @@ sequenceDiagram
                 Plugin-->>Model: _NO_MATCH_GUIDANCE [plugin.py:1295,120]
             else names to report
                 Plugin-->>Model: _MATCHES_HEADER + one line per match · NOTHING exposed [plugin.py:1299,95]
-                Model->>Plugin: get_tool_details([names]) — then exactly as section 6
+                Model->>Plugin: ptd_get_tool_details([names]) — then exactly as section 6
             end
         end
     end
@@ -378,7 +378,7 @@ they are carried in full on every call, so the question cannot arise for them. T
 `state.projected` returns (`plugin.py:1372`).
 
 **The guard loads nothing on the model's behalf.** It cancels with `_PREMATURE_CALL_MESSAGE`
-(`plugin.py:1379`), which names the tool and points at `get_tool_details`. A recovery that loaded the
+(`plugin.py:1379`), which names the tool and points at `ptd_get_tool_details`. A recovery that loaded the
 tool and invited an immediate retry would teach the model that calling a catalog name directly works,
 which is the very shortcut the catalog rule forbids (`_PREMATURE_CALL_MESSAGE` docstring
 `plugin.py:133`).
@@ -410,9 +410,9 @@ sequenceDiagram
             alt requires parameters
                 Plugin->>Plugin: event.cancel_tool = _PREMATURE_CALL_MESSAGE.format(name=X) [plugin.py:1379,128]
                 Plugin->>Plugin: _record_premature_cancellation · premature_cancellations += 1 [plugin.py:1380,708]
-                Plugin-->>Model: "'X' did not run: it is not loaded... call get_tool_details with [X] first"
-                Note over Model: X is NOT loaded by the guard · the model must call get_tool_details itself
-                Model->>Plugin: get_tool_details(["X"]) · then exactly as section 6
+                Plugin-->>Model: "'X' did not run: it is not loaded... call ptd_get_tool_details with [X] first"
+                Note over Model: X is NOT loaded by the guard · the model must call ptd_get_tool_details itself
+                Model->>Plugin: ptd_get_tool_details(["X"]) · then exactly as section 6
             else no required parameter
                 Plugin-->>EventLoop: return · an empty call is legitimate [plugin.py:1378]
             end
@@ -446,9 +446,9 @@ renews only a tool already in `exposed` (`plugin.py:1398`) and only when the cal
 ```mermaid
 stateDiagram-v2
     [*] --> Catalog: registered · one line in the system-prompt catalog [plugin.py:214,187]
-    Catalog --> Loaded: get_tool_details([name]) so _renew writes the cycle [plugin.py:1336,630]
+    Catalog --> Loaded: ptd_get_tool_details([name]) so _renew writes the cycle [plugin.py:1336,630]
     Catalog --> Cancelled: premature call · cancelled, and NOTHING is loaded [plugin.py:1379]
-    Cancelled --> Catalog: the model must call get_tool_details itself
+    Cancelled --> Catalog: the model must call ptd_get_tool_details itself
     Loaded --> Renewed: tool ran · _on_after_tool_call renews [plugin.py:1399]
     Renewed --> Renewed: used again within ttl_cycles, exposed[name] = cycle [plugin.py:642]
     Renewed --> Idle: idle · cycle - last_used <= ttl_cycles is kept [plugin.py:626]
@@ -463,8 +463,8 @@ stateDiagram-v2
     end note
 ```
 
-`find_tools` appears nowhere in this diagram on purpose: a search changes no exposure state, so a tool's
-lifecycle is driven by `get_tool_details`, by use, and by inactivity.
+`ptd_find_tools` appears nowhere in this diagram on purpose: a search changes no exposure state, so a tool's
+lifecycle is driven by `ptd_get_tool_details`, by use, and by inactivity.
 
 ## 10. Ordering guarantee — the context graph can never eat the catalog
 
@@ -544,7 +544,7 @@ decision.
 What follows from that:
 
 - The number of cache invalidations per session is driven by how often the exposure set changes, not by
-  where the catalog is placed. Loading several tools in one `get_tool_details` call is therefore cheaper
+  where the catalog is placed. Loading several tools in one `ptd_get_tool_details` call is therefore cheaper
   than loading them one at a time, which is the cache argument for the list-shaped signature
   (`plugin.py:1302`).
 - Release is the other side of that trade: a tool leaving `tool_specs` invalidates the prefix exactly as
@@ -568,7 +568,7 @@ intermediate default of its own:
 | Threshold fields | `catalog_chars` (`config.py:398`), `ttl_cycles` (`config.py:401`), `top_k` (`config.py:404`) | `80`, `3`, `4` — the catalog line budget in characters, the load TTL in cycles, and the matches one search lists |
 | Environment read | `config.py:420`, `config.py:421`, `config.py:422` | `_env_int("VALIDATION_CATALOG_CHARS", 80)` and its two siblings, inside the `THRESHOLDS` construction |
 | Plugin construction | `runner.py:366` | `ProgressiveToolDisclosure(catalog_chars=..., ttl_cycles=..., top_k=...)` (`runner.py:367`, `runner.py:368`, `runner.py:369`) |
-| `always_available` | `runner.py:379` | The graph's retrieval tools (`runner.py:380`) plus the one literal domain tool `list_accounts` (`runner.py:381`), derived from the plugins rather than hard-coded. The relevance filter's `retrieve_all_context` is deliberately **not** here: it answers the rare question that needs a whole result, so it stays a catalog name and is loaded only then (comment `runner.py:373`) |
+| `always_available` | `runner.py:379` | The graph's retrieval tools (`runner.py:380`) plus the one literal domain tool `list_accounts` (`runner.py:381`), derived from the plugins rather than hard-coded. The relevance filter's `rf_retrieve_all_context` is deliberately **not** here: it answers the rare question that needs a whole result, so it stays a catalog name and is loaded only then (comment `runner.py:373`) |
 
 There is no environment switch for the placement, because there is only one placement, and **no
 `referenced_source` bridge**: the plugin releases a loaded tool after `ttl_cycles` idle cycles and keeps
@@ -595,7 +595,7 @@ docstring `plugin.py:104`) — and why the fold drops those two exchanges once t
 
 ### 13.1 The system-prompt catalog header — `_CATALOG_PROMPT_HEADER` (`plugin.py:162`)
 
-Quoted literally, `{get_tool_details}` and `{find_tools}` being substituted with the two tool names at
+Quoted literally, `{ptd_get_tool_details}` and `{ptd_find_tools}` being substituted with the two tool names at
 `plugin.py:218`:
 
 ```text
@@ -605,11 +605,11 @@ The tools listed below are NOT in your tool list, and you MUST NOT call them dir
 are not loaded, and a direct call is rejected without running.
 
 To use any of them, always follow these steps:
-1. Call `get_tool_details` with the names you need, as a list, in one call.
+1. Call `ptd_get_tool_details` with the names you need, as a list, in one call.
 2. On your next call they are in your tool list with their full parameters. Call them from there.
 3. A tool left unused for a few calls is unloaded again. If a call to it is rejected, repeat step 1.
 
-If no name below fits what you need, call `find_tools` with the need in your own words, then go to
+If no name below fits what you need, call `ptd_find_tools` with the need in your own words, then go to
 step 1 with the names it returns.
 
 The tools that ARE in your tool list for this call you call directly.
@@ -633,7 +633,7 @@ No sigil and no marker: the names are not in `tool_specs`, so nothing in the cal
 callable and nothing has to be walked back. Step 3 is what makes release intelligible from the model's
 side — a rejected call is a documented state with a documented recovery, not a surprise.
 
-### 13.2 `get_tool_details` docstring — exactly as the model receives it (`plugin.py:1303`)
+### 13.2 `ptd_get_tool_details` docstring — exactly as the model receives it (`plugin.py:1303`)
 
 ```text
 Load the full parameters of one or more tools from the catalog, so you can call them.
@@ -643,7 +643,7 @@ your next call. A tool left unused for a few calls is unloaded; to call it after
 again with its name.
 
 Args:
-    names: Exact tool names, as written in the catalog or in a `find_tools` result.
+    names: Exact tool names, as written in the catalog or in a `ptd_find_tools` result.
     tool_context: Injected by the framework. Not user-facing.
 
 Returns:
@@ -651,18 +651,18 @@ Returns:
 ```
 
 Its `inputSchema` is not a source literal: it is derived by the `@tool(context=True)` decorator
-(`plugin.py:1301`) from the signature `get_tool_details(self, names: list[str], tool_context:
+(`plugin.py:1301`) from the signature `ptd_get_tool_details(self, names: list[str], tool_context:
 ToolContext)` (`plugin.py:1302`). The only model-facing parameter is `names`, a list of strings.
 
-### 13.3 `find_tools` docstring — exactly as the model receives it (`plugin.py:1243`)
+### 13.3 `ptd_find_tools` docstring — exactly as the model receives it (`plugin.py:1243`)
 
 ```text
 Search for tools that can do what you need, when no name in the tool catalog fits.
 
 This only finds tools; it does not load them. It answers with matching tool names and one line
-about each. To use any of them, call `get_tool_details` with their names, then call them.
+about each. To use any of them, call `ptd_get_tool_details` with their names, then call them.
 
-If a name in the catalog already fits what you need, skip this and call `get_tool_details`
+If a name in the catalog already fits what you need, skip this and call `ptd_get_tool_details`
 directly.
 
 Args:
@@ -676,10 +676,10 @@ Returns:
     or to reword it when there is nothing to list.
 ```
 
-Same derivation for its schema, from `find_tools(self, need: str, tool_context: ToolContext)`
+Same derivation for its schema, from `ptd_find_tools(self, need: str, tool_context: ToolContext)`
 (`plugin.py:1242`): the only model-facing parameter is `need`, a string.
 
-### 13.4 `get_tool_details` results
+### 13.4 `ptd_get_tool_details` results
 
 Header literal `_DETAILS_LOADED_HEADER` (`plugin.py:100`), which states the release rule in the same
 breath as the load:
@@ -709,7 +709,7 @@ _DETAILS_EMPTY_GUIDANCE = (
 )
 ```
 
-### 13.5 `find_tools` results
+### 13.5 `ptd_find_tools` results
 
 Header literal `_MATCHES_HEADER` (`plugin.py:95`), which states in the same breath that nothing was
 loaded:
@@ -807,13 +807,13 @@ handler, hook or tool registered (`plugin.py:1083` onwards).
 | `summarizer` | `None` (`plugin.py:1052`) | **Yes** | What writes a line when a description does not fit. Receives `(spec, max_chars)`, sync or async (`ToolSummarizer` `plugin.py:83`). `None` uses the agent's own model, one plain call per tool, cached (`_model_summarizer` `plugin.py:273`, selected at `plugin.py:1215`). `_validate_summarizer` (`plugin.py:478`) — `None` or callable. |
 | `ttl_cycles` | `_DEFAULT_TTL_CYCLES = 3` (`plugin.py:89`; ctor `plugin.py:1053`) | No | Cycles a loaded tool survives without a call; every call that runs renews it (`plugin.py:1399`). `_validate_positive_int` (`plugin.py:438`) — int ≥ 1, `bool` and `float` rejected. |
 | `always_available` | `()` empty tuple (`plugin.py:1054`) | No | Names carrying their full spec on every call, skipping the load cycle and exempt from the guard (`plugin.py:1368`). `_validate_always_available` (`plugin.py:492`) — a sequence of non-empty strings; a bare string is rejected, since it would configure one name per character. Stored as a tuple (`plugin.py:1094`). |
-| `index` | `None` → `LexicalToolIndex()` (`plugin.py:1055`; instantiated `plugin.py:1098`) | **Yes** | Search implementation behind `find_tools`. `None` selects the default term-frequency `LexicalToolIndex` (`index.py:168`), which needs no network. `_validate_index` (`plugin.py:515`) — `None`, or an object with callable `build` and `search`. |
+| `index` | `None` → `LexicalToolIndex()` (`plugin.py:1055`; instantiated `plugin.py:1098`) | **Yes** | Search implementation behind `ptd_find_tools`. `None` selects the default term-frequency `LexicalToolIndex` (`index.py:168`), which needs no network. `_validate_index` (`plugin.py:515`) — `None`, or an object with callable `build` and `search`. |
 | `top_k` | `_DEFAULT_TOP_K = 3` (`plugin.py:92`; ctor `plugin.py:1056`) | No | How many tools one search lists. `_validate_positive_int` (`plugin.py:438`) — int ≥ 1. |
 
 Six parameters, none positional. There is no placement flag, no `referenced_source` and no
 `find_tools_name` knob — the two tool names are the module constants
-`FIND_TOOLS_NAME = "find_tools"` (`plugin.py:56`) and
-`GET_TOOL_DETAILS_NAME = "get_tool_details"` (`plugin.py:59`), collected into `_PLUGIN_TOOL_NAMES`
+`FIND_TOOLS_NAME = "ptd_find_tools"` (`plugin.py:56`) and
+`GET_TOOL_DETAILS_NAME = "ptd_get_tool_details"` (`plugin.py:59`), collected into `_PLUGIN_TOOL_NAMES`
 (`plugin.py:65`) and threaded through the projection, the fold, the passthrough test and the guard
 rather than exposed on the constructor. The second name is deliberately not `get_details`: a verb-noun
 that generic is one a domain tool can already hold, and a collision would silently shadow one of the two

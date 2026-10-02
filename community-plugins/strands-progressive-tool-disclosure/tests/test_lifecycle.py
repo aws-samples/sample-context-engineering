@@ -16,7 +16,7 @@ re-loading.
 Validates: Requirements 7.3, 7.4.
 
 The lifecycle is where the plugin decides what the model is allowed to see, so these properties are
-asserted against the real primitives (``_expire``, ``_renew`` through ``get_tool_details`` and
+asserted against the real primitives (``_expire``, ``_renew`` through ``ptd_get_tool_details`` and
 ``_on_before_tool_call``) and, where the claim is about what reaches the provider, against a real
 ``Agent`` carrying a real ``ToolRegistry``.
 
@@ -204,7 +204,7 @@ def _agent(plugin: ProgressiveToolDisclosure) -> Agent:
     """Build an offline agent carrying the four registered tools plus the plugin's two vended tools.
 
     Args:
-        plugin: The plugin to register, which is what adds ``find_tools``, ``get_tool_details`` and the
+        plugin: The plugin to register, which is what adds ``ptd_find_tools``, ``ptd_get_tool_details`` and the
             pre-call hook.
 
     Returns:
@@ -306,7 +306,7 @@ def _load(plugin: ProgressiveToolDisclosure, agent: Agent, names: list[str]) -> 
     Returns:
         What the tool answered the model.
     """
-    return _run(plugin.get_tool_details(names, _tool_context(agent)))
+    return _run(plugin.ptd_get_tool_details(names, _tool_context(agent)))
 
 
 def _projected(context: InvokeModelContext) -> dict[str, dict[str, Any]]:
@@ -606,7 +606,7 @@ def test_repeated_use_keeps_a_schema_resident_without_re_loading(
     assert _is_cataloged(first, "list_accounts")
 
     # A search only finds. It costs a cycle, it names the tool, and it exposes NOTHING.
-    found = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
+    found = _run(plugin.ptd_find_tools("list the accounts of an owner", _tool_context(agent)))
     assert "list_accounts" in found
     assert (index.searches, plugin._states[agent].searches) == (1, 1)
     assert plugin._states[agent].exposed == {}
@@ -643,7 +643,7 @@ def test_loading_a_tool_again_renews_its_exposure(ttl_cycles: int) -> None:
 
     Repeated use keeps a schema resident without re-loading.
 
-    A load is a use: ``get_tool_details`` writes the current cycle as the tool's last use whether the
+    A load is a use: ``ptd_get_tool_details`` writes the current cycle as the tool's last use whether the
     tool was exposed already or not, so re-loading at the boundary buys a fresh TTL rather than
     nothing. This is the discriminator — the exposure survives one cycle past the expiry its FIRST
     load would have had.
@@ -681,7 +681,7 @@ def test_a_load_that_names_nothing_usable_costs_the_cycle_and_exposes_nothing() 
     plugin = _plugin()
     agent = _agent(plugin)
 
-    assert _load(plugin, agent, []) == _run(plugin.get_tool_details(["  "], _tool_context(agent)))
+    assert _load(plugin, agent, []) == _run(plugin.ptd_get_tool_details(["  "], _tool_context(agent)))
     assert plugin._states[agent].loads == 2
     assert plugin._states[agent].exposed == {}
 

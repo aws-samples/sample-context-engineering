@@ -87,7 +87,7 @@ def test_exactly_the_three_retrieval_tools_are_registered():
     """Requirement 1.2: the three ``@tool`` members and no fourth tool."""
     added = set(build(plugin=ContextGraph()).tool_registry.registry) - set(build().tool_registry.registry)
 
-    assert added == {"expand_card", "expand_artifact", "find_context"}
+    assert added == {"cg_expand_card", "cg_expand_artifact", "cg_find_context"}
 
 
 def test_exactly_one_handler_of_each_hook_type():
@@ -199,7 +199,7 @@ def test_the_warned_agent_is_wired_exactly_like_any_other():
         warnings.simplefilter("always")
         agent = build(plugin=graph, manager=SlidingWindowConversationManager(window_size=2))
 
-    assert set(agent.tool_registry.registry) >= {"expand_card", "expand_artifact", "find_context"}
+    assert set(agent.tool_registry.registry) >= {"cg_expand_card", "cg_expand_artifact", "cg_find_context"}
     assert callbacks_for(agent, MessageAddedEvent).count(graph._on_message_added) == 1
     assert callbacks_for(agent, AfterToolCallEvent).count(graph._on_after_tool_call) == 1
     assert callbacks_for(agent, BeforeInvocationEvent).count(graph._on_before_invocation) == 1

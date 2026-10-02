@@ -24,9 +24,9 @@ per-conversation store).
 - `on_turn_complete(messages)` (`engine.py:199`): store each tool return as an artifact under
   `<tool_call_id>_0` (`record_references`) and derive its artifact Cards
   (`derive_and_register_artifacts`, `cards.py:779`). Our own retrieval answers are skipped.
-- `get_tool_schemas()` (`engine.py:233`): `[expand_card, expand_artifact, find_context]`;
-  `handle_tool_call` (`engine.py:239`) dispatches to `expand_card` (`engine.py:257`), `expand_artifact`
-  (`engine.py:287`) and `find_context` (`engine.py:316`), all returning JSON strings.
+- `get_tool_schemas()` (`engine.py:233`): `[cg_expand_card, cg_expand_artifact, cg_find_context]`;
+  `handle_tool_call` (`engine.py:239`) dispatches to `cg_expand_card` (`engine.py:257`), `cg_expand_artifact`
+  (`engine.py:287`) and `cg_find_context` (`engine.py:316`), all returning JSON strings.
 
 ## 2. Integration table
 
@@ -35,7 +35,7 @@ per-conversation store).
 | 1 | `select_context` | `engine.py:171` | `conversation_loop.py:1295` | project closed turns, request-only |
 | 2 | `on_turn_complete` | `engine.py:199` | finalization seam | record artifacts, derive artifact Cards |
 | 3 | `get_tool_schemas` | `engine.py:233` | `agent_init.py:2138` | register the three recovery tools |
-| 4 | `handle_tool_call` | `engine.py:239` | `tool_executor.py:1666` | run expand_card · expand_artifact · find_context |
+| 4 | `handle_tool_call` | `engine.py:239` | `tool_executor.py:1666` | run cg_expand_card · cg_expand_artifact · cg_find_context |
 
 ## 3. The turn
 
@@ -58,7 +58,7 @@ sequenceDiagram
     E->>S: record each tool return as an artifact
     E->>C: derive_and_register_artifacts(state, result)
     Note over M,E: later, to raise folded content back
-    M->>H: expand_card(titles) · find_context(need) · expand_artifact(reference)
+    M->>H: cg_expand_card(titles) · cg_find_context(need) · cg_expand_artifact(reference)
     H->>E: handle_tool_call(...)
     E->>C: resolve_artifact · record_reuse · score descriptions
     E-->>M: the folded turn or artifact, in full (JSON string)
@@ -70,7 +70,7 @@ sequenceDiagram
    `on_turn_complete`, and the projection in `select_context` — the same deterministic inputs (closed
    turns) as the Strands three events.
 2. **Artifact content.** Hermes has no Strands context-manager Stash, so the return's own text is stored
-   under `<tool_call_id>_0` and `expand_artifact` reads it back; a `stash` (the relevance filter's store)
+   under `<tool_call_id>_0` and `cg_expand_artifact` reads it back; a `stash` (the relevance filter's store)
    is the second resolution layer, which is what `hermes-all-three` wires up.
 3. **Frozen choice flattened.** `TurnChoice.by_title` is a `MappingProxyType`; it is flattened to a plain
    dict before the state is carried, and the choice is recomputed each call, so nothing is lost
