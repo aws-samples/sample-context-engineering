@@ -164,7 +164,7 @@ def to_neutral_list_with_sources(
     carrying tool results AND text renders as ``ToolMessage`` objects followed by a ``HumanMessage``
     marked with :data:`ATTACHED_TEXT_KEY`. Read back naively, that marked message would be a fresh user
     turn, and an inner middleware would see the current turn start AT it -- the disclosure fold then
-    treats the turn's own ``get_tool_details`` exchanges as closed and folds them away, so the model
+    treats the turn's own ``ptd_get_tool_details`` exchanges as closed and folds them away, so the model
     never sees its load and reloads forever. The marked text is folded back onto the preceding
     tool-result message instead, restoring the exact neutral message the outer middleware produced.
 

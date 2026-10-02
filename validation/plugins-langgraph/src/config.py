@@ -411,7 +411,7 @@ class Thresholds:
     """Cycles a disclosed tool schema stays resident after its last use."""
 
     top_k: int = 4
-    """Tools exposed per find_tools call."""
+    """Tools exposed per ptd_find_tools call."""
 
     # -- context graph -------------------------------------------------------------
     #
@@ -487,10 +487,10 @@ class GraphTuning:
     across the follow-up questions that usually come right after a retrieval, and a shorter one
     stops a single retrieval from pinning content for the rest of the line."""
     tags_per_card: int = 5
-    """Tags derived per Card, which is what ``find_context`` matches on. Reachable from a sweep
+    """Tags derived per Card, which is what ``cg_find_context`` matches on. Reachable from a sweep
     because the graph's discovery path is only as good as the tags it searches."""
     neighbors_per_candidate: int = 0
-    """``similar`` neighbours ``find_context`` lists under each candidate. ``0`` lists none.
+    """``similar`` neighbours ``cg_find_context`` lists under each candidate. ``0`` lists none.
 
     The edge had no reader before this: measured on the write path, stored with its similarity as the
     weight, omitted from ``_STRUCTURAL_WEIGHTS`` so it propagates no Note, and traversed by no retrieval
@@ -629,7 +629,7 @@ RUN_CONFIGS = {
         notes=(
             "RelevanceFilter alone: an oversized tool result is stored and replaced by a "
             "reranker-scored, verbatim preview plus a reference the model can load in full through "
-            "retrieve_all_context when a question needs every row."
+            "rf_retrieve_all_context when a question needs every row."
         ),
     ),
     "disclosure": RunConfig(
@@ -638,7 +638,7 @@ RUN_CONFIGS = {
         label="Progressive Tool Disclosure only",
         notes=(
             "ProgressiveToolDisclosure alone: full tool schemas are replaced by a lean catalog "
-            "plus find_tools. Note that it does nothing about oversized payloads, so this "
+            "plus ptd_find_tools. Note that it does nothing about oversized payloads, so this "
             "configuration carries the same history mass as the baseline."
         ),
     ),

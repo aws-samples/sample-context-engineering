@@ -25,7 +25,7 @@ you select one, and "all three" is the dedicated composed engine `all-three`. **
 | | Requirement | Why |
 |---|---|---|
 | Python | **3.11 or newer** | the packages' `requires-python` (Hermes requires `>=3.11,<3.15`) |
-| `hermes-agent` | from source | version `0.0.0`, not on PyPI; `pip install "<pkg>[hermes]"` pulls it from GitHub |
+| `hermes-agent` | from source | version `0.0.0`, not on PyPI; the `[hermes]` extra of each package pulls it from GitHub |
 | AWS CLI | **v2** | only to configure and verify credentials |
 
 Bedrock models that must be **enabled in your account**, in the region you use:
@@ -80,7 +80,7 @@ needed.
 Select `context.engine: relevance-filter`. When a tool returns more than `max_result_tokens` (default
 8000) of text, the engine stores the full result and the model sees a marker + a disclaimer with the real
 size + a **verbatim** relevance excerpt + a `[ref: …]`. For an answer that needs every row (a total, a
-max, a count) the model calls `retrieve_all_context` with that reference and a `pattern` or a
+max, a count) the model calls `rf_retrieve_all_context` with that reference and a `pattern` or a
 `max_chunks`/`max_tokens` budget. What it retrieves is dropped from the conversation once the turn ends.
 
 ```python
@@ -91,9 +91,9 @@ engine = RelevanceFilterEngine(max_result_tokens=8_000)
 ## B — progressive tool disclosure
 
 Select `context.engine: progressive-tool-disclosure`. The model sees a one-line-per-tool **catalog** in
-the system message instead of every full schema; it calls `find_tools(need)` to search and
-`get_tool_details(names)` to expand a spec before using it. Expanded tools stay active (not re-summarized)
-and closed `get_tool_details` exchanges are folded out of later requests.
+the system message instead of every full schema; it calls `ptd_find_tools(need)` to search and
+`ptd_get_tool_details(names)` to expand a spec before using it. Expanded tools stay active (not re-summarized)
+and closed `ptd_get_tool_details` exchanges are folded out of later requests.
 
 ```python
 from hermes_progressive_tool_disclosure import ProgressiveToolDisclosureEngine
@@ -109,7 +109,7 @@ provider request, so disclosure here steers the model to the catalog rather than
 
 Select `context.engine: context-graph`. Each closed turn becomes a Card; every request is projected at the
 resolution the current question needs (full / description / title). The model raises folded content back
-with `expand_card(titles)`, `expand_artifact(reference)` and `find_context(need)`. The persisted history
+with `cg_expand_card(titles)`, `cg_expand_artifact(reference)` and `cg_find_context(need)`. The persisted history
 is never deleted.
 
 ```python
@@ -141,10 +141,10 @@ three — this is why the composed engine exists rather than a "wire them yourse
 1. **Order matters.** D must project before B injects the catalog before A rewrites results. The composed
    engine fixes this order; a hand-rolled pipeline in the wrong order folds away context the next stage
    needed.
-2. **The retrieval tools must share one store.** A's filter mints `[ref: …]` tokens; D's `expand_artifact`
+2. **The retrieval tools must share one store.** A's filter mints `[ref: …]` tokens; D's `cg_expand_artifact`
    can only resolve them if it reads **the same** store. `all-three` hands A's store to D as its `stash`.
    Two separate stores → a reference that resolves in neither.
-3. **The two retrieval tools must stay distinct.** `retrieve_all_context` (A) and `expand_artifact` (D)
+3. **The two retrieval tools must stay distinct.** `rf_retrieve_all_context` (A) and `cg_expand_artifact` (D)
    do different jobs; if the model reads them as one it calls the wrong one. They are scoped by name and
    description so it does not.
 

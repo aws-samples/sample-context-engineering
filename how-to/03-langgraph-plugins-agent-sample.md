@@ -123,7 +123,7 @@ Each section below changes only the `middleware=` list of that `create_agent` ca
 `max_result_tokens`, it splits the result into chunks, scores them against the user's question with a
 reranker, and replaces the `ToolMessage` with a marker, a disclaimer and the best chunks verbatim, plus a
 reference to the full content. The payload never enters the history whole. At the end of each run
-(`after_agent`) it deletes its own closed `retrieve_all_context` exchanges from the state.
+(`after_agent`) it deletes its own closed `rf_retrieve_all_context` exchanges from the state.
 
 ```python
 from context_core.relevance import BedrockReranker, FileStore
@@ -149,15 +149,15 @@ agent = create_agent(
 )
 ```
 
-The middleware registers `retrieve_all_context` (turn it off with `include_retrieval_tool=False`). It is
+The middleware registers `rf_retrieve_all_context` (turn it off with `include_retrieval_tool=False`). It is
 scoped to the one question an excerpt cannot answer — one that needs every row — and the disclaimer
 names it, with the reference to pass.
 
 ## B — Progressive tool disclosure
 
 `ProgressiveToolDisclosureMiddleware` rewrites each model call (`wrap_model_call`). Instead of every tool's
-full schema, the model gets a one-line catalog in the system message and two tools, `find_tools` and
-`get_tool_details`. A tool's full spec is sent only after the model asks for it, for `ttl_cycles` calls,
+full schema, the model gets a one-line catalog in the system message and two tools, `ptd_find_tools` and
+`ptd_get_tool_details`. A tool's full spec is sent only after the model asks for it, for `ttl_cycles` calls,
 and closed exchanges of tools the call does not carry are folded out of the messages sent. It pays off with
 many tools; with one it only adds calls.
 
@@ -187,8 +187,8 @@ own `summarizer=` to write them some other way.
 `ContextGraphMiddleware` turns the history into Cards, one per closed turn, and at each model call sends
 every Card at the resolution the current question needs: full content, a Description, or only its Title.
 The rewrite is `request.override(messages=...)`, so it is transient: the persisted state is never trimmed,
-and a Card folded too far is one `expand_card` call away. It also records every tool return as an artifact,
-readable back through `expand_artifact`, and gives the model `find_context` to search earlier turns.
+and a Card folded too far is one `cg_expand_card` call away. It also records every tool return as an artifact,
+readable back through `cg_expand_artifact`, and gives the model `cg_find_context` to search earlier turns.
 
 ```python
 from context_core.graph import EmbeddingSimilarityMatcher
@@ -231,7 +231,7 @@ relevance = RelevanceFilterMiddleware(
 graph = ContextGraphMiddleware(
     matcher=EmbeddingSimilarityMatcher("cohere.embed-multilingual-v3", boto_session=session),
     body_budget=40_000,
-    stash=relevance.stash,  # a [ref: mem_N_...] the filter mints also resolves via expand_artifact
+    stash=relevance.stash,  # a [ref: mem_N_...] the filter mints also resolves via cg_expand_artifact
 )
 disclosure = ProgressiveToolDisclosureMiddleware(
     catalog_chars=80,
@@ -301,8 +301,8 @@ the combination, so the graph warns once at construction when it sees one and st
 ### 5. Hand the graph the filter's `stash`
 
 Strands bridges the two stores through the SDK's context-manager Stash; LangGraph has none. Without
-`stash=relevance.stash`, a reference minted by the filter resolves through `retrieve_all_context` but not
-through the graph's `expand_artifact`, and the model gets an "unreachable" answer when it picks the wrong
+`stash=relevance.stash`, a reference minted by the filter resolves through `rf_retrieve_all_context` but not
+through the graph's `cg_expand_artifact`, and the model gets an "unreachable" answer when it picks the wrong
 tool.
 
 ## Where the effect shows up

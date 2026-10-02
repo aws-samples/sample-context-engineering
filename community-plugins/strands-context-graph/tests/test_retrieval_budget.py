@@ -6,7 +6,7 @@ recursion limit -- 346 calls and 21 minutes in one turn. Nothing in the package 
 covered here:
 
 1. The guidance named every retrieval tool unconditionally, including one the caller had de-registered.
-2. ``expand_card`` took a single title, so N collapsed turns cost N round trips, each one growing the prompt.
+2. ``cg_expand_card`` took a single title, so N collapsed turns cost N round trips, each one growing the prompt.
 3. No retrieval budget existed, and no retrieval miss is an error, so "not found" reads as "try differently".
 """
 
@@ -17,7 +17,7 @@ import pytest
 from strands_context_graph.compaction import guidance
 from strands_context_graph.plugin import ContextGraph
 from strands_context_graph.state import _GraphState
-from strands_context_graph.tools import expand_card, find_context
+from strands_context_graph.tools import cg_expand_card, cg_find_context
 
 from test_tools import card, graph
 
@@ -38,7 +38,7 @@ def _state(*titles: str) -> _GraphState:
         titles: Titles to create Cards for, in order.
 
     Returns:
-        The state, with every Card a Subject Card so ``expand_card`` can raise it.
+        The state, with every Card a Subject Card so ``cg_expand_card`` can raise it.
     """
     return graph(*(card(title, turn=turn) for turn, title in enumerate(titles)))
 
@@ -48,42 +48,42 @@ def _state(*titles: str) -> _GraphState:
 
 def test_the_guidance_names_every_registered_tool() -> None:
     """With all three registered the guidance is unchanged in substance: three ways back."""
-    text = guidance({"expand_card", "expand_artifact", "find_context"})
+    text = guidance({"cg_expand_card", "cg_expand_artifact", "cg_find_context"})
 
-    assert "expand_card" in text
-    assert "expand_artifact" in text
-    assert "find_context" in text
+    assert "cg_expand_card" in text
+    assert "cg_expand_artifact" in text
+    assert "cg_find_context" in text
 
 
 def test_the_guidance_omits_a_de_registered_tool() -> None:
     """The bug this file exists for: advertising a tool the agent cannot call.
 
-    Installing the relevance filter alongside means de-registering ``expand_artifact``, and the model was still told to
+    Installing the relevance filter alongside means de-registering ``cg_expand_artifact``, and the model was told to
     call it -- which is how a turn ends up alternating between paths that cannot answer.
     """
-    text = guidance({"expand_card", "find_context"})
+    text = guidance({"cg_expand_card", "cg_find_context"})
 
-    assert "expand_artifact" not in text
-    assert "expand_card" in text
-    assert "find_context" in text
+    assert "cg_expand_artifact" not in text
+    assert "cg_expand_card" in text
+    assert "cg_find_context" in text
 
 
 def test_the_guidance_says_so_when_nothing_is_registered() -> None:
     """No retrieval tool at all: the model is told to answer from the summary, not left to guess."""
     text = guidance(set())
 
-    assert "expand_card" not in text
+    assert "cg_expand_card" not in text
     assert "answer from it" in text
 
 
-# --- 2. expand_card takes a list ------------------------------------------------------------------
+# --- 2. cg_expand_card takes a list ------------------------------------------------------------------
 
 
 def test_expand_card_raises_every_title_in_one_call() -> None:
     """Three titles, one call, one retrieval cycle -- the point of the batch."""
     state = _state("first", "second", "third")
 
-    answer = expand_card(state, ["first", "second", "third"], cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, ["first", "second", "third"], cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "'first'" in answer
     assert "'second'" in answer
@@ -96,7 +96,7 @@ def test_expand_card_still_accepts_a_bare_string() -> None:
     """The schema says array and a model may send the scalar anyway; answer it rather than correct it."""
     state = _state("first")
 
-    answer = expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "'first'" in answer
     assert "first" in state.choice.by_title
@@ -106,7 +106,7 @@ def test_a_partial_batch_reports_both_halves() -> None:
     """A batch with one bad title raises the good ones and says which title matched nothing."""
     state = _state("first")
 
-    answer = expand_card(state, ["first", "nowhere"], cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, ["first", "nowhere"], cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "'first'" in answer
     assert "'nowhere'" in answer
@@ -119,7 +119,7 @@ def test_a_batch_of_only_bad_titles_changes_no_resolution() -> None:
     state = _state("first")
     before = state.choice
 
-    answer = expand_card(state, ["nowhere", "nothing"], cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, ["nowhere", "nothing"], cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "no earlier turn" in answer
     assert state.choice is before
@@ -127,7 +127,7 @@ def test_a_batch_of_only_bad_titles_changes_no_resolution() -> None:
 
 def test_an_empty_list_asks_for_titles() -> None:
     """A call with nothing in it is answered with what to pass, not with a traceback."""
-    answer = expand_card(_state("first"), [], cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(_state("first"), [], cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "no title given" in answer
 
@@ -140,10 +140,10 @@ def test_the_ceiling_admits_exactly_its_budget() -> None:
     state = _state("first")
 
     for _ in range(2):
-        answer = expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=2)
+        answer = cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=2)
         assert "arrives in full" in answer
 
-    refused = expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=2)
+    refused = cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=2)
 
     assert "already spent" in refused
     assert "answer from what" in refused
@@ -152,10 +152,10 @@ def test_the_ceiling_admits_exactly_its_budget() -> None:
 def test_the_refusal_does_not_spend_more_budget() -> None:
     """A refused call leaves the counter alone, so the message stays truthful however often it is retried."""
     state = _state("first")
-    expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
+    cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
 
     for _ in range(3):
-        expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
+        cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
 
     assert state.retrieval_cycles == 1
 
@@ -163,9 +163,9 @@ def test_the_refusal_does_not_spend_more_budget() -> None:
 def test_the_ceiling_is_shared_across_the_retrieval_tools() -> None:
     """One budget per turn, not one per tool: alternating between them is the behaviour being stopped."""
     state = _state("first")
-    expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
+    cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=1)
 
-    refused = find_context(
+    refused = cg_find_context(
         state,
         "anything",
         matcher=_NeverCalled(),
@@ -183,7 +183,7 @@ def test_none_restores_unbounded_retrieval() -> None:
     state = _state("first")
 
     for _ in range(20):
-        answer = expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=None)
+        answer = cg_expand_card(state, ["first"], cycle=CYCLE, reuse_ttl_cycles=TTL, max_retrieval_cycles=None)
 
     assert "arrives in full" in answer
     assert state.retrieval_cycles == 20

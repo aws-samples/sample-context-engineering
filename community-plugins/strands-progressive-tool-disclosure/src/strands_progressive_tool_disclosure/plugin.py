@@ -1,13 +1,13 @@
 """Progressive tool disclosure: the projection sent on each model call.
 
 Every call carries, in ``tool_specs``, only the tools that are callable on it: the two plugin tools
-(``find_tools`` and ``get_tool_details``), the always-available ones and the ones loaded by
-``get_tool_details`` and still in use. A loaded tool is released after ``ttl_cycles`` cycles without a
+(``ptd_find_tools`` and ``ptd_get_tool_details``), the always-available ones and the ones loaded by
+``ptd_get_tool_details`` and still in use. A loaded tool is released after ``ttl_cycles`` cycles without a
 call, and every call renews it, so a tool used in a stretch stays loaded without reloading and
 ``tool_specs`` still goes back to the mandatory set once the work moves on. In the messages each call
 sends, an exchange of a tool that call does not carry is folded to one sentence -- ``The tool X was
 called and the result was: Y`` -- so the model keeps the evidence without a call shape to repeat, and
-the plugin's own ``get_tool_details`` and ``find_tools`` exchanges are dropped outright. Every
+the plugin's own ``ptd_get_tool_details`` and ``ptd_find_tools`` exchanges are dropped outright. Every
 other tool reaches the model as one line of a catalog in the system prompt -- its name and a summary of
 its description, at most ``catalog_chars`` characters long.
 
@@ -53,10 +53,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-FIND_TOOLS_NAME = "find_tools"
+FIND_TOOLS_NAME = "ptd_find_tools"
 """Name of the search tool. Also the name the projection looks for to decide it can project at all."""
 
-GET_TOOL_DETAILS_NAME = "get_tool_details"
+GET_TOOL_DETAILS_NAME = "ptd_get_tool_details"
 """Name of the loading tool: the one call that puts full specifications into the next projection.
 
 Not ``get_details``: a bare verb-noun that generic is a name a domain tool can already hold, and a
@@ -130,7 +130,7 @@ _PREMATURE_CALL_MESSAGE = (
     + GET_TOOL_DETAILS_NAME
     + "` with [\"{name}\"] first, then call '{name}' with its real parameters."
 )
-"""Cancellation message of a premature call. Names the tool and points at ``get_tool_details``. The guard
+"""Cancellation message of a premature call. Names the tool and points at ``ptd_get_tool_details``. The guard
 does NOT load the tool on the model's behalf: a recovery that loads it would teach the model that calling
 a catalog name directly works, which is the very shortcut the catalog rule forbids."""
 
@@ -166,11 +166,11 @@ The tools listed below are NOT in your tool list, and you MUST NOT call them dir
 are not loaded, and a direct call is rejected without running.
 
 To use any of them, always follow these steps:
-1. Call `{get_tool_details}` with the names you need, as a list, in one call.
+1. Call `{ptd_get_tool_details}` with the names you need, as a list, in one call.
 2. On your next call they are in your tool list with their full parameters. Call them from there.
 3. A tool left unused for a few calls is unloaded again. If a call to it is rejected, repeat step 1.
 
-If no name below fits what you need, call `{find_tools}` with the need in your own words, then go to
+If no name below fits what you need, call `{ptd_find_tools}` with the need in your own words, then go to
 step 1 with the names it returns.
 
 The tools that ARE in your tool list for this call you call directly.
@@ -179,8 +179,8 @@ The tools that ARE in your tool list for this call you call directly.
 """Preamble of the system-prompt catalog: the rule, stated where the model reads the names.
 
 The names are not in ``tool_specs`` at all, so nothing asserts they are callable, and the rule that
-governs them arrives in the same block. The common path is catalog -> ``get_tool_details`` -> call;
-``find_tools`` is the fallback for a need the model cannot map to a listed name.
+governs them arrives in the same block. The common path is catalog -> ``ptd_get_tool_details`` -> call;
+``ptd_find_tools`` is the fallback for a need the model cannot map to a listed name.
 """
 
 
@@ -215,7 +215,7 @@ def _catalog_prompt_block(
     if not lines:
         return ""
 
-    header = _CATALOG_PROMPT_HEADER.format(find_tools=FIND_TOOLS_NAME, get_tool_details=GET_TOOL_DETAILS_NAME)
+    header = _CATALOG_PROMPT_HEADER.format(ptd_find_tools=FIND_TOOLS_NAME, ptd_get_tool_details=GET_TOOL_DETAILS_NAME)
     return header + "\n".join(lines)
 
 
@@ -553,8 +553,8 @@ class _DisclosureState:
             the projection and the call is never mistaken for a guessed call.
         fingerprint: ``(name, description)`` pairs as of the last index build, or ``None`` when the
             index has not been built yet — the value that makes the first projection build it.
-        searches: Cycles this session spent searching: one per ``find_tools`` invocation.
-        loads: Cycles this session spent loading: one per ``get_tool_details`` invocation.
+        searches: Cycles this session spent searching: one per ``ptd_find_tools`` invocation.
+        loads: Cycles this session spent loading: one per ``ptd_get_tool_details`` invocation.
         premature_cancellations: Calls this session cancelled for a schema that was not loaded.
         summary_usage: Calls and tokens the default summarizer spent on this agent's behalf. Empty when
             every description fit the limit, or when a custom summarizer was supplied.
@@ -608,7 +608,7 @@ def _expire(state: _DisclosureState, cycle: int, ttl_cycles: int) -> None:
     """Release every loaded tool idle for more than ``ttl_cycles`` cycles.
 
     Idle means neither loaded nor called: :func:`_renew` runs on both, so a tool used in a stretch of
-    cycles stays loaded without a second ``get_tool_details``, and leaves ``tool_specs`` once the work
+    cycles stays loaded without a second ``ptd_get_tool_details``, and leaves ``tool_specs`` once the work
     moves on. Age is measured against the cycle counter only, so a slow provider call never ages a load.
 
     An exposure at exactly ``cycle - last_used == ttl_cycles`` is kept -- the boundary belongs to the
@@ -813,7 +813,7 @@ def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> 
     becomes a plain sentence -- ``The tool X was called and the result was: Y`` -- which keeps the
     evidence and drops the call shape. Image or document parts of the result are kept as they are.
 
-    The plugin's own ``find_tools`` and ``get_tool_details`` exchanges go entirely, with no sentence: they
+    The plugin's own ``ptd_find_tools`` and ``ptd_get_tool_details`` exchanges go entirely, with no sentence: they
     matter on the call right after them and are dead weight past it.
 
     Only closed turns are folded. The first message and the turn in flight (:func:`_current_turn_start`)
@@ -909,7 +909,7 @@ def _should_passthrough(
       to emit for it, and dropping it would strand the caller.
     - A plugin tool is not in the call. ``init_agent`` returns before the ``_PluginRegistry`` registers
       the vended tools, so the first calls can legitimately arrive without them. Without
-      ``get_tool_details`` the model has no way to load a hidden schema, and without ``find_tools`` no
+      ``ptd_get_tool_details`` the model has no way to load a hidden schema, and without ``ptd_find_tools`` no
       way to find one, so there is nothing to hide.
 
     Args:
@@ -1018,15 +1018,15 @@ class ProgressiveToolDisclosure(Plugin):
     """Send a catalog in the system prompt plus two small tools on each call, instead of every full schema.
 
     Every registered tool stays in the ``ToolRegistry`` and stays callable. What changes is the
-    projection: ``tool_specs`` carries only the tools that are callable on the call -- ``find_tools``,
-    ``get_tool_details``, the tools configured as always available and the tools loaded and not yet
+    projection: ``tool_specs`` carries only the tools that are callable on the call -- ``ptd_find_tools``,
+    ``ptd_get_tool_details``, the tools configured as always available and the tools loaded and not yet
     used -- and every other tool is one line of a catalog appended to the system prompt: its name and a
     summary of its description.
 
-    The flow is catalog -> ``get_tool_details([names])`` -> call. A loaded tool is released after
+    The flow is catalog -> ``ptd_get_tool_details([names])`` -> call. A loaded tool is released after
     ``ttl_cycles`` cycles without a call, and each call renews it, so ``tool_specs`` goes back to the
-    mandatory set once the work moves on. ``find_tools`` stays for a need the model cannot map to a
-    listed name: it searches and lists matches, and loading them is still ``get_tool_details``' job. In
+    mandatory set once the work moves on. ``ptd_find_tools`` stays for a need the model cannot map to a
+    listed name: it searches and lists matches, and loading them is still ``ptd_get_tool_details``' job. In
     the messages a call sends, the exchanges of tools it does not carry are folded to plain sentences.
 
     No failure here leaves the agent without tool specifications. A summary that cannot be produced
@@ -1071,7 +1071,7 @@ class ProgressiveToolDisclosure(Plugin):
             ttl_cycles: Cycles a loaded tool survives without a call. Each call renews it.
             always_available: Names that carry their full specification on every call, skipping the
                 discovery cycle.
-            index: Search implementation behind ``find_tools``. Defaults to :class:`LexicalToolIndex`,
+            index: Search implementation behind ``ptd_find_tools``. Defaults to :class:`LexicalToolIndex`,
                 which needs no network.
             top_k: How many tools one search lists.
 
@@ -1239,13 +1239,13 @@ class ProgressiveToolDisclosure(Plugin):
         return lines
 
     @tool(context=True)
-    async def find_tools(self, need: str, tool_context: ToolContext) -> str:
+    async def ptd_find_tools(self, need: str, tool_context: ToolContext) -> str:
         """Search for tools that can do what you need, when no name in the tool catalog fits.
 
         This only finds tools; it does not load them. It answers with matching tool names and one line
-        about each. To use any of them, call `get_tool_details` with their names, then call them.
+        about each. To use any of them, call `ptd_get_tool_details` with their names, then call them.
 
-        If a name in the catalog already fits what you need, skip this and call `get_tool_details`
+        If a name in the catalog already fits what you need, skip this and call `ptd_get_tool_details`
         directly.
 
         Args:
@@ -1294,12 +1294,12 @@ class ProgressiveToolDisclosure(Plugin):
         if not lines:
             return _NO_MATCH_GUIDANCE
 
-        # Names and summaries only: nothing is exposed here. Loading is get_tool_details' one job, so
+        # Names and summaries only: nothing is exposed here. Loading is ptd_get_tool_details' one job, so
         # the model always takes the same path to a schema whether it started from the catalog or here.
         return "\n".join([_MATCHES_HEADER, *lines])
 
     @tool(context=True)
-    async def get_tool_details(self, names: list[str], tool_context: ToolContext) -> str:
+    async def ptd_get_tool_details(self, names: list[str], tool_context: ToolContext) -> str:
         """Load the full parameters of one or more tools from the catalog, so you can call them.
 
         Pass every tool you are about to need in one call. They arrive complete in your tool list on
@@ -1307,7 +1307,7 @@ class ProgressiveToolDisclosure(Plugin):
         again with its name.
 
         Args:
-            names: Exact tool names, as written in the catalog or in a `find_tools` result.
+            names: Exact tool names, as written in the catalog or in a `ptd_find_tools` result.
             tool_context: Injected by the framework. Not user-facing.
 
         Returns:
@@ -1351,7 +1351,7 @@ class ProgressiveToolDisclosure(Plugin):
         Whether the schema was visible is read off ``state.projected`` -- the names the last projection
         actually carried -- rather than off ``exposed``, which may have expired since.
 
-        The call is cancelled with a message pointing at ``get_tool_details``, and nothing is loaded on
+        The call is cancelled with a message pointing at ``ptd_get_tool_details``, and nothing is loaded on
         the model's behalf: a recovery that loaded the tool would teach the model that calling a catalog
         name directly works.
 

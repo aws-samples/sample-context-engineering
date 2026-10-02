@@ -60,9 +60,9 @@ _PREAMBLE = "The turns above left this call in collapsed form; their numeric lin
 """Opens the guidance. States what happened, before naming what can be done about it."""
 
 _RETRIEVAL_PHRASES = {
-    "expand_card": "call expand_card with a title to get that turn's messages back",
-    "expand_artifact": "call expand_artifact with a reference to read an artifact",
-    "find_context": "call find_context with what you need to search the turns by description",
+    "cg_expand_card": "call cg_expand_card with a title to get that turn's messages back",
+    "cg_expand_artifact": "call cg_expand_artifact with a reference to read an artifact",
+    "cg_find_context": "call cg_find_context with what you need to search the turns by description",
 }
 """What to say about each retrieval tool, keyed by the tool's registered name.
 
@@ -262,7 +262,7 @@ def _evidence_fragments(card: Card, budget: int) -> list[str]:
     The budget is correctness, not optimization. ``Card.numeric_lines`` holds every line of the turn that carried a
     number, hundreds when a tool returned a table. Emitted whole they read as complete while being drawn from the
     offloader's preview, so the largest value among them is the largest of a subset, not of the table. The ceiling plus
-    the omission count turns that silent subset into a gap the model can close with ``expand_artifact`` (Req. 4.6).
+    the omission count turns that silent subset into a gap the model can close with ``cg_expand_artifact`` (Req. 4.6).
 
     Args:
         card: The Card whose evidence left the call. Read only.

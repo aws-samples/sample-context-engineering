@@ -3,7 +3,7 @@
 The Card model, scan, scoring, matcher and per-call projection live in ``context_core.graph``; this
 package holds only the ``ContextEngine`` implementation (``select_context`` projecting the message list,
 ``on_turn_complete`` recording a tool return as an addressable artifact), the
-``expand_card`` / ``expand_artifact`` / ``find_context`` tools, the engine-held graph state and
+``cg_expand_card`` / ``cg_expand_artifact`` / ``cg_find_context`` tools, the engine-held graph state and
 reference store, and the Hermes OpenAI-message adapter. See :mod:`hermes_context_graph.engine`.
 """
 

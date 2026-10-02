@@ -1,8 +1,8 @@
-"""The artifact path: what a tool return is stored as, and what ``expand_artifact`` answers with.
+"""The artifact path: what a tool return is stored as, and what ``cg_expand_artifact`` answers with.
 
 The half of the Strands plugin the binding did not have. Three things are asserted here and nowhere else:
 the ``wrap_tool_call``/``awrap_tool_call`` pair records a tool return in the conversation's reference store
-and derives the artifact Card of any reference the return names; ``expand_artifact`` reads that store whole,
+and derives the artifact Card of any reference the return names; ``cg_expand_artifact`` reads that store whole,
 by line range and by pattern, with the Strands plugin's own messages for every miss; and
 ``include_artifact_tool=False`` leaves the tool unregistered, which the guidance block then stops
 advertising on its own.
@@ -88,7 +88,7 @@ def middleware_with_stored_artifact(text: str = ARTIFACT) -> tuple[ContextGraphM
 def read(middleware: ContextGraphMiddleware, state: GraphState, reference: str, **kwargs) -> str:
     """Drive the async artifact body from a sync test, the way the sync tool body does."""
     store = middleware._store_for("")
-    return asyncio.run(middleware.expand_artifact(state, store, reference, **kwargs))
+    return asyncio.run(middleware.cg_expand_artifact(state, store, reference, **kwargs))
 
 
 # ---- the write half: the store and the artifact Card ----------------------------------------------
@@ -139,7 +139,7 @@ def test_the_middlewares_own_answers_are_not_stored():
     """
     middleware = ContextGraphMiddleware(matcher=MockMatcher())
 
-    for name in ("expand_card", "expand_artifact", "find_context"):
+    for name in ("cg_expand_card", "cg_expand_artifact", "cg_find_context"):
         middleware.wrap_tool_call(request_for(name=name), lambda _r: returned("retrieval prose"))
 
     assert len(middleware._store_for("")) == 0
@@ -197,7 +197,7 @@ def test_a_tool_call_seen_before_any_projection_still_stores_its_return():
     assert asyncio.run(middleware._store_for("").retrieve("tc9_0")) == ARTIFACT
 
 
-# ---- the read half: expand_artifact ---------------------------------------------------------------
+# ---- the read half: cg_expand_artifact ---------------------------------------------------------------
 
 
 def test_a_whole_read_returns_the_content_verbatim_behind_the_cost_notice():
@@ -240,7 +240,7 @@ def test_a_malformed_line_range_is_named_back_in_the_strands_words():
     answer = read(middleware, graph, "tc9_0", line_range=line_range)
 
     assert answer == (
-        f"expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
+        f"cg_expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
         '{"start": <int>, "end": <int>}, 1-indexed and inclusive'
     )
 
@@ -251,7 +251,7 @@ def test_a_line_range_outside_the_content_carries_the_helpers_own_refusal():
 
     answer = read(middleware, graph, "tc9_0", line_range={"start": 900, "end": 950})
 
-    assert answer.startswith("expand_artifact | reference 'tc9_0' | ")
+    assert answer.startswith("cg_expand_artifact | reference 'tc9_0' | ")
     assert "beyond content length" in answer
 
 
@@ -267,7 +267,7 @@ def test_a_reference_nothing_holds_is_named_back_as_a_miss():
     answer = read(middleware, graph, "no-such-reference")
 
     assert answer == (
-        "expand_artifact | no artifact storage holds reference 'no-such-reference' on this agent | nothing "
+        "cg_expand_artifact | no artifact storage holds reference 'no-such-reference' on this agent | nothing "
         "was ever offloaded under that reference, which means the full results are already in the "
         "conversation"
     )
@@ -283,7 +283,7 @@ def test_non_textual_content_is_reported_without_a_media_type():
     answer = read(middleware, GraphState(), "tc9_0")
 
     assert answer == (
-        "expand_artifact | reference 'tc9_0' holds non-textual content | line_range and pattern do not "
+        "cg_expand_artifact | reference 'tc9_0' holds non-textual content | line_range and pattern do not "
         "apply to it, and it cannot be returned as text"
     )
 
@@ -314,7 +314,7 @@ def test_the_retrieval_budget_refuses_expand_artifact_like_the_other_two():
 
     assert "whole artifact" in first
     assert second == (
-        "expand_artifact | this turn has already spent its 1 retrieval calls | no further recovery is "
+        "cg_expand_artifact | this turn has already spent its 1 retrieval calls | no further recovery is "
         "available on this turn: answer from what the summary and the messages already give you, and state "
         "plainly which part you could not verify"
     )
@@ -325,7 +325,7 @@ def test_the_retrieval_budget_refuses_expand_artifact_like_the_other_two():
 def test_the_tool_answers_through_both_of_its_bodies():
     """``invoke`` and ``ainvoke`` reach the same answer: a coroutine-only tool would refuse the first."""
     middleware, _ = middleware_with_stored_artifact()
-    artifact_tool = {each.name: each for each in middleware.tools}["expand_artifact"]
+    artifact_tool = {each.name: each for each in middleware.tools}["cg_expand_artifact"]
     state = {"messages": [], "context_graph": GraphState()}
 
     sync_command = artifact_tool.invoke({"reference": "tc9_0", "runtime": runtime_for(state, "r1")})
@@ -347,7 +347,7 @@ def test_the_tool_answers_through_both_of_its_bodies():
 def test_the_model_reads_the_strands_description_verbatim():
     """The text that travels in the tool spec is the Strands docstring, ``tool_context`` renamed."""
     middleware = ContextGraphMiddleware(matcher=MockMatcher())
-    artifact_tool = {each.name: each for each in middleware.tools}["expand_artifact"]
+    artifact_tool = {each.name: each for each in middleware.tools}["cg_expand_artifact"]
 
     description = artifact_tool.description
     assert description.startswith(
@@ -362,7 +362,7 @@ def test_include_artifact_tool_false_leaves_the_tool_unregistered():
     """Excluded rather than registered and then removed, and the other two are unaffected."""
     middleware = ContextGraphMiddleware(matcher=MockMatcher(), include_artifact_tool=False)
 
-    assert [each.name for each in middleware.tools] == ["expand_card", "find_context"]
+    assert [each.name for each in middleware.tools] == ["cg_expand_card", "cg_find_context"]
 
 
 @pytest.mark.parametrize("value", [1, "yes", None])
@@ -376,8 +376,8 @@ def test_the_guidance_names_the_artifact_tool_when_it_is_registered():
     graph_on = ContextGraphMiddleware(matcher=MockMatcher())
     graph_off = ContextGraphMiddleware(matcher=MockMatcher(), include_artifact_tool=False)
 
-    assert "expand_artifact" in graph_on._thresholds.retrieval_tools
-    assert "expand_artifact" not in graph_off._thresholds.retrieval_tools
+    assert "cg_expand_artifact" in graph_on._thresholds.retrieval_tools
+    assert "cg_expand_artifact" not in graph_off._thresholds.retrieval_tools
 
 
 def test_the_search_helper_is_registered_as_a_host_symbol():
@@ -437,7 +437,7 @@ def scripted_agent() -> tuple[object, ScriptedChatModel, ContextGraphMiddleware]
                 tool_calls=[
                     {
                         "id": "read-1",
-                        "name": "expand_artifact",
+                        "name": "cg_expand_artifact",
                         "args": {"reference": "data-1_0", "line_range": {"start": 7, "end": 8}},
                     }
                 ],
@@ -462,7 +462,7 @@ def assert_artifact_was_read(final: dict, middleware: ContextGraphMiddleware) ->
         for message in final["messages"]
         if isinstance(message, ToolMessage) and message.tool_call_id == "read-1"
     ]
-    assert answers, "the agent never produced an expand_artifact answer"
+    assert answers, "the agent never produced an cg_expand_artifact answer"
     assert "line 7: value 700 reais" in answers[0]
     assert "line 9: value 900 reais" not in answers[0]
     assert "data-1_0" in middleware._store_for("")
@@ -544,12 +544,12 @@ def test_expand_artifact_falls_back_to_the_stash():
             raise KeyError(reference)
 
     middleware = ContextGraphMiddleware(stash=_Stash())
-    answer = asyncio.run(middleware.expand_artifact(GraphState(), middleware._store_for(""), "mem_1_tc1_0"))
+    answer = asyncio.run(middleware.cg_expand_artifact(GraphState(), middleware._store_for(""), "mem_1_tc1_0"))
     assert "from the stash" in answer
 
 
 def test_two_graph_tools_called_in_parallel_do_not_fail_the_step():
-    """Regression from the live all arm: expand_artifact beside find_context in one AIMessage made two
+    """Regression from the live all arm: cg_expand_artifact beside cg_find_context in one AIMessage made two
     writes to ``context_graph`` in one step, and LangGraph raised InvalidUpdateError for the turn."""
     from langchain.agents import create_agent
 
@@ -560,8 +560,8 @@ def test_two_graph_tools_called_in_parallel_do_not_fail_the_step():
             AIMessage(
                 content="",
                 tool_calls=[
-                    {"id": "par-1", "name": "expand_artifact", "args": {"reference": "data-1_0"}},
-                    {"id": "par-2", "name": "find_context", "args": {"need": "costs"}},
+                    {"id": "par-1", "name": "cg_expand_artifact", "args": {"reference": "data-1_0"}},
+                    {"id": "par-2", "name": "cg_find_context", "args": {"need": "costs"}},
                 ],
                 id="p2",
             ),

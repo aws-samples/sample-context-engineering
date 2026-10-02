@@ -8,18 +8,18 @@ All line references are into
 > **Default mode.** `include_retrieval_tool` defaults to **`True`** (`plugin.py:286`).
 > In the default configuration the turn is `llm -> tool -> filtered result (+ disclaimer + reference)
 > -> llm`, with a retrieval branch the model may take when the question needs the whole result. The
-> store is written, a `[ref: ...]` token is emitted, and `retrieve_all_context` is registered
+> store is written, a `[ref: ...]` token is emitted, and `rf_retrieve_all_context` is registered
 > (`plugin.py:403`). Passing `include_retrieval_tool=False` is the **opt-out**: no store, no reference
 > token, no tool (`plugin.py:337-340`).
 >
-> **What a retrieval costs is bounded to one turn.** A closed `retrieve_all_context` exchange is
+> **What a retrieval costs is bounded to one turn.** A closed `rf_retrieve_all_context` exchange is
 > removed from `agent.messages` when the invocation ends (`_on_after_invocation`, `plugin.py:589`), so
 > a read back is paid for in the turn that asked for it and not re-sent on every later call.
 >
 > **Storage never gates filtering.** Chunking, reranking, selection and the rewrite of `event.result`
 > run identically with or without a store (`_filter_and_rewrite`, `plugin.py:714`). The store is a
 > step that runs first (`_store_raw`, `plugin.py:675`) and exists only to serve
-> `retrieve_all_context`.
+> `rf_retrieve_all_context`.
 
 ---
 
@@ -27,7 +27,7 @@ All line references are into
 
 The plugin registers **two** SDK hooks — `AfterToolCallEvent` (`plugin.py:611`, decorated at
 `plugin.py:610`) and `AfterInvocationEvent` (`plugin.py:589`, decorated at `plugin.py:588`) — and one
-`@tool`, `retrieve_all_context` (`plugin.py:403`), which is registered unless the caller opts out.
+`@tool`, `rf_retrieve_all_context` (`plugin.py:403`), which is registered unless the caller opts out.
 
 After any tool call completes, the first hook wraps the result as a message and asks the agent's own
 model to count its tokens (`plugin.py:641`); if the count exceeds `max_result_tokens` (default 8,000)
@@ -49,7 +49,7 @@ verbatim into the bound `store` (`plugin.py:704`) before anything is rewritten, 
 names content that is already there. When exactly one scorable sub-block was stored whole, the chunk
 ranking is memoized against its reference (`self._rankings`, `plugin.py:748`) so a later `max_chunks`
 read needs no second scoring call. The marker then gains a trailing `[ref: ...]`/`[refs: ...]` token
-(`plugin.py:752-754`) the model passes back to `retrieve_all_context` to load the whole result by
+(`plugin.py:752-754`) the model passes back to `rf_retrieve_all_context` to load the whole result by
 span, pattern, chunk count or token budget.
 
 **Opt-out mode (`include_retrieval_tool=False`).** `_store_raw` returns an empty list at once
@@ -74,8 +74,8 @@ the constructor (`plugin.py:319`) so it sees the fully built instance.
 | # | Attachment | Registered at | Mechanism / order | Reads | Mutates |
 |---|-----------|---------------|-------------------|-------|---------|
 | 1 | `AfterToolCallEvent` handler — `_on_after_tool_call` | `plugin.py:611`, decorated at `plugin.py:610` | Subscribed via `@hook`; the event type is inferred from the handler's type hint resolved at decoration time (`plugin.py:19`). **No explicit `order` value is set** — a bare `@hook` with no arguments. | `cancel_message` (`plugin.py:622`); `tool_use` name (`plugin.py:627`), `toolUseId` (`plugin.py:636`), `input` (`plugin.py:392`); `selected_tool` + `.delegate` (`plugin.py:632`); `result` (`plugin.py:635`); `agent.messages` via `_latest_question` (`plugin.py:74`); `count_tokens` (`plugin.py:641`) | `event.result` — reassigned to a new `ToolResult` (`plugin.py:768`). The docstring states this is the only field ever written — `result` (`plugin.py:619`). |
-| 2 | `AfterInvocationEvent` handler — `_on_after_invocation` | `plugin.py:589`, decorated at `plugin.py:588` | Subscribed via the same bare `@hook`; `AfterInvocationEvent` is imported at runtime for that inference (`plugin.py:22`). Fires when the invocation ends, which is **before** the next user message closes the turn. | `self._include_retrieval_tool` (`plugin.py:602`); `event.agent.messages` (`plugin.py:604`); `retrieve_all_context.tool_name` (`plugin.py:605`) | `agent.messages` **in place** — `messages[:] = kept` (`plugin.py:608`), the new list built by `_drop_tool_exchanges` (`plugin.py:132`). Nothing else. |
-| 3 | `retrieve_all_context` tool — registered by default | `plugin.py:403`, decorated `@tool(context=True)` at `plugin.py:402` | Auto-discovered into `self._tools` by the base `Plugin` scan, and **removed again** in `init_agent` only when `include_retrieval_tool=False` (`plugin.py:337-340`). `context=True` injects `tool_context: ToolContext`. | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; the bound `store` (`plugin.py:475`); `_max_result_tokens` (`plugin.py:499`); `self._rankings` (`plugin.py:540`). | Nothing in history/state. Returns content to the model; does **not** write `event.result` or the store. |
+| 2 | `AfterInvocationEvent` handler — `_on_after_invocation` | `plugin.py:589`, decorated at `plugin.py:588` | Subscribed via the same bare `@hook`; `AfterInvocationEvent` is imported at runtime for that inference (`plugin.py:22`). Fires when the invocation ends, which is **before** the next user message closes the turn. | `self._include_retrieval_tool` (`plugin.py:602`); `event.agent.messages` (`plugin.py:604`); `rf_retrieve_all_context.tool_name` (`plugin.py:605`) | `agent.messages` **in place** — `messages[:] = kept` (`plugin.py:608`), the new list built by `_drop_tool_exchanges` (`plugin.py:132`). Nothing else. |
+| 3 | `rf_retrieve_all_context` tool — registered by default | `plugin.py:403`, decorated `@tool(context=True)` at `plugin.py:402` | Auto-discovered into `self._tools` by the base `Plugin` scan, and **removed again** in `init_agent` only when `include_retrieval_tool=False` (`plugin.py:337-340`). `context=True` injects `tool_context: ToolContext`. | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; the bound `store` (`plugin.py:475`); `_max_result_tokens` (`plugin.py:499`); `self._rankings` (`plugin.py:540`). | Nothing in history/state. Returns content to the model; does **not** write `event.result` or the store. |
 
 **Conditional de-registration is the opt-out path.** `init_agent` drops the auto-discovered tool by
 matching `retrieval_tool_name` (`plugin.py:339`) and rebuilding `_tools` without it (`plugin.py:340`).
@@ -117,7 +117,7 @@ sequenceDiagram
     Agent->>RF: AfterToolCallEvent  _on_after_tool_call(event)  plugin.py:611
 
     RF->>RF: guard 1 cancel_message is None?  plugin.py:622
-    RF->>RF: guard 2 name != retrieve_all_context?  plugin.py:627
+    RF->>RF: guard 2 name != rf_retrieve_all_context?  plugin.py:627
     RF->>RF: guard 3 not delegating _AgentAsTool?  plugin.py:632
     RF->>Model: count_tokens([{toolResult}])  plugin.py:641
     Model-->>RF: token_count
@@ -168,7 +168,7 @@ the disclaimer takes its no-reference branch (`plugin.py:121-122`). Everything b
 
 ---
 
-## 4. The retrieval path — `retrieve_all_context`
+## 4. The retrieval path — `rf_retrieve_all_context`
 
 The tool loads the **whole** of a result the filter cut to an excerpt, for the one question an excerpt
 cannot answer: a maximum, minimum, total, count, average, ranking or any comparison across all of it
@@ -202,8 +202,8 @@ sequenceDiagram
     participant Store as Store/Offloader
     participant Search as search.py
 
-    Model->>Agent: tool_use retrieve_all_context(reference, pattern?, line_range?,<br/>context_lines?, max_chunks?, max_tokens?)
-    Agent->>RF: retrieve_all_context(...)  plugin.py:403
+    Model->>Agent: tool_use rf_retrieve_all_context(reference, pattern?, line_range?,<br/>context_lines?, max_chunks?, max_tokens?)
+    Agent->>RF: rf_retrieve_all_context(...)  plugin.py:403
     RF->>RF: max_chunks / max_tokens integer >= 1?  plugin.py:471-473
     RF->>Store: await store.retrieve(reference)  plugin.py:480
     alt no store configured, or reference unknown (KeyError)
@@ -290,9 +290,9 @@ sequenceDiagram
         RF-->>Agent: return, history untouched  plugin.py:602
     else tool registered
         RF->>Hist: kept = _drop_tool_exchanges(messages, tool_name)  plugin.py:605 / :132
-        loop each assistant message with a closed retrieve_all_context call
+        loop each assistant message with a closed rf_retrieve_all_context call
             Note right of RF: closed means every toolUseId of that call is answered<br/>in the message right after  plugin.py:158-161
-            alt all tool calls of the message are retrieve_all_context
+            alt all tool calls of the message are rf_retrieve_all_context
                 RF->>RF: drop the assistant message AND the result message whole<br/>roles keep alternating  plugin.py:163-164
             else mixed with other tool calls
                 RF->>RF: drop only those toolUse / toolResult blocks  plugin.py:174-179
@@ -328,7 +328,7 @@ list object untouched.
    empty-selection guard that keeps the best chunk anyway when no `candidates` clear the threshold
    (`preview.py:299`), but "best" may still be wrong.
 4. **Notices the gap markers and the trailing `[ref: ...]`/`[refs: ...]` token, and calls
-   `retrieve_all_context` with that exact reference.** These are the affordances telling the model
+   `rf_retrieve_all_context` with that exact reference.** These are the affordances telling the model
    there is more and how to reach it (`_format_gap_marker`, `preview.py:322`; token built at
    `plugin.py:753`; the disclaimer names the call and the reference at `plugin.py:126`). *Fails if:*
    the model does not parse the reference token, or fabricates one that was never issued (→
@@ -352,7 +352,7 @@ bound**, not an exact tally.
 With `include_retrieval_tool=False` assumptions 4 and 5 are moot and 1–3 stand unchanged, and the
 disclaimer's other branch asks for one thing: **say that the result was filtered instead of computing
 the aggregate from the excerpt** (`plugin.py:122`). *Fails if:* the model aggregates anyway. There is
-no recovery affordance — `retrieve_all_context` is not in its tool list (`plugin.py:340`) and no
+no recovery affordance — `rf_retrieve_all_context` is not in its tool list (`plugin.py:340`) and no
 reference was ever issued (`plugin.py:752`) — so the failure is unrecoverable within the turn. Gap
 markers (`_GAP_MARKER`, `preview.py:318`) are still emitted, so the model can see content is missing;
 the honest outcome is that it states the result was truncated rather than inventing a reference.
@@ -375,7 +375,7 @@ which is what keeps a context graph from carding the retrieval (`plugin.py:594-5
 Built at `plugin.py:750-754`, quoted exactly:
 
 ```python
-disclaimer = _disclaimer(token_count, stats, references, self.retrieve_all_context.tool_name)
+disclaimer = _disclaimer(token_count, stats, references, self.rf_retrieve_all_context.tool_name)
 marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n{disclaimer}\n\n{preview}"
 if references:
     token = f"[ref: {references[0]}]" if len(references) == 1 else f"[refs: {', '.join(references)}]"
@@ -411,7 +411,7 @@ the numbers come from the `PreviewStats` the selection returned (`preview.py:43`
 ```text
 [Relevance: tool result, ~8,192 tokens]
 [Filtered: this is an EXCERPT, not the whole result | original: 1,204 lines, 5 chunks | shown: 2 chunk(s), lines 1-240, 601-840]
-An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any comparison across the whole result -- cannot be computed from this excerpt. For such an answer, call `retrieve_all_context` with reference "mem_1_tool-123_0" and either a `pattern` (regex) that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole result (5 chunks, ~8,192 tokens). What you retrieve is removed from the conversation once you have answered, so state the figures you relied on in the answer.
+An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any comparison across the whole result -- cannot be computed from this excerpt. For such an answer, call `rf_retrieve_all_context` with reference "mem_1_tool-123_0" and either a `pattern` (regex) that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole result (5 chunks, ~8,192 tokens). What you retrieve is removed from the conversation once you have answered, so state the figures you relied on in the answer.
 
 <the verbatim excerpt, with [... N lines omitted ...] gap markers>
 
@@ -449,7 +449,7 @@ markers are emitted in **both** modes, and also inside a `max_chunks` retrieval,
 `_assemble_preview` renders the chosen chunks with a marker for every span left out
 (`plugin.py:548`).
 
-### 6c. `retrieve_all_context` description / docstring
+### 6c. `rf_retrieve_all_context` description / docstring
 
 The `@tool` description is the method docstring (`plugin.py:413-469`). The model-facing body, quoted
 exactly:
@@ -501,11 +501,11 @@ In the opt-out the model sees none of it: the tool is dropped at bind time (`plu
 
 There is **no hand-written `inputSchema` literal in source**; the schema is derived by the `@tool`
 decorator (`plugin.py:402`) from the method signature and type hints. The signature — `def
-retrieve_all_context` (`plugin.py:403`) — quoted exactly:
+rf_retrieve_all_context` (`plugin.py:403`) — quoted exactly:
 
 ```python
 @tool(context=True)
-async def retrieve_all_context(
+async def rf_retrieve_all_context(
     self,
     reference: str,
     tool_context: ToolContext,
@@ -596,7 +596,7 @@ Truncation suffixes are appended by `_truncate` (`search.py:92`) from the messag
 **The plugin does NOT write to the system prompt.** There is no system-prompt read or write anywhere
 in the source — no `system_prompt` reference, no `MessageAddedEvent`/system-message injection. The
 only text the plugin injects into the conversation is via `event.result` (§6a–6b) and via
-`retrieve_all_context` return values (§6c–6e) — and the latter is removed again when the invocation
+`rf_retrieve_all_context` return values (§6c–6e) — and the latter is removed again when the invocation
 ends (`plugin.py:605`).
 
 ---
@@ -607,10 +607,10 @@ ends (`plugin.py:605`).
 
 | Parameter | Default | Source | Controls |
 |-----------|---------|--------|----------|
-| `store` | `None` → an `InMemoryStore` is created at agent bind, since the retrieval tool is on by default | `plugin.py:333-334` | Backend for the raw sub-blocks, used only by `retrieve_all_context`. Filtering never depends on it; with the tool off no store exists (`plugin.py:690`). |
+| `store` | `None` → an `InMemoryStore` is created at agent bind, since the retrieval tool is on by default | `plugin.py:333-334` | Backend for the raw sub-blocks, used only by `rf_retrieve_all_context`. Filtering never depends on it; with the tool off no store exists (`plugin.py:690`). |
 | `max_result_tokens` | `8_000` — `_DEFAULT_MAX_RESULT_TOKENS` | `plugin.py:51` | Token threshold above which a textual result is filtered; also the default bound on a retrieval response (`×4` chars, `plugin.py:499`). Must be `> 0` or `ValueError` (`plugin.py:305`). |
 | `config` | `None` → `{}`, typed by `RelevanceConfig` | `plugin.py:188` | Preview-tuning dict (below); read key-by-key with `dict.get`. |
-| `include_retrieval_tool` | **`True`** | `plugin.py:286` | Stores the raw content and registers `retrieve_all_context`. `False` drops the tool at bind time — `retrieval_tool_name` (`plugin.py:339`) — skips the store (`plugin.py:690`), suppresses the reference token (`plugin.py:752`), and short-circuits the end-of-turn removal (`plugin.py:602`). Filtering runs the same either way. |
+| `include_retrieval_tool` | **`True`** | `plugin.py:286` | Stores the raw content and registers `rf_retrieve_all_context`. `False` drops the tool at bind time — `retrieval_tool_name` (`plugin.py:339`) — skips the store (`plugin.py:690`), suppresses the reference token (`plugin.py:752`), and short-circuits the end-of-turn removal (`plugin.py:602`). Filtering runs the same either way. |
 | `should_filter` | `None` | `plugin.py:287` | Callback `(tool_name, token_count, **kwargs) -> bool`, sync or async; consulted only for over-threshold results (`plugin.py:648`); raising fails **open** (filters anyway). |
 
 `name = "strands-community:relevance-filter"` (`plugin.py:276`) — the plugin name, overridable on a
@@ -676,8 +676,8 @@ References in this section are into `validation/community-plugin-A-B-D/src/`.
 | Passed to the plugin | `include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` | `runner.py:315` |
 | Plugin construction | `RelevanceFilter(...)` | `runner.py:308` |
 | Store | `FileStore` under `.artifacts/<run tag>/<config>`, namespaced by tag so two concurrent runs cannot serve each other's sub-blocks | `runner.py:311`, `storage_root` at `runner.py:297`, `ARTIFACTS_DIR` at `config.py:566` |
-| Disclosure passthrough | `retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's retrieval tools plus the literal `list_accounts` | `runner.py:379`, `list_accounts` at `runner.py:381` |
-| Arm description | "an oversized tool result is stored and replaced by a reranker-scored, verbatim preview plus a reference the model can load in full through `retrieve_all_context` when a question needs every row" | `config.py:621-623` |
+| Disclosure passthrough | `rf_retrieve_all_context` is deliberately **not** in `always_available` — the list is the graph's retrieval tools plus the literal `list_accounts` | `runner.py:379`, `list_accounts` at `runner.py:381` |
+| Arm description | "an oversized tool result is stored and replaced by a reranker-scored, verbatim preview plus a reference the model can load in full through `rf_retrieve_all_context` when a question needs every row" | `config.py:621-623` |
 
 Two consequences for reading results:
 

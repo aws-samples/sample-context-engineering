@@ -11,7 +11,7 @@ Three things are asserted here that no other test file states:
 - **No model call, on any path.** The matcher is a table and the agent stub trips on every attribute a model call would
   travel through, so reaching for one fails the test rather than quietly costing a token (Requirement 12.13).
 
-``find_context``'s bound, floor and ordering are asserted with a table matcher whose values are chosen so the resulting
+``cg_find_context``'s bound, floor and ordering are asserted with a table matcher whose values make the resulting
 order is decidable by hand, including the two tie-breaks: the turn ordinal, then the Title.
 """
 
@@ -22,7 +22,7 @@ import pytest
 
 from strands_context_graph.state import Card, CardChoice, ToolPair, TurnChoice, _GraphState
 from strands_context_graph.store import InMemoryReferenceStore, absent_message, non_textual_message, unknown_message
-from strands_context_graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
+from strands_context_graph.tools import _MAX_CANDIDATES, cg_expand_artifact, cg_expand_card, cg_find_context
 
 CYCLE = 7
 """One cycle counter, so an expiry cycle is checkable by hand."""
@@ -115,13 +115,13 @@ def graph(*cards: Card, full_pass: bool = False) -> _GraphState:
     return state
 
 
-# ---- expand_card (Requirements 12.2, 12.3, 12.14, 13.1, 13.5, 13.8) ----
+# ---- cg_expand_card (Requirements 12.2, 12.3, 12.14, 13.1, 13.5, 13.8) ----
 
 
 def test_a_named_card_is_raised_on_both_axes_for_the_rest_of_the_turn() -> None:
     state = graph(card("first", turn=0), card("second", turn=1))
 
-    answer = expand_card(state, "second", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, "second", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "'second'" in answer
     assert state.choice.by_title["second"] == CardChoice(dialogue="full", evidence="full")
@@ -134,7 +134,7 @@ def test_a_named_card_is_raised_on_both_axes_for_the_rest_of_the_turn() -> None:
 def test_the_rewritten_choice_stays_frozen() -> None:
     state = graph(card("first"))
 
-    expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     with pytest.raises(TypeError):
         state.choice.by_title["anything"] = None  # type: ignore[index]
@@ -144,7 +144,7 @@ def test_a_full_pass_is_left_alone_so_delivery_keeps_its_identity_short_circuit(
     state = graph(card("first"), full_pass=True)
     before = state.choice
 
-    expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert state.choice is before
     assert state.choice.full_pass is True
@@ -156,7 +156,7 @@ def test_an_unknown_title_answers_without_changing_a_resolution_or_recording_a_n
     state = graph(card("first"))
     before = state.choice
 
-    answer = expand_card(state, "nowhere", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, "nowhere", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "'nowhere'" in answer
     assert state.choice is before
@@ -167,7 +167,7 @@ def test_an_artifact_title_is_not_a_subject_card() -> None:
     state = graph(card("artifact-1", kind="artifact"))
     before = state.choice
 
-    answer = expand_card(state, "artifact-1", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_expand_card(state, "artifact-1", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "no earlier turn" in answer
     assert state.choice is before
@@ -177,8 +177,8 @@ def test_an_artifact_title_is_not_a_subject_card() -> None:
 def test_a_repeat_request_restarts_the_countdown() -> None:
     state = graph(card("first"))
 
-    expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
-    expand_card(state, "first", cycle=CYCLE + 2, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "first", cycle=CYCLE + 2, reuse_ttl_cycles=TTL)
 
     assert state.reuse == {"first": (1.0, CYCLE + 2 + TTL)}
 
@@ -186,7 +186,7 @@ def test_a_repeat_request_restarts_the_countdown() -> None:
 def test_a_ttl_of_zero_records_nothing_but_still_raises_the_resolution() -> None:
     state = graph(card("first"))
 
-    expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=0)
+    cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=0)
 
     assert state.choice.by_title["first"] == CardChoice(dialogue="full", evidence="full")
     assert state.reuse == {}
@@ -195,13 +195,13 @@ def test_a_ttl_of_zero_records_nothing_but_still_raises_the_resolution() -> None
 def test_every_invocation_costs_a_retrieval_cycle_whether_it_found_anything() -> None:
     state = graph(card("first"))
 
-    expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
-    expand_card(state, "nowhere", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "first", cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_expand_card(state, "nowhere", cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert state.retrieval_cycles == 2
 
 
-# ---- expand_artifact (Requirements 12.4, 12.5, 12.6, 12.7) ----
+# ---- cg_expand_artifact (Requirements 12.4, 12.5, 12.6, 12.7) ----
 
 REFERENCE = "mem_1_tu-3_0"
 """One reference, shaped like a real placeholder."""
@@ -221,7 +221,7 @@ def stored(text: object = CONTENT) -> InMemoryReferenceStore:
 async def test_a_whole_read_returns_the_text_verbatim_with_its_cost_stated() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
 
-    answer = await expand_artifact(state, stored(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = await cg_expand_artifact(state, stored(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert CONTENT in answer
     assert "whole artifact" in answer
@@ -234,7 +234,7 @@ async def test_a_targeted_read_is_delegated_and_no_resolution_changes() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
     before = state.choice
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state,
         stored(),
         Agent(),
@@ -252,7 +252,7 @@ async def test_a_targeted_read_is_delegated_and_no_resolution_changes() -> None:
 async def test_a_pattern_read_keeps_only_the_matching_lines() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state, stored(), Agent(), REFERENCE, None, "March", cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -263,7 +263,7 @@ async def test_a_pattern_read_keeps_only_the_matching_lines() -> None:
 async def test_a_malformed_line_range_is_named_and_records_nothing() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state,
         stored(),
         Agent(),
@@ -282,7 +282,7 @@ async def test_an_absent_store_answers_with_the_store_module_prose() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
     before = state.choice
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state, InMemoryReferenceStore(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -303,7 +303,7 @@ async def test_a_stash_that_does_not_hold_the_reference_answers_unknown(monkeypa
 
     monkeypatch.setattr(store_module, "_stash_of", lambda agent: Stash())
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state, InMemoryReferenceStore(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -315,7 +315,7 @@ async def test_a_stash_that_does_not_hold_the_reference_answers_unknown(monkeypa
 async def test_a_non_textual_block_is_named_without_a_media_type() -> None:
     state = graph(card("artifact-1", kind="artifact", reference=REFERENCE))
 
-    answer = await expand_artifact(
+    answer = await cg_expand_artifact(
         state, stored({"image": {"format": "png"}}), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -327,14 +327,14 @@ async def test_a_non_textual_block_is_named_without_a_media_type() -> None:
 async def test_a_reference_the_graph_never_carded_still_reads() -> None:
     state = graph(card("first"))
 
-    answer = await expand_artifact(state, stored(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = await cg_expand_artifact(state, stored(), Agent(), REFERENCE, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert CONTENT in answer
     # No artifact Card for the Note to land on, which is not a failure.
     assert state.reuse == {}
 
 
-# ---- find_context (Requirements 12.8, 12.9, 12.10, 12.11, 12.12) ----
+# ---- cg_find_context (Requirements 12.8, 12.9, 12.10, 12.11, 12.12) ----
 
 
 def searchable() -> _GraphState:
@@ -364,7 +364,7 @@ def test_candidates_are_ordered_by_descending_similarity_and_capped_at_five() ->
         }
     )
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     titles = [line.removeprefix("- title: ") for line in answer.splitlines() if line.startswith("- title: ")]
     assert titles == ["alpha", "bravo", "charlie", "delta", "echo"]
@@ -382,7 +382,7 @@ def test_ties_are_broken_by_turn_then_title() -> None:
     )
     matcher = TableMatcher({}, default=0.8)
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     titles = [line.removeprefix("- title: ") for line in answer.splitlines() if line.startswith("- title: ")]
     assert titles == ["zulu", "alpha", "bravo"]
@@ -392,7 +392,7 @@ def test_a_candidate_below_the_floor_is_not_returned() -> None:
     state = graph(card("alpha", description="about invoices"), card("bravo", turn=1, description="about payments"))
     matcher = TableMatcher({"about invoices": 0.9, "about payments": 0.44})
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "- title: alpha" in answer
     assert "bravo" not in answer
@@ -403,7 +403,7 @@ def test_each_candidate_carries_its_title_tags_and_description() -> None:
     state = graph(card("alpha", description="about invoices", tags=("invoice", "1200")))
     matcher = TableMatcher({"about invoices": 0.9})
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "- title: alpha" in answer
     assert "tags: invoice, 1200" in answer
@@ -414,7 +414,7 @@ def test_a_tag_filter_is_exact_on_the_normalized_value() -> None:
     state = searchable()
     matcher = TableMatcher({}, default=0.9)
 
-    answer = find_context(
+    answer = cg_find_context(
         state, "money", "R$ 1.200,00", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -427,7 +427,7 @@ def test_an_unknown_tag_answers_and_records_nothing() -> None:
     before = state.choice
     matcher = TableMatcher({}, default=0.9)
 
-    answer = find_context(
+    answer = cg_find_context(
         state, "money", "nowhere", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -441,7 +441,7 @@ def test_an_empty_need_answers_without_reaching_the_matcher() -> None:
     state = searchable()
     matcher = TableMatcher({}, default=0.9)
 
-    answer = find_context(state, "   ", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "   ", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "nothing in this conversation matches" in answer
     assert matcher.calls == 0
@@ -452,7 +452,7 @@ def test_an_unusable_matcher_answers_rather_than_raising() -> None:
     state = searchable()
     before = state.choice
 
-    answer = find_context(
+    answer = cg_find_context(
         state, "money", matcher=BrokenMatcher(), collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 
@@ -465,7 +465,7 @@ def test_nothing_clearing_the_floor_answers_and_records_nothing() -> None:
     state = searchable()
     matcher = TableMatcher({}, default=0.1)
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "nothing in this conversation matches" in answer
     assert state.reuse == {}
@@ -475,7 +475,7 @@ def test_an_empty_graph_answers_rather_than_raising() -> None:
     state = _GraphState()
     matcher = TableMatcher({}, default=0.9)
 
-    answer = find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    answer = cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert "nothing in this conversation matches" in answer
     assert matcher.calls == 0
@@ -486,7 +486,7 @@ def test_find_context_changes_no_resolution_on_success() -> None:
     before = state.choice
     matcher = TableMatcher({"about invoices": 0.9})
 
-    find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
+    cg_find_context(state, "money", matcher=matcher, collapse_floor=0.45, cycle=CYCLE, reuse_ttl_cycles=TTL)
 
     assert state.choice is before
 
@@ -499,4 +499,4 @@ def test_the_plugin_registers_exactly_the_three_retrieval_tools() -> None:
 
     names = {tool.tool_name for tool in ContextGraph().tools}
 
-    assert names == {"expand_card", "expand_artifact", "find_context"}
+    assert names == {"cg_expand_card", "cg_expand_artifact", "cg_find_context"}

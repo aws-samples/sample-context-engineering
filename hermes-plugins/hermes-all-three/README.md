@@ -16,8 +16,8 @@ reuses the three sibling packages' engines unchanged over the unchanged `context
 | Seam | Behaviour |
 |---|---|
 | `select_context` | pipeline **D projects** → **B injects catalog + folds** → **A rewrites oversized results** |
-| shared store | A's store is handed to D as its `stash`, so a `[ref: …]` the filter mints resolves through `expand_artifact` too |
-| `get_tool_schemas` | union of the six tools (`retrieve_all_context`, `find_tools`, `get_tool_details`, `expand_card`, `expand_artifact`, `find_context`) |
+| shared store | A's store is handed to D as its `stash`, so a `[ref: …]` the filter mints resolves through `cg_expand_artifact` too |
+| `get_tool_schemas` | union of the six tools (`rf_retrieve_all_context`, `ptd_find_tools`, `ptd_get_tool_details`, `cg_expand_card`, `cg_expand_artifact`, `cg_find_context`) |
 | `handle_tool_call` | dispatched by tool name to the owning practice |
 | `on_turn_complete` | A's close, then D's indexing, in order |
 
@@ -27,8 +27,10 @@ an absolute score).
 ## Install & select
 
 ```bash
-pip install hermes-all-three          # pulls the three sibling packages
-pip install "hermes-all-three[hermes]" # + Hermes host from source
+# Not published to PyPI - install from a clone of this repository, siblings included
+pip install -e context-core -e hermes-plugins/hermes-relevance-filter \
+            -e hermes-plugins/hermes-progressive-tool-disclosure -e hermes-plugins/hermes-context-graph \
+            -e "hermes-plugins/hermes-all-three[hermes]"   # [hermes] = Hermes host from source
 ```
 
 ```yaml

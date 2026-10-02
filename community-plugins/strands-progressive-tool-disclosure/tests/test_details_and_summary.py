@@ -1,6 +1,6 @@
 """Tests for the loading tool, the catalog summaries, and the default model summarizer.
 
-Covers the surface the redesign introduced and nothing else: ``get_tool_details`` as the one way a
+Covers the surface the redesign introduced and nothing else: ``ptd_get_tool_details`` as the one way a
 schema reaches the next projection, the summary pipeline that writes a catalog line once per tool, the
 default summarizer built over the agent's own model, and the pre-call guard's exemption for the loading
 tool itself.
@@ -287,7 +287,7 @@ def _run(step: Coroutine[Any, Any, _Resolved]) -> _Resolved:
 
 def _load(plugin: ProgressiveToolDisclosure, agent: Agent, names: Any) -> str:
     """Invoke the loading tool once and return what the model would read."""
-    return _run(plugin.get_tool_details(names, _tool_context(agent)))
+    return _run(plugin.ptd_get_tool_details(names, _tool_context(agent)))
 
 
 def _summary_of(plugin: ProgressiveToolDisclosure, agent: Agent, name: str) -> str:
@@ -302,7 +302,7 @@ def _description_of(agent: Agent, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------
-# A -- get_tool_details: what a loading call exposes, tolerates, reports and counts
+# A -- ptd_get_tool_details: what a loading call exposes, tolerates, reports and counts
 # ---------------------------------------------------------------------------------------------------
 
 
@@ -681,7 +681,7 @@ def test_a_summary_call_that_reports_no_usage_still_counts_the_call():
 
 
 def test_the_premature_call_guard_never_cancels_the_loading_tool():
-    """Cancelling ``get_tool_details`` would cancel the only way out of the catalog."""
+    """Cancelling ``ptd_get_tool_details`` would cancel the only way out of the catalog."""
     plugin = _plugin()
     agent = _agent(plugin)
     event = _before_tool_call(agent, GET_TOOL_DETAILS_NAME, {"names": ["send_wire"]})
@@ -716,7 +716,7 @@ def test_a_tool_loaded_through_the_loading_tool_is_no_longer_premature():
     assert premature.cancel_tool
     assert plugin._states[agent].premature_cancellations == 1
 
-    # The cancellation loads nothing: without get_tool_details the next call still cannot see it.
+    # The cancellation loads nothing: without ptd_get_tool_details the next call still cannot see it.
     assert "send_wire" not in plugin._states[agent].exposed
     assert GET_TOOL_DETAILS_NAME in premature.cancel_tool
 

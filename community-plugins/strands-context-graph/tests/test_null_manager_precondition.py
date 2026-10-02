@@ -6,9 +6,9 @@ asserted here is the *consequence* the notice warns about, so the precondition i
 claim in a docstring:
 
 The graph's fold is meant to be reversible. It collapses a turn to its Description in the per-call message list only,
-leaving the turn whole in ``agent.messages``, which is what makes ``expand_card`` able to promise the turn back in full
+leaving the turn whole in ``agent.messages``, which lets ``cg_expand_card`` promise the turn back in full
 for the rest of the turn. A trimming conversation manager edits that live list. Once it has run, the messages the graph
-folded are *physically gone*: the fold stops being a projection and becomes data loss, ``expand_card`` still answers
+folded are *physically gone*: the fold stops being a projection and becomes data loss, ``cg_expand_card`` still answers
 "arrives in full" because the Card is still in the graph, and the very next delivery cannot put that content on the wire
 at any Resolution. A rebuild-by-scan cannot recover it either, because the scan derives from the trimmed history.
 
@@ -136,7 +136,7 @@ def fold_the_middle_turn(graph: ContextGraph, agent: Agent) -> None:
 
 
 def raise_the_middle_turn(graph: ContextGraph, agent: Agent) -> None:
-    """Freeze a Turn Choice that puts that same Card back at Full Content, what ``expand_card`` promises."""
+    """Freeze a Turn Choice that puts that same Card back at Full Content, what ``cg_expand_card`` promises."""
     state = graph._states[agent]
     state.choice = TurnChoice(
         by_title=MappingProxyType({FOLDED_TITLE: CardChoice(dialogue="full", evidence="full")}),
@@ -219,7 +219,7 @@ async def test_under_the_null_manager_the_folded_turn_survives_in_the_live_histo
 
 @pytest.mark.asyncio
 async def test_under_the_null_manager_raising_the_resolution_recovers_the_turn():
-    """The reversibility ``expand_card`` promises, shown end to end: back at Full Content the answer is sent again."""
+    """The reversibility ``cg_expand_card`` promises, end to end: back at Full Content the answer is sent again."""
     graph = ContextGraph()
     agent = build(NullConversationManager(), graph)
     derive(graph, agent, conversation())
@@ -284,7 +284,7 @@ def test_expand_card_still_promises_a_turn_it_can_no_longer_produce(trimmed):
     fold_the_middle_turn(graph, agent)
     trim(agent, manager)
 
-    answer = tools.expand_card(graph._states[agent], FOLDED_TITLE, cycle=0, reuse_ttl_cycles=0)
+    answer = tools.cg_expand_card(graph._states[agent], FOLDED_TITLE, cycle=0, reuse_ttl_cycles=0)
 
     assert "arrives in full" in answer
     assert graph._states[agent].choice.by_title[FOLDED_TITLE] == CardChoice(dialogue="full", evidence="full")

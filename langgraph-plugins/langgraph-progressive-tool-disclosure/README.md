@@ -4,7 +4,7 @@ LangGraph binding for **Practice B** (progressive tool disclosure). The lexical 
 lean-catalog / closed-exchange-fold logic live in `context-core` (`context_core.disclosure`). This
 package is the thin interface: a `create_agent` middleware whose `wrap_model_call` rewrites the model
 call for a single turn — `request.override(tools=…, system_message=…+catalog, messages=…folded)` — plus
-the `find_tools` / `get_tool_details` tools and the `BaseMessage` ↔ neutral adapter.
+the `ptd_find_tools` / `ptd_get_tool_details` tools and the `BaseMessage` ↔ neutral adapter.
 
 Verified against `langchain` 1.x.
 
@@ -28,7 +28,7 @@ from langgraph_progressive_tool_disclosure import ProgressiveToolDisclosureMiddl
 
 agent = create_agent(
     model="...",
-    tools=[...],  # the full tool set; the model sees a lean catalog plus find_tools / get_tool_details
+    tools=[...],  # the full tool set; the model sees a lean catalog plus ptd_find_tools / ptd_get_tool_details
     middleware=[ProgressiveToolDisclosureMiddleware(catalog_chars=80)],
 )
 ```

@@ -100,7 +100,7 @@ _DEFAULT_TAGS_PER_CARD = 5
 """How many identifiers define a Card."""
 
 _DEFAULT_NEIGHBORS_PER_CANDIDATE = 3
-"""How many ``similar`` neighbours ``find_context`` lists under each candidate.
+"""How many ``similar`` neighbours ``cg_find_context`` lists under each candidate.
 
 Three rather than zero because the edge already exists and nothing read it: the measurement was paid for
 on the write path and the relation it holds -- two turns discussing related things -- is precisely what
@@ -464,7 +464,7 @@ class ContextGraph(Plugin):
             ``expand_threshold``.
         description_tokens: Token ceiling of a Description. Defaults to ``100``.
         tags_per_card: How many identifiers define a Card. Defaults to ``5``.
-        neighbors_per_candidate: How many ``similar`` neighbours ``find_context`` lists under each
+        neighbors_per_candidate: How many ``similar`` neighbours ``cg_find_context`` lists under each
             candidate it returns. Defaults to ``3``.
 
             This is the only reader of the ``similar`` edge. The edge is measured on the write path and
@@ -472,25 +472,25 @@ class ContextGraph(Plugin):
             (``_STRUCTURAL_WEIGHTS`` omits it) and no retrieval path traversed it, so it was paid for and
             read by nothing at all.
 
-            It answers a question the ranking cannot: ``find_context`` scores each Description against
+            It answers a question the ranking cannot: ``cg_find_context`` scores each Description against
             the QUESTION and never against another Description, so two turns that discuss the same thing
             in different words are invisible to each other there. The edge already holds exactly that
-            relation. A neighbour costs one title and is what ``expand_card`` takes as its argument, so
+            relation. A neighbour costs one title and is what ``cg_expand_card`` takes as its argument, so
             the model can follow one without spending another search. ``0`` lists none.
         body_budget: Token ceiling across Cards in Full Content, or ``None`` for no ceiling. Defaults to ``None``.
         min_cards: Below this many Cards the choice is skipped entirely. Defaults to ``3``.
         link_threshold: Similarity at or above which two Cards link. Defaults to ``0.50``.
         reuse_ttl_cycles: Model cycles a Fed-Back Note survives. Defaults to ``5``. ``0`` discards it at the end of the
             turn that created it.
-        max_retrieval_cycles: Retrieval calls one turn may spend before ``expand_card``, ``expand_artifact`` and
-            ``find_context`` refuse and tell the model to answer from what it has. Defaults to ``8``. ``None`` restores
+        max_retrieval_cycles: Retrieval calls one turn may spend before ``cg_expand_card``, ``cg_expand_artifact`` and
+            ``cg_find_context`` refuse and tell the model to answer from what it has. Default ``8``; ``None`` restores
             unbounded retrieval. The ceiling exists because no retrieval miss is an error -- every one of these tools
             answers with text -- so a turn whose evidence is unreachable otherwise has nothing to stop it.
-        include_artifact_tool: Register ``expand_artifact``. Defaults to ``True``. Pass ``False`` when a plugin that
+        include_artifact_tool: Register ``cg_expand_artifact``. Defaults to ``True``. Pass ``False`` when a plugin that
             offloads tool results is installed beside this one -- typically ``RelevanceFilter`` -- because each then
             ships a retrieval tool over a store the other cannot read, and the model has two plausible tools for one
             job. Measured on this repository's benchmark, excluding it took the three-plugin stack from 84.5% to 94.4%
-            weighted accuracy. ``expand_card`` and ``find_context`` are unaffected and have no switch: they reach back
+            weighted accuracy. ``cg_expand_card`` and ``cg_find_context`` are unaffected, no switch: they reach back
             into the conversation's own turns, which is a job no offloader does.
         matcher: Similarity matcher, or ``None`` for the default asymmetric multilingual embedding. Checked by member,
             so an implementation inherits from nothing. Resolved on first need, so construction opens no client.
@@ -651,7 +651,7 @@ class ContextGraph(Plugin):
         self._warn_on_memory_fold_ordering(agent, delivery_is_first=delivery_is_first)
 
     def _drop_artifact_tool_if_excluded(self) -> None:
-        """De-register ``expand_artifact`` when the caller excluded it, matched by name.
+        """De-register ``cg_expand_artifact`` when the caller excluded it, matched by name.
 
         The same shape :meth:`RelevanceFilter.init_agent` uses for its own retrieval tool, and here for the same reason:
         installed beside that filter there are two plausible tools for one job, each resolving a store the other cannot
@@ -668,7 +668,7 @@ class ContextGraph(Plugin):
         if self._include_artifact_tool:
             return
 
-        excluded = self.expand_artifact.tool_name
+        excluded = self.cg_expand_artifact.tool_name
         self._tools = [tool for tool in self._tools if tool.tool_name != excluded]
 
     @property
@@ -688,7 +688,7 @@ class ContextGraph(Plugin):
             graph = ContextGraph(include_artifact_tool=False)
             disclosure = ProgressiveToolDisclosure(always_available=[*graph.retrieval_tool_names])
 
-        ``RelevanceFilter``'s ``retrieve_all_context`` is deliberately NOT listed: it is for the rare question that
+        ``RelevanceFilter``'s ``rf_retrieve_all_context`` is deliberately NOT listed: it is for the rare question that
         needs a whole result, so it is left in the catalog and loaded only when one comes up.
 
         Read at call time rather than fixed at construction, so it reflects a de-registration that has already happened.
@@ -914,7 +914,7 @@ class ContextGraph(Plugin):
             )
             # Names with nothing behind them, which is the most this site can state: the offloader has already replaced
             # the content by the time the hook sees the result, so there is no decoded block to pair and none is
-            # invented. ``expand_artifact`` falls through to the optional Stash bridge for the content itself.
+            # invented. ``cg_expand_artifact`` falls through to the optional Stash bridge for the content itself.
             record_references(
                 self._store_for(agent),
                 (card.reference for card in cards if card.reference),
@@ -1074,7 +1074,7 @@ class ContextGraph(Plugin):
     # (Requirement 12.1): they are the only ``@tool`` members of the class.
 
     @tool(context=True)
-    async def expand_card(self, titles: list[str], tool_context: ToolContext) -> str:
+    async def cg_expand_card(self, titles: list[str], tool_context: ToolContext) -> str:
         """Bring back the full content of one or more earlier turns, by their titles.
 
         Earlier turns may reach you as a title and a short description instead of their messages. When
@@ -1093,7 +1093,7 @@ class ContextGraph(Plugin):
             Confirmation that the turn will arrive in full, or an error naming the title asked for.
         """
         agent = tool_context.agent
-        return tools.expand_card(
+        return tools.cg_expand_card(
             self._state_for(agent),
             titles,
             cycle=_cycle_of(agent),
@@ -1102,7 +1102,7 @@ class ContextGraph(Plugin):
         )
 
     @tool(context=True)
-    async def expand_artifact(
+    async def cg_expand_artifact(
         self,
         reference: str,
         tool_context: ToolContext,
@@ -1132,7 +1132,7 @@ class ContextGraph(Plugin):
             The requested part of the artifact, or an error naming what was missing.
         """
         agent = tool_context.agent
-        return await tools.expand_artifact(
+        return await tools.cg_expand_artifact(
             self._state_for(agent),
             self._store_for(agent),
             agent,
@@ -1145,7 +1145,7 @@ class ContextGraph(Plugin):
         )
 
     @tool(context=True)
-    async def find_context(self, need: str, tool_context: ToolContext, tag: str | None = None) -> str:
+    async def cg_find_context(self, need: str, tool_context: ToolContext, tag: str | None = None) -> str:
         """Find earlier turns of this conversation that match what you need, described in your words.
 
         Use this when you suspect the conversation already covered something but you cannot see it in
@@ -1161,7 +1161,7 @@ class ContextGraph(Plugin):
             naming the need received.
         """
         agent = tool_context.agent
-        return tools.find_context(
+        return tools.cg_find_context(
             self._state_for(agent),
             need,
             tag,

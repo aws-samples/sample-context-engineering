@@ -11,7 +11,7 @@ them walks the loop the model actually walks. This one does, once, in order:
    and a summary, with no parameters anywhere in the call to invoke it with;
 2. a search, which is how the model says what it needs when no catalog name fits, and which only
    lists: it exposes nothing, so the schema is still not loaded after it answers;
-3. a load, ``get_tool_details([name])``, which is the one path to a schema and the step that exposes;
+3. a load, ``ptd_get_tool_details([name])``, which is the one path to a schema and the step that exposes;
 4. the next projection, which carries that tool's registered full specification, parameters included,
    and drops its catalog line — the projection and the catalog partition the registry;
 5. the call, which succeeds against the real registered tool and renews the exposure, so the schema
@@ -381,10 +381,10 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
 
     # 2. The search: the model describes the need in its own words, and gets names back. It finds; it
     # does not load, so the exposure map is exactly as empty after it as it was before.
-    found = _run(runner, plugin.find_tools(NEED, _tool_context(agent)))
+    found = _run(runner, plugin.ptd_find_tools(NEED, _tool_context(agent)))
     assert index.searches == 1
     assert found.splitlines()[0] == _MATCHES_HEADER
-    # A plugin tool can rank — this need is quoted in find_tools' own description — and is never listed.
+    # A plugin tool can rank — this need is quoted in ptd_find_tools' own description — and is never listed.
     assert _listed(found) == {WANTED: f"summary of {WANTED}"}
     # The answer is a message, and a message is resident: it carries no schema, ever.
     assert "inputSchema" not in found
@@ -394,7 +394,7 @@ def test_the_full_disclosure_cycle_runs_offline_against_a_deterministic_index_do
     assert plugin._states[agent].loads == 0
 
     # 3. The load: the one step that exposes a schema, and the only way to a callable tool.
-    loaded = _run(runner, plugin.get_tool_details([WANTED], _tool_context(agent)))
+    loaded = _run(runner, plugin.ptd_get_tool_details([WANTED], _tool_context(agent)))
     assert loaded.splitlines()[0] == _DETAILS_LOADED_HEADER
     assert _listed(loaded) == {WANTED: f"summary of {WANTED}"}
     assert plugin._states[agent].loads == 1

@@ -1,4 +1,4 @@
 name: progressive-tool-disclosure
 version: 0.1.0
-description: "Practice B — show a lean tool catalog and expand full specs on demand via find_tools/get_tool_details, over agent-context-core. Select with context.engine: progressive-tool-disclosure."
+description: "Practice B — show a lean tool catalog and expand full specs on demand via ptd_find_tools/ptd_get_tool_details, over agent-context-core. Select with context.engine: progressive-tool-disclosure."
 author: Cristiano Scandura

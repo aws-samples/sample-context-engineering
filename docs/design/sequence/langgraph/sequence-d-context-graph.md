@@ -40,11 +40,11 @@ The body of the delivery surface is five statements, identical in both forms (sy
 The artifact surface is three statements and is §4.4.
 
 **Three** retrieval tools are built at construction as ordinary LangChain tools (`_build_tools`,
-`middleware.py:778`) and published on `self.tools` (`middleware.py:418`): `expand_card`, `expand_artifact`,
-`find_context`, in that registration order (`middleware.py:832`–`836`), which is the Strands plugin's own order
-(`middleware.py:779`, asserted at `tests/test_middleware.py:376`). `expand_artifact` is the one behind a switch —
+`middleware.py:778`) and published on `self.tools` (`middleware.py:418`): `cg_expand_card`, `cg_expand_artifact`,
+`cg_find_context`, in that registration order (`middleware.py:832`–`836`), which is the Strands plugin's own order
+(`middleware.py:779`, asserted at `tests/test_middleware.py:376`). `cg_expand_artifact` is the one behind a switch —
 `include_artifact_tool`, default `True` (`middleware.py:358`, built at `_build_artifact_tool`, `middleware.py:838`);
-with it false the list is `["expand_card", "find_context"]` (`tests/test_artifacts.py:365`). See §3.4.
+with it false the list is `["cg_expand_card", "cg_find_context"]` (`tests/test_artifacts.py:365`). See §3.4.
 
 One module-level side effect completes the wiring: `_register_host_symbols` (`middleware.py:96`) is called at import
 (`middleware.py:115`) and registers `"search_content"` with `context_core.graph.store.HOST_SYMBOLS`
@@ -81,7 +81,7 @@ code, not a hypothetical:
    (`middleware.py:376`), so zeroing the threshold forces zeroing the floor; that pair short-circuits
    `warm_up_choice` before the matcher is reached (`scoring.py:175`) and the handler receives *the same request
    object* (`tests/test_middleware.py:259`–`281`). See §4.3.
-4. **The elevation `expand_card` writes has a different lifetime here, because `project` runs per model call and not
+4. **The elevation `cg_expand_card` writes has a different lifetime here, because `project` runs per model call and not
    per invocation.** The Strands plugin computed the choice once per `BeforeInvocationEvent`; here every model call
    recomputes it at `projection.py:140`, which overwrites the `by_title` entry the tool wrote. What survives the
    boundary is the fed-back note, aged by **turn ordinal** rather than by a cycle counter (`projection.py:139` with
@@ -118,7 +118,7 @@ against `langchain` 1.4.2 (`_compat.py:1`–`3`): `AgentMiddleware`, `AgentState
 | `awrap_model_call` | `middleware.py:480` | Async twin; the model handler is awaited at `middleware.py:516`, everything else is the same synchronous helper | same | same |
 | `wrap_tool_call` | `middleware.py:520` | The artifact surface, sync form: records the return, then hands it back untouched | `request.tool_call`, `request.state`, `request.runtime` | `self._stores[…]`; the graph object already in `request.state` |
 | `awrap_tool_call` | `middleware.py:548` | Async twin; the tool handler is awaited at `middleware.py:565` and the recording is the same synchronous helper | same | same |
-| `self.tools` | `middleware.py:418` | Publishes `expand_card`, `expand_artifact` and `find_context` for `create_agent` to register | — | The agent's tool registry |
+| `self.tools` | `middleware.py:418` | Publishes `cg_expand_card`, `cg_expand_artifact` and `cg_find_context` for `create_agent` to register | — | The agent's tool registry |
 | `self._thresholds` | `middleware.py:419` | Freezes the core's `Thresholds` for the instance's lifetime, including `retrieval_tools=tuple(each.name for each in self.tools)` (`middleware.py:429`) | `self.tools` | — |
 | `self._stores` | `middleware.py:416` | One reference store per conversation, created on first tool call (`_store_for`, `middleware.py:635`) | the run's `thread_id` (`_thread_of`, `middleware.py:1139`) | Its own dict; never the agent state |
 | `HOST_SYMBOLS` | `middleware.py:112`, called at `middleware.py:115` | Registers `"search_content"` so a `line_range`/`pattern` read is delegated rather than degraded | — | `context_core.graph.store.HOST_SYMBOLS`, by `setdefault` |
@@ -153,16 +153,16 @@ twin differs from the sync form in exactly one token: `await handler(call)` (`mi
 `handler(call)` (`middleware.py:478`). The tool twin differs in one token as well — `await handler(request)`
 (`middleware.py:565`) against `handler(request)` (`middleware.py:544`).
 
-**The split reaches one tool, not just the hooks.** `expand_artifact` is registered with **two** bodies, a sync
-`expand_artifact` (`middleware.py:847`) and an async `aexpand_artifact` (`middleware.py:859`), handed to
+**The split reaches one tool, not just the hooks.** `cg_expand_artifact` is registered with **two** bodies, a sync
+`cg_expand_artifact` (`middleware.py:847`) and an async `aexpand_artifact` (`middleware.py:859`), handed to
 `StructuredTool.from_function` as `func=` and `coroutine=` (`middleware.py:871`–`876`). The reason is stated at
 `middleware.py:786`–`790`: LangChain bridges neither direction, "a coroutine-only tool raises
 ``NotImplementedError`` under ``invoke`` and a sync-only one would run in a worker thread under ``ainvoke``", and the
 artifact read is the one awaitable step in the package because a store's `retrieve` may cross a process boundary. The
 sync body therefore drives that single coroutine itself through `_driven` (`middleware.py:1177`, `asyncio.run` on the
 ordinary path at `middleware.py:1188`, a one-worker pool when a loop is already running at `middleware.py:1190`).
-`tests/test_artifacts.py:325`–`341` reaches the same answer through `invoke` and `ainvoke`. `expand_card` and
-`find_context` need none of this: their bodies are synchronous throughout.
+`tests/test_artifacts.py:325`–`341` reaches the same answer through `invoke` and `ainvoke`. `cg_expand_card` and
+`cg_find_context` need none of this: their bodies are synchronous throughout.
 
 **What this cost the harness.** An earlier version of the benchmark harness carried an `AsyncContextGraphMiddleware`
 subclass that supplied an `awrap_model_call` by running the sync hook on a worker thread (`asyncio.to_thread`) and
@@ -202,7 +202,7 @@ middleware" (`middleware.py:211`–`213`). Machine-checked at `tests/test_middle
 **The `Annotated` reducer is load-bearing too, and for a reason that only shows up under parallel tool calls.**
 `_latest_graph` (`middleware.py:195`) is `return left if right is None else right` (`middleware.py:205`) — the later
 write wins. Without it LangGraph refuses the second write to a state key inside one step, and the refusal is fatal to
-the turn rather than degrading it: "Parallel retrieval calls (``expand_card`` beside ``find_context``, say) each answer
+the turn rather than degrading it: "Parallel retrieval calls (``cg_expand_card`` beside ``cg_find_context``, say) each answer
 with a ``Command`` carrying the graph, in the same step. Without a reducer LangGraph refuses the second write
 (``InvalidUpdateError: Can receive only one value per step``) and the whole turn fails" (`middleware.py:198`–`200`).
 Taking the later write loses nothing, because the writes are not rival values: "Every tool mutates the one graph object
@@ -236,7 +236,7 @@ all (Requirement 8.4): it is an edge a manual search traverses" (`scoring.py:80`
 ### 3.4 Artifact Cards, the reference store, and the two resolution layers
 
 The binding carries a full artifact path. `wrap_tool_call` (`middleware.py:520`) stores what a tool returned and
-derives an artifact Card per reference the return names; `expand_artifact` reads it back. The three core entry points
+derives an artifact Card per reference the return names; `cg_expand_artifact` reads it back. The three core entry points
 are all reached: `derive_artifact_cards` (`cards.py:681`) and `register_artifact_cards` (`cards.py:739`) beneath
 `derive_and_register_artifacts` (`cards.py:779`), which `_record_artifacts` calls at `middleware.py:621`. The
 reference store (`InMemoryReferenceStore`, `store.py:135`) is imported at `middleware.py:67` and filled through
@@ -275,7 +275,7 @@ pointing *at* it is derived on the subject side from the reference string (`card
 resolves whether or not the artifact Card exists yet — and why, when it does exist, the edge now propagates a note to
 a target that **is** in `note` rather than being skipped at `scoring.py:284`.
 
-**The resolution order has two layers, and the second is passed in.** `expand_artifact` delegates the read to
+**The resolution order has two layers, and the second is passed in.** `cg_expand_artifact` delegates the read to
 `resolve_artifact` (`store.py:284`) and never reimplements it (`middleware.py:979`–`981`). The core asks the plugin's
 own store first and the second layer only for what the own store does not hold (`store.py:306`–`319`). On a Strands
 agent that second layer is discovered on the agent — the `ContextManager` Stash (`store.py:311`). LangGraph has no
@@ -296,7 +296,7 @@ anything else to `None` so the resolver reports it as non-textual
 `[ref: mem_N_<tool_call_id>_<index>]` addresses resolve to the `"absent"` prose, because each plugin then ships a
 retrieval tool over a store the other cannot read (`middleware.py:312`–`316`). Both halves are machine-checked:
 `tests/test_artifacts.py:539`–`548` resolves a reference only the stash holds, and
-`tests/test_composition.py:93`–`126` mints one through the real filter, reads it back through `expand_artifact`, and
+`tests/test_composition.py:93`–`126` mints one through the real filter, reads it back through `cg_expand_artifact`, and
 asserts the same reference is a miss on a graph built without the stash.
 
 Three consequences of the layering, each a reading of the code:
@@ -308,7 +308,7 @@ Three consequences of the layering, each a reading of the code:
   it*, because by the time its `AfterToolCallEvent` runs an offloader has already replaced the content; the
   `ContextManager` Stash then supplies the content. Wrapping the tool call is what changes here — the return is in
   hand, so it is stored rather than named (`middleware.py:575`–`581`).
-- **The plugin's own answers are never stored.** A return from `expand_card`, `expand_artifact` or `find_context` is
+- **The plugin's own answers are never stored.** A return from `cg_expand_card`, `cg_expand_artifact` or `cg_find_context` is
   skipped (`middleware.py:601`–`605`), because a whole read echoes the artifact's entire text and storing it would
   keep a second copy under a second reference (`tests/test_artifacts.py:134`–`145`).
 
@@ -374,7 +374,7 @@ Two writes, two different jobs (`middleware.py:451`–`453`):
 
 | Write | Where | Purpose | Failure posture |
 |---|---|---|---|
-| In-place, into `request.state` | `middleware.py:474` / `513` → `_write_back` (`middleware.py:692`) | So `expand_card` / `expand_artifact` / `find_context` called **out of this very turn** read the graph the choice was taken from | Logged at debug, never raised: "A state that refuses the assignment costs the tools of *this* turn their fresh graph and nothing else" (`middleware.py:695`–`697`) |
+| In-place, into `request.state` | `middleware.py:474` / `513` → `_write_back` (`middleware.py:692`) | So `cg_expand_card` / `cg_expand_artifact` / `cg_find_context` called **out of this very turn** read the graph the choice was taken from | Logged at debug, never raised: "A state that refuses the assignment costs the tools of *this* turn their fresh graph and nothing else" (`middleware.py:695`–`697`) |
 | Durable, as a `Command` on the response | `middleware.py:478` / `516` → `_with_state_update` (`middleware.py:705`) | The write the checkpointer keeps | An unrecognised response shape is passed through untouched and logged (`middleware.py:731`–`733`) |
 
 A third write exists on the artifact surface and is deliberately **not** a `Command`: see §4.4.
@@ -657,7 +657,7 @@ originals back byte for byte instead of re-rendering them.
 
 **What the flag is worth is stated in the docstring.** Read back naively, the
 marked carrier "would be a fresh user turn, and an inner middleware would see the current turn start AT it -- the
-disclosure fold then treats the turn's own ``get_tool_details`` exchanges as closed and folds them away, so the model
+disclosure fold then treats the turn's own ``ptd_get_tool_details`` exchanges as closed and folds them away, so the model
 never sees its load and reloads forever" (`_adapter.py:171`–`175`). The graph is the outer middleware in the combined
 stack (§10.2), so the message that starts that phantom turn is the graph's own doing: the compaction folds
 `<collapsed_turns>` onto the latest user-role message (`projection.py:497`–`501`), which in a tool loop is a tool result
@@ -900,9 +900,9 @@ survives the `override`, and the folded block arrives on a `HumanMessage`.
 sequenceDiagram
     autonumber
     participant Model
-    participant TN as @tool expand_card / find_context<br/>(middleware.py:793 / 814)
+    participant TN as @tool cg_expand_card / cg_find_context<br/>(middleware.py:793 / 814)
     participant G as _graph_of<br/>(middleware.py:878)
-    participant B as body: self.expand_card / self.find_context<br/>(middleware.py:897 / 1038)
+    participant B as body: self.cg_expand_card / self.cg_find_context<br/>(middleware.py:897 / 1038)
     participant EX as _exhausted<br/>(middleware.py:1087)
     participant MA as matcher.score
     participant SC as record_reuse<br/>(scoring.py:97)
@@ -919,12 +919,12 @@ sequenceDiagram
         EX-->>B: _EXHAUSTED refusal text (middleware.py:1094)
     else
         B->>B: state.retrieval_cycles += 1 (middleware.py:924 / 1060)
-        alt expand_card
+        alt cg_expand_card
             B->>B: look up each title · kind must be "subject" (middleware.py:934)
             B->>B: rewrite state.choice with CardChoice(dialogue="full", evidence="full") for the found (middleware.py:940-949)
             Note over B: skipped entirely on a full pass — an entry would flip full_pass false<br/>and cost the delivery its identity short circuit (middleware.py:939, 902-904)
             B->>SC: record_reuse per found title (middleware.py:952)
-        else find_context
+        else cg_find_context
             B->>B: titles_in_turn_order, optionally narrowed by normalize(tag) (middleware.py:1066-1069)
             B->>MA: ONE score(need, every candidate Description) (middleware.py:1107)
             B->>B: keep >= collapse_floor, sort by (-sim, turn, title), cap at 5 (middleware.py:1075-1077)
@@ -939,15 +939,15 @@ sequenceDiagram
     Note over A,LG: two tools answering in ONE step write this key twice · the _latest_graph reducer<br/>takes the later write, which is the same mutated object (middleware.py:195, 216)
 ```
 
-`expand_artifact` shares the budget, the `_graph_of` read and the `_answer` wrapper with these two, and differs in
+`cg_expand_artifact` shares the budget, the `_graph_of` read and the `_answer` wrapper with these two, and differs in
 being asynchronous and in changing no Resolution: §7.5.
 
 Three binding-specific facts:
 
 - **The tools are closures, not bound methods.** `_build_tools` (`middleware.py:778`) closes over `self` "so the
   schema the model sees carries the tool's own arguments and nothing else" (`middleware.py:781`–`782`). The bodies are
-  published as `self.expand_card` (`middleware.py:897`), `self.expand_artifact` (`middleware.py:969`) and
-  `self.find_context` (`middleware.py:1038`) precisely so they are testable without an agent: "a body reachable
+  published as `self.cg_expand_card` (`middleware.py:897`), `self.cg_expand_artifact` (`middleware.py:969`) and
+  `self.cg_find_context` (`middleware.py:1038`) precisely so they are testable without an agent: "a body reachable
   without a ``ToolRuntime`` is a body that can be tested without an agent" (`middleware.py:906`–`907`).
   `tests/test_middleware.py:368`–`382` checks the model-facing schema of all three carries the tool arguments only,
   the injected `runtime` never appearing in it.
@@ -957,13 +957,13 @@ Three binding-specific facts:
   (`middleware.py:782`–`784`). `tests/test_middleware.py:508`–`525` asserts the shape. The artifact *hook* is the one
   place that deliberately does not do this, for the reason in §4.4.
 - **Two tools in one `AIMessage` are two writes to one state key, and that needs the reducer.** A model may call
-  `expand_artifact` beside `find_context` in a single batch; both bodies reach `_answer`, so both `Command` objects
+  `cg_expand_artifact` beside `cg_find_context` in a single batch; both bodies reach `_answer`, so both `Command` objects
   carry `_STATE_KEY` in the same step. LangGraph rejects the second with `InvalidUpdateError: Can receive only one
   value per step` and the turn fails outright, so `context_graph` is annotated with `_latest_graph`
   (`middleware.py:195`, schema at `middleware.py:216`). Both writes are the same graph object, each carrying every
   call's mutation of it, so the later one is a complete value rather than half of a merge — §3.2 has the argument, and
   `tests/test_artifacts.py:551`–`577` is the regression, taken from the live combined arm.
-- **`expand_card` accepts a scalar.** "the schema says array, and a model that sends the scalar anyway should be
+- **`cg_expand_card` accepts a scalar.** "the schema says array, and a model that sends the scalar anyway should be
   answered rather than corrected" (`middleware.py:926`, docstring `middleware.py:912`–`914`;
   `tests/test_middleware.py:426`).
 
@@ -976,7 +976,7 @@ Three binding-specific facts:
 
 One ceiling covers all three tools, each incrementing the same counter (`middleware.py:924`, `middleware.py:1005`,
 `middleware.py:1060`) and each checking it before its own increment. `tests/test_artifacts.py:307`–`322` asserts that
-for `expand_artifact` specifically, including that the refusal itself costs no budget.
+for `cg_expand_artifact` specifically, including that the refusal itself costs no budget.
 
 Note the interaction with §7.3: because `project` runs per model call, the budget resets on every model call of an
 agent loop, not once per `invoke`. A ceiling of 8 is therefore 8 calls per **model call**, which is a looser bound in
@@ -984,7 +984,7 @@ LangGraph than the same number was in Strands.
 
 ### 7.3 The elevation's lifetime — the finding
 
-`expand_card`'s docstring says the elevation "ends with the turn: the next projection recomputes the choice from the
+`cg_expand_card`'s docstring says the elevation "ends with the turn: the next projection recomputes the choice from the
 graph, and the fed-back note is what carries the request across that boundary" (`middleware.py:900`–`902`). Followed
 through the LangGraph control flow, that sentence is precise and its consequence is sharper than it first reads.
 
@@ -1012,7 +1012,7 @@ the turn the model asked: the request the model made is not a hint to be outvote
 Two differences follow, and both are readings of the code rather than measurements:
 
 - **The bonus lifts the dialogue axis only.** The evidence axis is decided by `pair.consumed`
-  (`scoring.py:396`) and no note touches it. `expand_card`'s confirmation promises "its messages and its tool results
+  (`scoring.py:396`) and no note touches it. `cg_expand_card`'s confirmation promises "its messages and its tool results
   together" (`middleware.py:960`–`963`); the dialogue half of that promise is delivered by the bonus, and the evidence
   half was delivered by the elevation the next projection discards. A Card whose pairs are all consumed therefore
   returns with its dialogue whole and its evidence at Description.
@@ -1029,7 +1029,7 @@ monotonic, incremented once per projection, and never advanced by a burst of mes
 drops an entry only when `cycle > expiry_cycle` (`scoring.py:141`–`143`). Since the ordinal advances once per
 projection and a projection is one model call, a TTL of 5 is five **model calls** here, not five agent invocations.
 
-### 7.4 `find_context` and the `similar` edge
+### 7.4 `cg_find_context` and the `similar` edge
 
 `_similar_neighbors` (`middleware.py:1250`) is "The only reader of the ``similar`` edge: it is measured on the write
 path and stored with its similarity as the weight, propagates no note by design, and without this traversal is paid
@@ -1039,14 +1039,14 @@ for and read by nothing" (`middleware.py:1253`–`1254`).
 sequenceDiagram
     autonumber
     participant Model
-    participant FC as find_context<br/>(middleware.py:1038)
+    participant FC as cg_find_context<br/>(middleware.py:1038)
     participant SIM as _similarities<br/>(middleware.py:1096)
     participant MA as matcher.score
     participant RC as _render_candidates<br/>(middleware.py:1271)
     participant SN as _similar_neighbors<br/>(middleware.py:1250)
     participant L as state.links
 
-    Model->>FC: find_context(need="allocation split by segment")
+    Model->>FC: cg_find_context(need="allocation split by segment")
     FC->>FC: empty need -> _nothing_found, no score at all (middleware.py:1062-1064)
     FC->>SIM: _similarities(state, titles, need)
     SIM->>MA: ONE score(need, every candidate Description) (middleware.py:1107)
@@ -1069,7 +1069,7 @@ sequenceDiagram
             RC->>RC: "  related turns: " + ", ".join(f"{t} ({w:.2f})") (middleware.py:1293-1294)
         end
     end
-    RC-->>Model: block ending "call expand_card with one of these titles…" (middleware.py:1295)
+    RC-->>Model: block ending "call cg_expand_card with one of these titles…" (middleware.py:1295)
 ```
 
 Three deliberate decisions, each verified:
@@ -1082,13 +1082,13 @@ Three deliberate decisions, each verified:
 2. **A neighbour gets no fed-back note.** `record_reuse` is called only over `chosen` (`middleware.py:1082`–`1083`),
    *before* `_render_candidates` is reached (`middleware.py:1085`). Nothing in `_similar_neighbors` or
    `_render_candidates` touches `state.reuse` or `state.choice`. A neighbour is a **hint, not evidence**: it does not
-   raise, it does not persist, and its content does not arrive. The model must call `expand_card` with that title,
+   raise, it does not persist, and its content does not arrive. The model must call `cg_expand_card` with that title,
    which is what the closing line tells it to do (`middleware.py:1295`).
 3. **`0` reproduces the pre-neighbour answer byte for byte.** At `0`, `_similar_neighbors` returns `[]` on its first
    guard (`middleware.py:1259`), `neighbors` is falsy and the append is skipped (`middleware.py:1292`). This is why the
    parameter is validated with `floor=0` (`middleware.py:383`) rather than by the default `floor=1`.
 
-**Why the edge answers something the ranking cannot.** `find_context` scores each Description against the *question*
+**Why the edge answers something the ranking cannot.** `cg_find_context` scores each Description against the *question*
 and never against another Description — one `score` call at `middleware.py:1107`. Two turns covering the same ground in
 different words are invisible to each other in that ranking; the `similar` edge holds exactly that
 Description-to-Description relation, already measured. The argument is recorded at `middleware.py:1274`–`1277`.
@@ -1097,7 +1097,7 @@ Description-to-Description relation, already measured. The argument is recorded 
 projection after a Card appears renders no `related turns:` line for it. Not a failure path — the list is empty and
 the line is skipped.
 
-### 7.5 `expand_artifact` — the read path
+### 7.5 `cg_expand_artifact` — the read path
 
 The third tool differs from the other two in three ways, and in nothing else: it is asynchronous, it changes no
 Resolution on any path, and its answer is content rather than a confirmation.
@@ -1106,9 +1106,9 @@ Resolution on any path, and its answer is content rather than a confirmation.
 sequenceDiagram
     autonumber
     participant Model
-    participant TW as expand_artifact / aexpand_artifact<br/>(middleware.py:847 / 859)
+    participant TW as cg_expand_artifact / aexpand_artifact<br/>(middleware.py:847 / 859)
     participant DR as _driven<br/>(middleware.py:1177)
-    participant B as self.expand_artifact<br/>(middleware.py:969)
+    participant B as self.cg_expand_artifact<br/>(middleware.py:969)
     participant EX as _exhausted<br/>(middleware.py:1087)
     participant RA as store.resolve_artifact<br/>(store.py:284)
     participant OWN as the conversation's own store
@@ -1117,11 +1117,11 @@ sequenceDiagram
     participant SC as record_reuse<br/>(scoring.py:97)
     participant A as _answer<br/>(middleware.py:888)
 
-    Model->>TW: expand_artifact(reference, line_range?, pattern?)
+    Model->>TW: cg_expand_artifact(reference, line_range?, pattern?)
     Note over TW: sync body drives the one coroutine itself (middleware.py:856)<br/>async body awaits it (middleware.py:868)
     TW->>DR: _driven(coroutine) — asyncio.run, or a one-worker pool inside a running loop
-    DR->>B: await self.expand_artifact(state, store, reference, line_range, pattern)
-    B->>EX: _exhausted("expand_artifact", state) (middleware.py:1001)
+    DR->>B: await self.cg_expand_artifact(state, store, reference, line_range, pattern)
+    B->>EX: _exhausted("cg_expand_artifact", state) (middleware.py:1001)
     alt budget spent
         EX-->>B: the same refusal the other two get (middleware.py:1094)
     else
@@ -1184,12 +1184,12 @@ tool schemas and their return values.
 ### 8.1 The three tool descriptions — copied exactly
 
 For the two `@tool`-decorated tools the decorator derives the description from the docstring and the schema from the
-typed signature. Signatures: `expand_card(titles: list[str], runtime: ToolRuntime)` (`middleware.py:794`) and
-`find_context(need: str, runtime: ToolRuntime, tag: str | None = None)` (`middleware.py:815`). `runtime` is
+typed signature. Signatures: `cg_expand_card(titles: list[str], runtime: ToolRuntime)` (`middleware.py:794`) and
+`cg_find_context(need: str, runtime: ToolRuntime, tag: str | None = None)` (`middleware.py:815`). `runtime` is
 framework-injected and is **not** documented in the `Args:` block, unlike the Strands version which documented
 `tool_context` as "Injected by the framework. Not user-facing."
 
-`expand_card` (`middleware.py:795`–`810`):
+`cg_expand_card` (`middleware.py:795`–`810`):
 
 ```text
 Bring back the full content of one or more earlier turns, by their titles.
@@ -1209,7 +1209,7 @@ Returns:
     Confirmation that the turns will arrive in full, or an error naming the title asked for.
 ```
 
-`find_context` (`middleware.py:816`–`827`):
+`cg_find_context` (`middleware.py:816`–`827`):
 
 ```text
 Find earlier turns of this conversation that match what you need, described in your words.
@@ -1226,7 +1226,7 @@ Returns:
     naming the need received.
 ```
 
-`expand_artifact` is the exception: its description is the module constant `_EXPAND_ARTIFACT_DESCRIPTION`
+`cg_expand_artifact` is the exception: its description is the module constant `_EXPAND_ARTIFACT_DESCRIPTION`
 (`middleware.py:166`–`187`), passed to `StructuredTool.from_function` as `description=` (`middleware.py:875`) rather
 than derived from a docstring. The reason is that the tool carries two bodies, "and the text the model sees must not
 depend on which of them a run reaches" (`middleware.py:191`–`192`); the two body docstrings say as much and are read by
@@ -1262,7 +1262,7 @@ Note the third paragraph against §3.4: the text tells the model that a referenc
 tool", which is the behaviour with no `stash` wired. With the relevance filter's stash passed, such a reference
 resolves here too — the description is the conservative instruction, not a statement about the stash.
 
-`_build_tools` returns `[expand_card, expand_artifact, find_context]` in that order (`middleware.py:832`–`836`), the
+`_build_tools` returns `[cg_expand_card, cg_expand_artifact, cg_find_context]` in that order (`middleware.py:832`–`836`), the
 artifact tool appended between the two that read the conversation's turns so the set a model is shown matches the
 Strands binding's order (`tests/test_middleware.py:371`–`376`). With `include_artifact_tool=False` the list is the
 other two (`tests/test_artifacts.py:361`–`365`).
@@ -1332,15 +1332,15 @@ The turns above left this call in collapsed form; their numeric lines are copied
 `_RETRIEVAL_PHRASES` (`compaction.py:59`–`63`) holds three clauses, keyed by registered tool name:
 
 ```text
-expand_card: call expand_card with a title to get that turn's messages back
-expand_artifact: call expand_artifact with a reference to read an artifact
-find_context: call find_context with what you need to search the turns by description
+cg_expand_card: call cg_expand_card with a title to get that turn's messages back
+cg_expand_artifact: call cg_expand_artifact with a reference to read an artifact
+cg_find_context: call cg_find_context with what you need to search the turns by description
 ```
 
 **All three clauses are reachable in this binding, and by default all three are emitted.** `guidance` filters on
 `name in retrieval_tools` (`compaction.py:167`), and `retrieval_tools` is
-`tuple(each.name for each in self.tools)` (`middleware.py:429`) — `("expand_card", "expand_artifact",
-"find_context")` with the default configuration, and `("expand_card", "find_context")` with
+`tuple(each.name for each in self.tools)` (`middleware.py:429`) — `("cg_expand_card", "cg_expand_artifact",
+"cg_find_context")` with the default configuration, and `("cg_expand_card", "cg_find_context")` with
 `include_artifact_tool=False`. The mechanism matters and is not incidental: the mapping is keyed rather than
 concatenated because "a tool can be de-registered after this plugin is built, and a guidance block that names a tool
 the agent does not have sends the model after something it cannot call", with the measured cost recorded — "with the
@@ -1354,13 +1354,13 @@ Assembly (`compaction.py:170`–`176`): one clause → `f"{_PREAMBLE} To close t
 with `", "` and a final `", or "`. With all three tools registered, the literal trailer is therefore:
 
 ```text
-The turns above left this call in collapsed form; their numeric lines are copied literally. To close the gap, call expand_card with a title to get that turn's messages back, call expand_artifact with a reference to read an artifact, or call find_context with what you need to search the turns by description.
+The turns above left this call in collapsed form; their numeric lines are copied literally. To close the gap, call cg_expand_card with a title to get that turn's messages back, call cg_expand_artifact with a reference to read an artifact, or call cg_find_context with what you need to search the turns by description.
 ```
 
 and with `include_artifact_tool=False`:
 
 ```text
-The turns above left this call in collapsed form; their numeric lines are copied literally. To close the gap, call expand_card with a title to get that turn's messages back, or call find_context with what you need to search the turns by description.
+The turns above left this call in collapsed form; their numeric lines are copied literally. To close the gap, call cg_expand_card with a title to get that turn's messages back, or call cg_find_context with what you need to search the turns by description.
 ```
 
 When no retrieval tool is registered, `_NOTHING_TO_CALL` (`compaction.py:72`) is used instead:
@@ -1385,12 +1385,12 @@ rendered by `_trailer` as `_SEARCHABLE.format(count=…) + " " + guidance(...)` 
 rendered. The whole block is joined as
 `"\n".join((*body, "", trailer)).lstrip("\n")` (`compaction.py:154`).
 
-### 8.4 `find_context`'s answer
+### 8.4 `cg_find_context`'s answer
 
 First line (`middleware.py:1279`):
 
 ```text
-find_context | {len(chosen)} earlier turn(s) match '{need}', best first:
+cg_find_context | {len(chosen)} earlier turn(s) match '{need}', best first:
 ```
 
 Per candidate: `- title: {title}` (`middleware.py:1285`), an optional `  tags: {', '.join(card.tags)}`
@@ -1415,14 +1415,14 @@ Two spaces, the literal words `related turns: `, then `", "`-joined `TITLE (0.71
 Closing line (`middleware.py:1295`):
 
 ```text
-call expand_card with one of these titles to bring that turn back in full
+call cg_expand_card with one of these titles to bring that turn back in full
 ```
 
 Empty result (`_nothing_found`, `middleware.py:1236`, assembled `middleware.py:1243`–`1247`), with `{narrowed}` =
 `", among the turns tagged '{tag}'"` when a tag was given, else empty (`middleware.py:1242`):
 
 ```text
-find_context | nothing in this conversation matches '{need}'{narrowed} | the titles already in front of you are the whole conversation, so what you need was either never discussed or is in a turn you can name directly with expand_card
+cg_find_context | nothing in this conversation matches '{need}'{narrowed} | the titles already in front of you are the whole conversation, so what you need was either never discussed or is in a turn you can name directly with cg_expand_card
 ```
 
 Naming both is deliberate: it "lets the model tell 'nothing in this conversation is about that' from 'nothing
@@ -1430,37 +1430,37 @@ carrying that tag is about that', and only the second has an obvious next move" 
 Reached on three paths — a blank `need` (`middleware.py:1062`), an unusable matcher (`middleware.py:1072`), and nothing
 clearing the floor (`middleware.py:1079`–`1080`).
 
-### 8.5 `expand_card`'s answers
+### 8.5 `cg_expand_card`'s answers
 
 No title given (`middleware.py:928`):
 
 ```text
-expand_card | no title given | pass the titles you need, copied exactly as they were shown to you
+cg_expand_card | no title given | pass the titles you need, copied exactly as they were shown to you
 ```
 
 No match (`middleware.py:955`–`958`):
 
 ```text
-expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | copy a title exactly as it was shown to you, or use find_context to describe what you need
+cg_expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | copy a title exactly as it was shown to you, or use cg_find_context to describe what you need
 ```
 
 Success (`middleware.py:960`–`963`):
 
 ```text
-expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results together
+cg_expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool results together
 ```
 
 with, when some titles missed (`middleware.py:965`): ` | no turn is titled {_quoted(missing)}, so nothing was raised
 for it`. `_quoted` wraps each title in single quotes, comma-separated (`middleware.py:1117`–`1119`). The partial batch
 is checked at `tests/test_middleware.py:415`.
 
-### 8.6 `expand_artifact`'s answers
+### 8.6 `cg_expand_artifact`'s answers
 
 A whole read is the cost notice, a blank line, then the artifact verbatim (`_whole_artifact`, `middleware.py:1201`–
 `1193`), the token figure coming from the core's `estimate_tokens` (`store.py:375`):
 
 ```text
-expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire token count, about {N} tokens, and it stays in the conversation for the rest of the turn | next time pass line_range or pattern to read only the part you need
+cg_expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire token count, about {N} tokens, and it stays in the conversation for the rest of the turn | next time pass line_range or pattern to read only the part you need
 ```
 
 A targeted read is the helper's output with no notice at all (`middleware.py:1028`). The three miss messages are the
@@ -1469,13 +1469,13 @@ core's, shared with the Strands binding and worded there. Nothing holds the refe
 `stash` is wired (§3.4):
 
 ```text
-expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever offloaded under that reference, which means the full results are already in the conversation
+cg_expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever offloaded under that reference, which means the full results are already in the conversation
 ```
 
 A second layer was asked and did not hold it — `unknown_message` (`store.py:405`, at `middleware.py:1014`):
 
 ```text
-expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a turn's title or preview
+cg_expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a turn's title or preview
 ```
 
 The block resolved but yields no text — `non_textual_message` (`store.py:420`, at `middleware.py:1016`), deliberately
@@ -1483,21 +1483,21 @@ The block resolved but yields no text — `non_textual_message` (`store.py:420`,
 would repeat (`store.py:421`–`424`; `tests/test_artifacts.py:278`–`288`):
 
 ```text
-expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not apply to it, and it cannot be returned as text
+cg_expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not apply to it, and it cannot be returned as text
 ```
 
 Two are the binding's own. A `line_range` that is not a pair of integers (`middleware.py:1023`–`1026`), the Strands
 plugin's wording character for character (`tests/test_artifacts.py:235`–`245`):
 
 ```text
-expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass {"start": <int>, "end": <int>}, 1-indexed and inclusive
+cg_expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass {"start": <int>, "end": <int>}, 1-indexed and inclusive
 ```
 
 And a `ValueError` out of the read helper, named back with the reference prefixed and the helper's own sentence kept
 (`middleware.py:1030`; `tests/test_artifacts.py:248`–`255`):
 
 ```text
-expand_artifact | reference '{reference}' | {error}
+cg_expand_artifact | reference '{reference}' | {error}
 ```
 
 ### 8.7 The retrieval-budget refusal
@@ -1605,7 +1605,7 @@ aggressively to fold a history has no business reading whether another plugin tr
 | `body_budget` | **40000** (package default `None`) | `VALIDATION_GRAPH_BODY_BUDGET` (`config.py:510`), `=none` restores the measured configuration (`config.py:552`) | this is what makes the step down (`scoring.py:386`) an exercised path rather than dead code |
 | `max_retrieval_cycles` | 4 tight / 8 large | `VALIDATION_GRAPH_MAX_RETRIEVAL_CYCLES` (`config.py:511`) | `config.py:331` / `config.py:308` |
 | `reuse_ttl_cycles` | 5 | `VALIDATION_GRAPH_REUSE_TTL` (`config.py:512`) | package default, restated so a sweep can reach it |
-| `tags_per_card` | 5 | `VALIDATION_GRAPH_TAGS` (`config.py:513`) | what `find_context` filters on |
+| `tags_per_card` | 5 | `VALIDATION_GRAPH_TAGS` (`config.py:513`) | what `cg_find_context` filters on |
 | `neighbors_per_candidate` | **0** (package default 3) | `VALIDATION_GRAPH_NEIGHBORS` (`config.py:514`), `=3` turns the edge on for a sweep (`config.py:502`) | held at `0` so figures stay comparable with every published one, all produced with the edge unread |
 
 These reach the middleware one-for-one at `runner.py:533`–`543`, with `min_cards` coming from `THRESHOLDS`
@@ -1632,10 +1632,10 @@ These reach the middleware one-for-one at `runner.py:533`–`543`, with `min_car
    asserts both halves — no `Blocked deserialization` warning, and the restored value being a `GraphState` carrying its
    turn ordinal (`tests/test_checkpointer.py:20`–`32`). Note what it mirrors at `tests/test_checkpointer.py:24`: the
    state it round-trips carries a **flattened** choice, because that is what `_persistable` puts in the state (§4.2).
-2. **Register `expand_artifact` explicitly and hand the graph the filter's stash.** `include_artifact_tool=True` is
+2. **Register `cg_expand_artifact` explicitly and hand the graph the filter's stash.** `include_artifact_tool=True` is
    passed rather than left to the default, "as in the Strands harness (runner.py there passes True explicitly)"
    (`runner.py:545`–`546`), and `stash=relevance.stash if relevance is not None else None` (`runner.py:550`) supplies
-   the second resolution layer, "so a [ref: mem_N_...] the filter minted resolves through expand_artifact too. Strands
+   the second resolution layer, "so a [ref: mem_N_...] the filter minted resolves through cg_expand_artifact too. Strands
    gets this from the ContextManager Stash when one is installed; LangGraph has none, so it is wired explicitly"
    (`runner.py:547`–`549`). Both facts are recorded on the run:
    `config.extra["_graph_artifact_tool_dropped"] = False` (`runner.py:553`), which keeps the key the Strands JSON

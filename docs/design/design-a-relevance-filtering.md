@@ -148,7 +148,7 @@ sequenceDiagram
     AG->>M: call with the filtered result
 
     opt the question needs every row
-        M-->>AG: retrieve_all_context(reference, pattern/max_chunks/max_tokens)
+        M-->>AG: rf_retrieve_all_context(reference, pattern/max_chunks/max_tokens)
         AG->>S: queries by pattern, line range or chunk count
         S-->>AG: rows, span or chunks
         AG->>M: call — costs one cycle
@@ -174,7 +174,7 @@ filtered rather than compute from the excerpt.
 
 ### Retrieving what the excerpt cannot answer
 
-`retrieve_all_context` is scoped to that one case: load the whole of a result the filter cut down.
+`rf_retrieve_all_context` is scoped to that one case: load the whole of a result the filter cut down.
 It is not for re-reading a passage the excerpt already shows. It takes the reference plus one way of
 bounding the read — precedence `line_range`, then `pattern`, then `max_chunks`, with `max_tokens`
 bounding the response in every mode:
@@ -273,7 +273,7 @@ number be rewritten.
 ## 7. Deterministic guards
 
 - The result of the retrieval tool itself is never filtered (avoids recursion). The guard is in the
-  base strategy: with a stash present, a `toolResult` whose tool name is `retrieve_all_context` matches no
+  base strategy: with a stash present, a `toolResult` whose tool name is `rf_retrieve_all_context` matches no
   target. With `stash=False` there is no stash and no retrieval tool either, so there is nothing to
   recurse into.
 - Non-textual content is not scorable. The strategy concatenates only the `text` and `json` blocks
@@ -299,7 +299,7 @@ Two guards the offloader has, the strategy does not, and both are worth stating 
 |---|---|---|
 | Scoring is wrong and cuts what was needed | poor answer | query by the reference, costs one cycle |
 | Minified JSON | line search is useless, it is a single line | handled in `_chunk_text`: a line longer than the chunk budget is cut by character, so it does not degenerate into one giant chunk. Every fragment inherits that line's own line numbers |
-| Aggregation query | there is no relevant chunk, they are all relevant | the disclaimer says so, and `retrieve_all_context` reaches the rest — a `pattern` matching the rows to aggregate, or `max_chunks`/`max_tokens` for all of it |
+| Aggregation query | there is no relevant chunk, they are all relevant | the disclaimer says so, and `rf_retrieve_all_context` reaches the rest — a `pattern` matching the rows to aggregate, or `max_chunks`/`max_tokens` for all of it |
 | Full retrieval | the whole content comes back | it is bounded by `max_tokens` and removed from the history at the end of the invocation, so it is not resident on later calls |
 
 The aggregation case deserves to be written down: "sum all the transactions of the year" has no
@@ -311,7 +311,7 @@ paginate or aggregate at the source is still the better fix where the tool is yo
 ## 9. How to verify
 
 - Size of the `ToolResult` that enters the conversation, before and after, per tool.
-- Frequency of `retrieve_all_context` calls, split by whether the turn asked for an aggregate. A call
+- Frequency of `rf_retrieve_all_context` calls, split by whether the turn asked for an aggregate. A call
   on an aggregate question is the tool working as scoped; a call on a question the excerpt covered
   measures how much the filter is getting wrong.
 - Search units consumed per session, against the tokens saved. `RelevancePreview.search_units`

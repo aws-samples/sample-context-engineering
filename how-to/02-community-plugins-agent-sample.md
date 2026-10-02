@@ -169,7 +169,7 @@ Each section below changes only how that `Agent` is constructed.
 `max_result_tokens`, it writes the raw sub-blocks to a `Store`, then replaces the result with a
 **verbatim** preview of the chunks that score highest against the question, headed by a disclaimer that
 says how much of the result the excerpt covers, plus a reference the model can pass to the plugin's own
-`retrieve_all_context` tool when a question needs the whole result (a maximum, a total, a count).
+`rf_retrieve_all_context` tool when a question needs the whole result (a maximum, a total, a count).
 Those retrieval exchanges are removed from the history when the turn ends.
 
 ```python
@@ -197,7 +197,7 @@ agent = Agent(
 
 Selection is verbatim — chosen chunks reach the model character for character — which is what keeps
 monetary and tabular figures exact. Omissions are marked with `[... N lines omitted ...]`, and the
-line numbers in those markers are the ones `retrieve_all_context` accepts as a `line_range`.
+line numbers in those markers are the ones `rf_retrieve_all_context` accepts as a `line_range`.
 
 The tool is registered by `include_retrieval_tool`, which defaults to `True`; off, nothing is stored
 and no reference is minted. Its budgets are `pattern` (only the matching lines, with `context_lines`
@@ -214,8 +214,8 @@ same preview budget on the chunks that answer the question.
 
 ## B — Progressive tool disclosure
 
-Projects the call's tool list down to what is callable on it: the two plugin tools `find_tools` and
-`get_tool_details`, the `always_available` tools, and the schemas already loaded and still live by TTL.
+Projects the call's tool list down to what is callable on it: the two plugin tools `ptd_find_tools` and
+`ptd_get_tool_details`, the `always_available` tools, and the schemas already loaded and still live by TTL.
 Every other tool is **one line in the system prompt** — its name and a summary of its description, at
 most `catalog_chars` characters. A full schema enters the call when the model loads it by name, and
 leaves again after `ttl_cycles` idle cycles. Every tool stays callable throughout — only what the call
@@ -233,20 +233,20 @@ agent = Agent(
             catalog_chars=80,    # character limit of each catalog line; None drops the catalog
             summarizer=None,     # None = the agent's own model writes the lines, once per tool
             ttl_cycles=3,        # cycles a loaded schema survives after its last use
-            top_k=4,             # tools listed per find_tools call
+            top_k=4,             # tools listed per ptd_find_tools call
             # A retrieval tool must never need discovery: the model is told to call it in the text
             # that replaced the payload. Name the ones your setup installs -- but not the relevance
-            # filter's retrieve_all_context, which is for whole-result questions and is loaded on demand.
+            # filter's rf_retrieve_all_context, which is for whole-result questions and is loaded on demand.
             always_available=[],
         )
     ],
 )
 ```
 
-The flow is **catalog → `get_tool_details([names])` → call**. The model reads the names in the system
+The flow is **catalog → `ptd_get_tool_details([names])` → call**. The model reads the names in the system
 prompt, asks for the ones it wants — several in one call — and their full parameters arrive in its tool
-list on the next call. `find_tools` is the fallback for a need no listed name fits: it searches and
-reports names plus summaries, and loading is still `get_tool_details`' job, so there is one road to a
+list on the next call. `ptd_find_tools` is the fallback for a need no listed name fits: it searches and
+reports names plus summaries, and loading is still `ptd_get_tool_details`' job, so there is one road to a
 schema rather than two.
 
 A catalog line is a **summary, not a cut**. A description that already fits `catalog_chars` is used
@@ -261,7 +261,7 @@ per call.
 
 A released schema leaves nothing behind that invites a call. In the messages each call sends, the
 exchanges of tools that call does not carry are folded to one sentence — `The tool X was called and the
-result was: ...` — and the plugin's own `find_tools` / `get_tool_details` exchanges are dropped. A
+result was: ...` — and the plugin's own `ptd_find_tools` / `ptd_get_tool_details` exchanges are dropped. A
 `toolUse` with its arguments next to a success is a template the model copies, and a copy of a tool no
 longer in the list is a call it cannot make. Only closed turns are folded: the turn in flight passes
 through untouched, because a reasoning model rejects a modified latest assistant message.
@@ -269,10 +269,10 @@ through untouched, because a reasoning model rejects a modified latest assistant
 
 A catalog name is not in `tool_specs` at all, so nothing in the call claims it is callable with no
 arguments. If a model calls one anyway, a pre-call guard cancels that call and points it at
-`get_tool_details`; nothing is loaded on its behalf, because a recovery that loaded the tool would teach
+`ptd_get_tool_details`; nothing is loaded on its behalf, because a recovery that loaded the tool would teach
 the model that calling a catalog name directly works. A tool whose parameters are all optional is
 exempt — it is callable empty, so the call is not a guess. The measurements that made that path common
-(5 `find_tools` searches against 14 premature cancellations over 60 turns) were taken on the **previous
+(5 `ptd_find_tools` searches against 14 premature cancellations over 60 turns) were taken on the **previous
 design**, where every undisclosed tool sat in `tool_specs` as a reduced entry with an empty
 `inputSchema` that read as "takes no arguments". Those figures do not describe this one, and the
 benchmark's `searches` / `loads` / `premature_cancellations` counters are what to read instead.
@@ -284,7 +284,7 @@ with no model call. Each Card enters a call at one of three resolutions: **Title
 (rule-derived) or **Full Content**. A Note is computed per Card each turn from the similarity between
 the question and the Card's Description, then propagated one hop along the Links; the Note picks the
 resolution. Descending is for budget, never a verdict — a collapsed Card is recoverable through
-`expand_card`.
+`cg_expand_card`.
 
 ```python
 from strands.agent.conversation_manager import NullConversationManager
@@ -360,12 +360,12 @@ agent = Agent(
             ttl_cycles=3,
             top_k=4,
             # Derived, never hard-coded. A tool that is only in the catalog is not in `tool_specs` at
-            # all, so the model has to load it with `get_tool_details` before it can be called -- and
+            # all, so the model has to load it with `ptd_get_tool_details` before it can be called -- and
             # every retrieval tool here needs arguments (a Title, a reference, a search need). Making
             # them always available spends no cycle on loading what the folded-context guidance
             # already told the model to call. Reading the names off the plugin keeps this correct if
             # `include_artifact_tool` is ever turned off or a tool is renamed. The filter's
-            # retrieve_all_context is left out on purpose: it is loaded from the catalog only for a
+            # rf_retrieve_all_context is left out on purpose: it is loaded from the catalog only for a
             # whole-result question.
             always_available=[*graph.retrieval_tool_names],
         ),
@@ -381,8 +381,8 @@ of the tools it left out. None of them mutates `agent.messages` or the tool regi
 
 ### 1. Two retrieval tools, two stores, no bridge
 
-`RelevanceFilter` hands out references that **only its own** `retrieve_all_context` resolves.
-`ContextGraph` resolves **its own** references through `expand_artifact`. Nothing bridges the two
+`RelevanceFilter` hands out references that **only its own** `rf_retrieve_all_context` resolves.
+`ContextGraph` resolves **its own** references through `cg_expand_artifact`. Nothing bridges the two
 stores — the graph's README is explicit that its bridge to another plugin's stash is built entirely on
 private symbols and degrades to "answers as prose naming the miss".
 
@@ -392,13 +392,13 @@ Measured, it said so in its own answer:
 > "every export's artifact reference has come back **unreachable** … I can't read the stored
 > artifacts."
 
-That cost the benchmark two of eighteen scored turns, and dropping the graph's `expand_artifact` took
+That cost the benchmark two of eighteen scored turns, and dropping the graph's `cg_expand_artifact` took
 the full stack from **84.5% / 15-of-18 to 94.4% / 17-of-18**.
 
 **Both tools are installed, and the disambiguation sits in the tool itself rather than in the
 wiring.** Three things changed:
 
-- The filter's tool is `retrieve_all_context`, scoped to the one question an excerpt cannot answer —
+- The filter's tool is `rf_retrieve_all_context`, scoped to the one question an excerpt cannot answer —
   one that needs every row. It is not an artifact reader.
 - It is registered by default (`include_retrieval_tool=True`), and the excerpt's disclaimer names it
   by name, with the reference and the budgets to pass, so the model is told which call to make rather
@@ -406,8 +406,8 @@ wiring.** Three things changed:
 - It is reached **through the disclosure catalog**, not through `always_available`: a whole-result
   question is rare, so its schema is loaded only when one comes up.
 
-So the graph keeps `expand_artifact` (`include_artifact_tool=True`), alongside `expand_card` and
-`find_context`, which reach into the conversation's own turns — a job the filter does not do. Whether
+So the graph keeps `cg_expand_artifact` (`include_artifact_tool=True`), alongside `cg_expand_card` and
+`cg_find_context`, which reach into the conversation's own turns — a job the filter does not do. Whether
 the model still confuses the two is something the benchmark's `all` arm measures; it is not assumed
 here. If you see "unreachable reference" answers come back, that is the symptom, and turning
 `include_artifact_tool` off is still the one-line way to leave a single retrieval path.
@@ -491,7 +491,7 @@ Which puts each plugin in a different position:
   invalidation: a line only enters or leaves the catalog when the same load or expiry already changed
   `toolConfig` ahead of it, and the line's text is cached so it never drifts on its own. The same holds
   for the folded exchanges — the fold is a function of the projection, so it changes only on a call whose
-  `toolConfig` changed anyway. Loading several tools in one `get_tool_details` call is therefore cheaper
+  `toolConfig` changed anyway. Loading several tools in one `ptd_get_tool_details` call is therefore cheaper
   than loading them one at a time.
 - **`ContextGraph` removes messages from the middle of the history.** Everything after the edit is new.
   Its digest block is appended after the cache point and so is billed as ordinary input, which is the

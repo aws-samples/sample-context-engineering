@@ -85,7 +85,7 @@ Two more change what is measured:
 | Variable | Effect |
 |---|---|
 | `VALIDATION_SESSION` | `file` (default) attaches a `FileSessionManager` to the baseline agent; `off` removes it from the baseline too |
-| `VALIDATION_RELEVANCE_RETRIEVAL_TOOL` | `1` (default) stores the raw content and registers the filter's `retrieve_all_context`; `0` measures the excerpt alone |
+| `VALIDATION_RELEVANCE_RETRIEVAL_TOOL` | `1` (default) stores the raw content and registers the filter's `rf_retrieve_all_context`; `0` measures the excerpt alone |
 
 `VALIDATION_ACCOUNT_ID` is the guard worth setting when more than one account is in play: a run that
 silently used the wrong one would produce numbers attributed to the wrong place. Both are read from the
@@ -181,8 +181,8 @@ Each probe is a scored turn with one critical literal check, and each is scored 
 - **Correct** — the literal is in the answer.
 - **Recalled** — correct **and** the turn called no domain tool. A right answer after re-calling
   `force_connector_sync` proves the tool works, not the memory. A retrieval tool does not disqualify
-  it: the graph's `expand_card` and `find_context` *are* its memory, so they count as memory, as does
-  `find_tools`.
+  it: the graph's `cg_expand_card` and `cg_find_context` *are* its memory, so they count as memory, as does
+  `ptd_find_tools`.
 
 The report renders both in a **Memory probes** table, one row per configuration, with the probe count.
 `Correct` above `Recalled` on a plugin arm is the interesting reading: the fact survived, but the
@@ -362,7 +362,7 @@ a model that retrieves repeatedly paid for the same content many times. Haiku di
 exceeded the window outright on four calls (201,035 tokens against a 200,000 limit); Opus answered
 from the preview more often and never overflowed.
 
-*That is the mechanism as it was measured.* The tool is `retrieve_all_context` and the plugin
+*That is the mechanism as it was measured.* The tool is `rf_retrieve_all_context` and the plugin
 removes its exchanges from the history at the end of the invocation, which removes the re-send this
 figure is made of. The sign on Haiku has not been re-measured since, so `+21.6%` should be quoted as
 history, not as the current cost of the arm.
@@ -386,13 +386,13 @@ The model said what went wrong in its own answer:
 > "every export's artifact reference has come back **unreachable** … I can't read the stored
 > artifacts."
 
-Its tool calls on that turn were `expand_artifact` twice and `retrieve_context` once. The reason is
+Its tool calls on that turn were `cg_expand_artifact` twice and `retrieve_context` once. The reason is
 structural, and it belongs to the packaging rather than to the design:
 
 - `RelevanceFilter` stores the sub-blocks it replaced and hands out references **its own**
   `retrieve_context` resolves.
 - `ContextGraph` records addresses it saw in placeholder text and resolves them through **a store of
-  its own**, via `expand_artifact`.
+  its own**, via `cg_expand_artifact`.
 - **Nothing bridges the two.** The graph's README is explicit that its bridge to another plugin's
   stash is built entirely on private symbols and degrades to "answers as prose naming the miss".
 
@@ -400,14 +400,14 @@ With two packages there are two plausible tools for one job, and only one of the
 reference.
 
 **The fix at the time, in the harness and not in the plugins:** when the relevance filter was
-installed, drop the graph's `expand_artifact` tool, leaving exactly one artifact-retrieval path. Its
-other two tools, `expand_card` and `find_context`, were untouched — they reach back into the
+installed, drop the graph's `cg_expand_artifact` tool, leaving exactly one artifact-retrieval path. Its
+other two tools, `cg_expand_card` and `cg_find_context`, were untouched — they reach back into the
 conversation's own turns, a different job the relevance filter does not do. See
 `_GRAPH_ARTIFACT_TOOL` in [`src/runner.py`](src/runner.py); the run records
 `graph_artifact_tool_dropped` in its counters so two runs stay distinguishable.
 
 **That drop has since been removed, and not because the filter's tool went away.** The tool was
-**renamed and narrowed**: `retrieve_context` is `retrieve_all_context`, scoped to the question an
+**renamed and narrowed**: `retrieve_context` is `rf_retrieve_all_context`, scoped to the question an
 excerpt cannot answer — one that needs every row — and the excerpt's disclaimer names it, with the
 reference and the budgets to pass. Every `retrieve_context` on this page belongs to a run as it was
 measured; read it as that tool's earlier name and earlier scope.
@@ -432,7 +432,7 @@ Re-measured with that one change, same 60 turns:
 18-scored-turn script, which is where the regression was found.*
 
 A5's tool calls became `list_investment_transactions`, `list_investment_transactions`,
-`retrieve_context` — the right tool, and no `expand_artifact`.
+`retrieve_context` — the right tool, and no `cg_expand_artifact`.
 
 **Worth upstreaming:** the two packages should either share a reference store or agree on one
 retrieval tool. Until they do, installing both means de-duplicating the overlap at the wiring site.
@@ -446,7 +446,7 @@ retrieval tool. Until they do, installing both means de-duplicating the overlap 
   `strands-relevance-filter` 123, `strands-progressive-tool-disclosure` 81. The relevance filter's
   suite was written against its documented contract after the fact, and writing it surfaced two places
   where the docstring and the code disagree, neither of which is a defect in the behaviour:
-  `retrieve_context` — since renamed `retrieve_all_context` — documents `ValueError` when a
+  `retrieve_context` — since renamed `rf_retrieve_all_context` — documents `ValueError` when a
   `line_range` "falls outside the content" but an over-large `end` is silently clamped, grep-style;
   and a truncated preview's closing gap marker can report the source's whole line count even when part
   of the first line was rendered.
@@ -506,11 +506,11 @@ Cost and tokens:
 
 Counters:
 
-- **`retrievals` counts the real retrieval tools** — the relevance filter's `retrieve_all_context`
-  plus the graph's `expand_artifact`, `expand_card` and `find_context`. It used to key off
+- **`retrievals` counts the real retrieval tools** — the relevance filter's `rf_retrieve_all_context`
+  plus the graph's `cg_expand_artifact`, `cg_expand_card` and `cg_find_context`. It used to key off
   `retrieve_offloaded_content`, a tool from an earlier SDK integration that never exists in this
   harness, so the column read
-  0 on every run. The memory probes treat the same four, plus `find_tools` and `get_tool_details`, as
+  0 on every run. The memory probes treat the same four, plus `ptd_find_tools` and `ptd_get_tool_details`, as
   not re-fetching a domain value.
 - **The graph's rerank is read from `rerank_observed`** — the harness's own metered count of what the
   matcher sent — rather than inferred.

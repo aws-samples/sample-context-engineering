@@ -12,9 +12,9 @@ design docs already describe:
 
 - ``select_context(request_messages)`` injects the summarized catalog (one line per tool, via
   ``context_core.disclosure.build_catalog``) into the system message, and folds prior closed
-  ``get_tool_details`` exchanges (``fold_closed_exchanges``) so a loaded spec is not re-sent forever.
-- ``get_tool_schemas()`` → ``[find_tools, get_tool_details]``.
-- ``handle_tool_call()`` → ``find_tools`` runs the lexical index; ``get_tool_details`` returns a tool's
+  ``ptd_get_tool_details`` exchanges (``fold_closed_exchanges``) so a loaded spec is not re-sent forever.
+- ``get_tool_schemas()`` → ``[ptd_find_tools, ptd_get_tool_details]``.
+- ``handle_tool_call()`` → ``ptd_find_tools`` runs the lexical index; ``ptd_get_tool_details`` returns a tool's
   full spec as JSON (and marks it active, so the next ``select_context`` folds and does not re-summarize
   it).
 
@@ -76,9 +76,9 @@ class ProgressiveToolDisclosureEngine(BaseEngine):
             catalog and the lexical index. Required — the ABC gives no access to the host tool set.
         catalog_chars: Max characters of one catalog summary line (default 80), or ``None`` to suppress
             the catalog (the two disclosure tools' descriptions are then the only hint others exist).
-        index: Tool index for ``find_tools``. Defaults to the lexical (term-frequency)
+        index: Tool index for ``ptd_find_tools``. Defaults to the lexical (term-frequency)
             :class:`~context_core.disclosure.LexicalToolIndex`.
-        top_k: Max matches ``find_tools`` returns (default 5).
+        top_k: Max matches ``ptd_find_tools`` returns (default 5).
         always_available: Tool names always kept active (never catalog-only).
     """
 
@@ -224,7 +224,7 @@ def _find_tools_schema() -> Dict[str, Any]:
             "name": FIND_TOOLS_NAME,
             "description": (
                 "Search the tool catalog for tools that can do what you need, described in natural "
-                "language. Returns matching tool names; call get_tool_details on them to see full "
+                "language. Returns matching tool names; call ptd_get_tool_details on them to see full "
                 "parameters before using them."
             ),
             "parameters": {
@@ -243,7 +243,7 @@ def _get_tool_details_schema() -> Dict[str, Any]:
             "name": GET_TOOL_DETAILS_NAME,
             "description": (
                 "Get the full specification (description + parameters) of one or more tools by name, so "
-                "you can call them correctly. Use after find_tools surfaces a candidate."
+                "you can call them correctly. Use after ptd_find_tools surfaces a candidate."
             ),
             "parameters": {
                 "type": "object",

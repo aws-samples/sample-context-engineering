@@ -28,10 +28,10 @@ through `_compat.py` — the real ABC when Hermes is installed, a faithful stub 
   (`RelevancePreview.build_with_stats`, `preview.py:504`), and record `(marker, reference)` keyed by
   `tool_call_id`.
 - `select_context(request_messages)` (`engine.py:219`) returns a request-only copy with each recorded
-  oversized result replaced by its marker, and closed `retrieve_all_context` exchanges dropped
+  oversized result replaced by its marker, and closed `rf_retrieve_all_context` exchanges dropped
   (`_drop_tool_exchanges`). Any exception leaves the request unchanged (fail-open), matching the ABC
   contract at `conversation_loop.py:1295`.
-- `get_tool_schemas()` (`engine.py:254`) returns `[retrieve_all_context]`; `handle_tool_call`
+- `get_tool_schemas()` (`engine.py:254`) returns `[rf_retrieve_all_context]`; `handle_tool_call`
   (`engine.py:259`) resolves a reference and returns the content as a JSON string.
 
 The core store and reranker are async; the sync engine drives them to completion on a private loop
@@ -43,8 +43,8 @@ The core store and reranker are async; the sync engine drives them to completion
 |---|---|---|---|---|
 | 1 | `on_turn_complete` | `engine.py:172` | finalization seam (fires on a normal turn end) | detect oversized results, store them, record the rewrite |
 | 2 | `select_context` | `engine.py:219` | `agent/conversation_loop.py:1295`, every turn, fail-open | replace recorded oversized results, drop closed retrieval exchanges |
-| 3 | `get_tool_schemas` | `engine.py:254` | `agent/agent_init.py:2138`, merged at init | registers `retrieve_all_context` |
-| 4 | `handle_tool_call` | `engine.py:259` | `agent/tool_executor.py:1666` | runs `retrieve_all_context`, returns a JSON string |
+| 3 | `get_tool_schemas` | `engine.py:254` | `agent/agent_init.py:2138`, merged at init | registers `rf_retrieve_all_context` |
+| 4 | `handle_tool_call` | `engine.py:259` | `agent/tool_executor.py:1666` | runs `rf_retrieve_all_context`, returns a JSON string |
 
 ## 3. The turn
 
@@ -58,7 +58,7 @@ sequenceDiagram
 
     Note over H,E: select_context runs before every provider request
     H->>E: select_context(request_messages)
-    E->>E: replace recorded oversized results · drop closed retrieve_all_context exchanges
+    E->>E: replace recorded oversized results · drop closed rf_retrieve_all_context exchanges
     E-->>H: request-only message list (or None to leave unchanged)
     H->>M: provider request
     M-->>H: tool call then answer
@@ -69,8 +69,8 @@ sequenceDiagram
     E->>S: store(tool_call_id_0, full result)
     E->>E: record (marker, reference) by tool_call_id
     Note over M,E: later, if the answer needs every row
-    M->>H: retrieve_all_context(reference, pattern or budget)
-    H->>E: handle_tool_call(retrieve_all_context, args)
+    M->>H: rf_retrieve_all_context(reference, pattern or budget)
+    H->>E: handle_tool_call(rf_retrieve_all_context, args)
     E->>S: retrieve(reference)
     E-->>M: full result (JSON string), dropped from history at turn end
 ```

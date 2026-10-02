@@ -8,8 +8,8 @@ point instead of a space: a default is one value, a rejected parameter is one me
 one branch, and "the plugin is not registered" is one arrangement. A generator would sample the same
 example repeatedly and hide, behind a property name, the fact that nothing varies.
 
-The redesign moved the catalog into the system prompt alone and split discovery in two: ``find_tools``
-searches and lists, ``get_tool_details`` is the one thing that loads a schema. So the budget asserted
+The redesign moved the catalog into the system prompt alone and split discovery in two: ``ptd_find_tools``
+searches and lists, ``ptd_get_tool_details`` is the one thing that loads a schema. So the budget asserted
 here is ``catalog_chars`` -- characters, not tokens -- the summarizer is a constructor parameter with its
 own validation, and a search records no exposure at all. What a loading call does with an exposure is
 asserted in ``tests/test_details_and_summary.py``; this file only uses one to have an exposure to lose.
@@ -427,7 +427,7 @@ def test_a_search_that_ranks_nothing_returns_the_reformulation_guidance():
     plugin = _plugin(index=index)
     agent = _agent(plugin)
 
-    result = _run(plugin.find_tools("something no tool does", _tool_context(agent)))
+    result = _run(plugin.ptd_find_tools("something no tool does", _tool_context(agent)))
 
     assert result == _NO_MATCH_GUIDANCE
     # Requirement 5.2: the search ran exactly once, and this is the branch after it, not before.
@@ -446,7 +446,7 @@ def test_a_search_whose_every_match_is_absent_from_the_registry_returns_the_same
     plugin = _plugin(index=index)
     agent = _agent(plugin)
 
-    result = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
+    result = _run(plugin.ptd_find_tools("list the accounts of an owner", _tool_context(agent)))
 
     assert result == _NO_MATCH_GUIDANCE
     assert plugin._states[agent].exposed == {}
@@ -465,7 +465,7 @@ def test_a_blank_need_short_circuits_the_search_and_asks_for_a_description(need:
     plugin = _plugin(index=index)
     agent = _agent(plugin)
 
-    result = _run(plugin.find_tools(need, _tool_context(agent)))
+    result = _run(plugin.ptd_find_tools(need, _tool_context(agent)))
 
     assert result == _EMPTY_NEED_GUIDANCE
     assert index.needs == []
@@ -486,7 +486,7 @@ def test_a_search_that_matches_a_registered_tool_lists_it_and_loads_nothing():
     plugin = _plugin(index=index)
     agent = _agent(plugin)
 
-    result = _run(plugin.find_tools("list the accounts of an owner", _tool_context(agent)))
+    result = _run(plugin.ptd_find_tools("list the accounts of an owner", _tool_context(agent)))
 
     assert result not in (_NO_MATCH_GUIDANCE, _EMPTY_NEED_GUIDANCE)
     assert result.startswith(_MATCHES_HEADER)
@@ -593,7 +593,7 @@ def test_the_disclosure_state_is_dropped_along_with_the_agent():
         """Run a full cycle for an agent that goes out of scope when this returns."""
         agent = _agent(plugin)
         _run(plugin._projection_handler(_model_call(agent)))
-        _run(plugin.get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
+        _run(plugin.ptd_get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
         assert plugin._states[agent].exposed != {}
         return weakref.ref(agent)
 
@@ -615,7 +615,7 @@ def test_a_fresh_state_reestablishes_the_exposure_with_one_load():
     agent = _agent(plugin)
 
     _run(plugin._projection_handler(_model_call(agent)))
-    _run(plugin.get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
+    _run(plugin.ptd_get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
     exposed_before = dict(plugin._states[agent].exposed)
     assert exposed_before != {}
 
@@ -628,7 +628,7 @@ def test_a_fresh_state_reestablishes_the_exposure_with_one_load():
     assert "list_accounts" not in restarted_names
     assert plugin._states[agent].exposed == {}
 
-    _run(plugin.get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
+    _run(plugin.ptd_get_tool_details(names=["list_accounts"], tool_context=_tool_context(agent)))
     assert plugin._states[agent].exposed == exposed_before
     # Rebuilding the exposure took a load, not a search: the index was never consulted again.
     assert index.needs == []

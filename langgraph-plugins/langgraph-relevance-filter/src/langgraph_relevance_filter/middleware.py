@@ -8,9 +8,9 @@ Attaches to the LangChain v1 ``create_agent`` middleware surface only (verified 
   sub-blocks and rewrites the message content into the marker, a disclaimer carrying the processing
   metadata, a verbatim budget-bounded preview, and a reference token.
 - ``after_agent`` is the ``AfterInvocationEvent`` analog. It removes the *closed*
-  ``retrieve_all_context`` exchanges from ``state["messages"]`` once the run ends.
+  ``rf_retrieve_all_context`` exchanges from ``state["messages"]`` once the run ends.
 
-The ``retrieve_all_context`` tool is shipped on the middleware's ``tools`` attribute and reads those
+The ``rf_retrieve_all_context`` tool is shipped on the middleware's ``tools`` attribute and reads those
 references back by span, pattern, chunk count or token budget.
 
 Every decision this module makes about *content* is delegated to :mod:`context_core.relevance`; what
@@ -55,7 +55,7 @@ from context_core.relevance import (
     Store,
 )
 
-# Private core helpers: the chunker and the gap-marker assembler. ``retrieve_all_context`` renders the
+# Private core helpers: the chunker and the gap-marker assembler. ``rf_retrieve_all_context`` renders the
 # N most relevant chunks with the ranking the filter already computed, which is the same chunking and
 # the same assembly the preview used -- re-deriving either here would be a second implementation of
 # core logic. The core does not re-export them, so they are imported from their module.
@@ -97,7 +97,7 @@ _MAX_QUERY_CHARS = 2_000
 """Cap on the scoring query. Rerankers charge per query length, and a query longer than this adds
 context without sharpening the ranking."""
 
-_RETRIEVAL_TOOL_NAME = "retrieve_all_context"
+_RETRIEVAL_TOOL_NAME = "rf_retrieve_all_context"
 """Registered name of the retrieval tool. Every guard and the cleanup match on this one constant."""
 
 _NON_SCORABLE_BLOCK_TYPES = frozenset({"image", "image_url", "audio", "video", "file", "document"})
@@ -315,7 +315,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
     When a tool result exceeds ``max_result_tokens``, its raw sub-blocks are written to ``store`` and
     the in-context ``ToolMessage`` is replaced with a marker, a verbatim relevance preview scored
     against the query in progress, and a reference token the model can pass to
-    ``retrieve_all_context``. Selection is verbatim — chosen chunks reach the model
+    ``rf_retrieve_all_context``. Selection is verbatim — chosen chunks reach the model
     character-for-character — so numeric, monetary and tabular content stays exact.
 
     Construction is inert: no ``Reranker``, no preview builder and no AWS client is created here. The
@@ -335,7 +335,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         config: Preview tuning (reranker, threshold, chunk and preview budgets). Every key is
             optional; see :class:`RelevanceConfig` for the defaults.
         include_retrieval_tool: Whether to store the raw content and register the
-            ``retrieve_all_context`` tool that reads it back. Defaults to True. The tool is for the one
+            ``rf_retrieve_all_context`` tool that reads it back. Defaults to True. The tool is for the one
             question an excerpt cannot answer -- one that needs every row -- and its exchanges are
             removed from the history when the run ends, so a retrieval is paid for in the turn that
             asked for it and not on every later call. Off, no raw sub-block is stored, no reference
@@ -374,7 +374,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
             max_result_tokens: Filter only results above this estimated token count.
             config: Preview tuning; read key by key with the documented defaults at use time, so a
                 partial config is as valid as a full one.
-            include_retrieval_tool: Store the raw content and register ``retrieve_all_context``.
+            include_retrieval_tool: Store the raw content and register ``rf_retrieve_all_context``.
                 Defaults to True. False also suppresses the store write, the reference token and the
                 end-of-run cleanup: with no tool to resolve it, a reference would be a promise nothing
                 can keep.
@@ -397,7 +397,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         self._store: Store | None = store if store is not None or not include_retrieval_tool else InMemoryStore()
         # Built on first use, never here: constructing a reranker would reach for AWS credentials.
         self._preview: RelevancePreview | None = None
-        # Chunk ranking of each stored reference, by descending relevance, so ``retrieve_all_context``
+        # Chunk ranking of each stored reference, by descending relevance, so ``rf_retrieve_all_context``
         # can hand back more chunks in relevance order without scoring the text again.
         self._rankings: dict[str, tuple[int, ...]] = {}
         self.retrieval_tool_name = _RETRIEVAL_TOOL_NAME
@@ -409,7 +409,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         """This filter's store, readable by another plugin's reference resolution.
 
         Pass it as ``ContextGraphMiddleware(stash=...)`` so a ``[ref: mem_N_...]`` the filter minted resolves
-        through ``expand_artifact`` too. It plays the role the Strands ``ContextManager`` Stash plays for the
+        through ``cg_expand_artifact`` too. It plays the role the Strands ``ContextManager`` Stash plays for the
         Strands graph plugin, which LangGraph has no equivalent of. ``None`` when nothing is stored.
         """
         return None if self._store is None else _RelevanceStash(self._store)
@@ -478,7 +478,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
     # ------------------------------------------------------------------ retrieval tool
 
     def _build_retrieval_tool(self) -> BaseTool:
-        """Build the ``retrieve_all_context`` tool bound to this middleware's store.
+        """Build the ``rf_retrieve_all_context`` tool bound to this middleware's store.
 
         The tool is built per instance rather than declared as a class attribute because it closes over
         the store and the chunk rankings of *this* middleware, so two filters on one agent (different
@@ -489,7 +489,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         """
 
         @tool(_RETRIEVAL_TOOL_NAME)
-        async def retrieve_all_context(
+        async def rf_retrieve_all_context(
             reference: str,
             pattern: str | None = None,
             line_range: LineRange | None = None,
@@ -562,7 +562,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
                 max_tokens=max_tokens,
             )
 
-        return retrieve_all_context
+        return rf_retrieve_all_context
 
     async def _retrieve(
         self,
@@ -576,7 +576,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
     ) -> str | dict:
         """Resolve a reference and render it according to the read options.
 
-        The body of ``retrieve_all_context``, kept on the class so it is unit-testable without going
+        The body of ``rf_retrieve_all_context``, kept on the class so it is unit-testable without going
         through the tool's argument schema. The option contract is the tool's docstring.
 
         Args:
@@ -771,7 +771,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         return await self._filter_and_rewrite(request, result, token_count, full_text, scorable, passthrough)
 
     async def _store_raw(self, tool_call_id: str, scorable: list[dict[str, Any]]) -> list[str] | None:
-        """Optionally store the raw scorable sub-blocks so ``retrieve_all_context`` can read them back.
+        """Optionally store the raw scorable sub-blocks so ``rf_retrieve_all_context`` can read them back.
 
         This is an add-on to filtering, never a precondition of it. With the retrieval tool off, or no
         store configured, nothing is stored and an empty list is returned.
@@ -872,7 +872,7 @@ class RelevanceFilterMiddleware(AgentMiddleware):
         return result.model_copy(update={"content": content})
 
     def after_agent(self, state: Any, runtime: Any = None) -> dict[str, Any] | None:
-        """Remove this middleware's ``retrieve_all_context`` exchanges from the state once the run ends.
+        """Remove this middleware's ``rf_retrieve_all_context`` exchanges from the state once the run ends.
 
         The ``AfterInvocationEvent`` analog. A retrieval is for the answer in flight. Kept, its result
         -- possibly the whole of a large tool result, since the model may ask for all of it -- would

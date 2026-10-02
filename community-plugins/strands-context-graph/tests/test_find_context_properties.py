@@ -1,6 +1,6 @@
-"""Property tests for the shape of a ``find_context`` answer.
+"""Property tests for the shape of a ``cg_find_context`` answer.
 
-Feature: context-graph-plugin, Property 8: find_context returns a bounded, floored, ordered result.
+Feature: context-graph-plugin, Property 8: cg_find_context returns a bounded, floored, ordered result.
 
 Validates: Requirements 12.9, 12.11.
 
@@ -22,7 +22,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from strands_context_graph.state import Card, ToolPair, _GraphState
-from strands_context_graph.tools import _MAX_CANDIDATES, find_context
+from strands_context_graph.tools import _MAX_CANDIDATES, cg_find_context
 
 CYCLE = 7
 """One cycle counter, so a recorded fed-back Note has a checkable expiry."""
@@ -64,7 +64,7 @@ class TableMatcher:
 
 
 def _card(title: str, turn: int, description: str, tags: tuple[str, ...]) -> Card:
-    """Build a Card carrying only the fields ``find_context`` reads."""
+    """Build a Card carrying only the fields ``cg_find_context`` reads."""
     return Card(
         title=title,
         kind="subject",
@@ -145,14 +145,14 @@ def _titles_of(answer: str) -> list[str]:
 def test_find_context_is_bounded_floored_and_ordered(
     case: tuple[_GraphState, TableMatcher, dict[str, float], str, str | None, float],
 ) -> None:
-    """Feature: context-graph-plugin, Property 8: find_context returns a bounded, floored, ordered result.
+    """Feature: context-graph-plugin, Property 8: cg_find_context returns a bounded, floored, ordered result.
 
     Validates: Requirements 12.9, 12.11.
     """
     state, matcher, similarities, need, tag, collapse_floor = case
     expected = _expected(state, similarities, tag, collapse_floor)
 
-    answer = find_context(
+    answer = cg_find_context(
         state, need, tag, matcher=matcher, collapse_floor=collapse_floor, cycle=CYCLE, reuse_ttl_cycles=TTL
     )
 

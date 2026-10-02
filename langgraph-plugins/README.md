@@ -25,9 +25,9 @@ three compose on one agent.
 
 | Practice | Strands surface | LangGraph mechanism | Verdict |
 |---|---|---|---|
-| **A** Relevance | `AfterToolCallEvent` (rewrite result) + `AfterInvocationEvent` (drop retrieval exchanges) | `wrap_tool_call` / `awrap_tool_call` rewrites the returned `ToolMessage` to marker + disclaimer + verbatim preview (+ `[ref]`); `after_agent` drops closed `retrieve_all_context` exchanges; `retrieve_all_context` tool | **Portable** |
-| **B** Disclosure | `InvokeModelStage.Input` (rewrite `tool_specs` + `system_prompt` + fold messages) | `wrap_model_call` + `request.override(tools=…, system_message=…+catalog, messages=…folded)`; `find_tools` / `get_tool_details` tools; `loaded_tools` state; catalog lines summarized by the agent's own model by default | **Portable** (LangChain ships a subset of this natively) |
-| **D** Context graph | `BeforeInvocation` + `MessageAdded` + `AfterToolCall` (project into Cards, record artifacts) | `wrap_model_call` + `request.override(messages=projected)` from `context_core.graph.project`; `wrap_tool_call` records each tool return as an artifact; `expand_card` / `expand_artifact` / `find_context` tools; serialized-graph state | **Portable with caveats** — see below |
+| **A** Relevance | `AfterToolCallEvent` (rewrite result) + `AfterInvocationEvent` (drop retrieval exchanges) | `wrap_tool_call` / `awrap_tool_call` rewrites the returned `ToolMessage` to marker + disclaimer + verbatim preview (+ `[ref]`); `after_agent` drops closed `rf_retrieve_all_context` exchanges; `rf_retrieve_all_context` tool | **Portable** |
+| **B** Disclosure | `InvokeModelStage.Input` (rewrite `tool_specs` + `system_prompt` + fold messages) | `wrap_model_call` + `request.override(tools=…, system_message=…+catalog, messages=…folded)`; `ptd_find_tools` / `ptd_get_tool_details` tools; `loaded_tools` state; catalog lines summarized by the agent's own model by default | **Portable** (LangChain ships a subset of this natively) |
+| **D** Context graph | `BeforeInvocation` + `MessageAdded` + `AfterToolCall` (project into Cards, record artifacts) | `wrap_model_call` + `request.override(messages=projected)` from `context_core.graph.project`; `wrap_tool_call` records each tool return as an artifact; `cg_expand_card` / `cg_expand_artifact` / `cg_find_context` tools; serialized-graph state | **Portable with caveats** — see below |
 
 ### Parity with the Strands plugins
 
@@ -39,7 +39,7 @@ remaining differences are the ones LangChain imposes:
   It flips at the same size as Strands unless a Strands model opts into native token counting.
 - **D — artifact content.** Strands stores a reference name and reads the content back through the
   SDK's context-manager Stash, which LangGraph lacks; this binding stores the return's own text blocks
-  under `<tool_call_id>_<index>` instead, so `expand_artifact` can answer, and takes an explicit `stash`
+  under `<tool_call_id>_<index>` instead, so `cg_expand_artifact` can answer, and takes an explicit `stash`
   (the relevance filter's store) as the second resolution layer. Line/pattern reads use
   `context_core.relevance.search` (registered in `HOST_SYMBOLS`).
 
@@ -86,7 +86,7 @@ Verified against `langchain` 1.4.2.
 Install order is outermost-first (LangChain nests `wrap_*` hooks, first in the list is the outermost
 layer). D wraps B (disjoint `ModelRequest` fields: D rewrites `messages`, B rewrites `tools` +
 `system_message`); A is on the tool surface. Hand D the filter's `stash`, so a `[ref: mem_N_…]` the filter
-mints resolves through `expand_artifact` as well as through `retrieve_all_context` — the role the
+mints resolves through `cg_expand_artifact` as well as through `rf_retrieve_all_context` — the role the
 `ContextManager` Stash plays for the Strands graph plugin.
 
 ```python
@@ -146,7 +146,7 @@ Reaching a clean run took four fixes the live runs exposed and no offline test h
 `tool_use` part surviving a fold as an orphan call; the harness checkpointer blocking the graph's state
 on restore; disclosure counting cycles on the graph's projection instead of the persisted history; and
 the graph's collapsed-turns digest, attached to a mid-turn tool result, reading as a new user turn to
-the disclosure fold, which folded away the turn's own `get_tool_details` exchange and made the model
+the disclosure fold, which folded away the turn's own `ptd_get_tool_details` exchange and made the model
 reload forever. Each has a regression test.
 
 ## Provenance and scope

@@ -87,7 +87,7 @@ def context(*tracking_ids):
 def collapsed(graph, requested, *retained_ids, description_tokens=DESCRIPTION_TOKENS):
     """Render the block for ``requested`` against a removed list holding ``retained_ids``."""
     return render_final_block(
-        context(*retained_ids), graph, frozenset(requested), description_tokens=description_tokens, retrieval_tools=("expand_card", "expand_artifact", "find_context")
+        context(*retained_ids), graph, frozenset(requested), description_tokens=description_tokens, retrieval_tools=("cg_expand_card", "cg_expand_artifact", "cg_find_context")
     )
 
 
@@ -352,7 +352,7 @@ def test_an_empty_graph_returns_none():
     """The shape a fresh agent has: no Card, no block."""
     assert (
         render_final_block(
-            context(), _GraphState(), frozenset(), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context")
+            context(), _GraphState(), frozenset(), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("cg_expand_card", "cg_expand_artifact", "cg_find_context")
         )
         is None
     )
@@ -432,9 +432,9 @@ def test_the_block_names_the_three_retrieval_tools():
 
     block = collapsed(graph, {"d0"})
 
-    assert "expand_card" in block
-    assert "expand_artifact" in block
-    assert "find_context" in block
+    assert "cg_expand_card" in block
+    assert "cg_expand_artifact" in block
+    assert "cg_find_context" in block
 
 
 def test_the_return_is_plain_text():
@@ -493,7 +493,7 @@ def test_a_selection_addressing_every_card_states_no_gap():
     block = collapsed(graph, {"d0"})
 
     assert "earlier turn(s)" not in block
-    assert "expand_card" in block
+    assert "cg_expand_card" in block
 
 
 def test_a_gap_alone_is_still_reported():
@@ -532,7 +532,7 @@ def test_nothing_is_mutated():
     cards_before = copy.deepcopy(graph.cards)
     requested = frozenset({"d0", "e0"})
 
-    render_final_block(injection_context, graph, requested, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context"))
+    render_final_block(injection_context, graph, requested, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("cg_expand_card", "cg_expand_artifact", "cg_find_context"))
 
     assert injection_context.messages == messages_before
     assert graph.cards == cards_before
@@ -569,5 +569,5 @@ def test_a_retained_message_without_a_durable_identity_is_ignored():
     )
 
     assert "balance: 1200" in render_final_block(
-        injection_context, graph, frozenset({"d0"}), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("expand_card", "expand_artifact", "find_context")
+        injection_context, graph, frozenset({"d0"}), description_tokens=DESCRIPTION_TOKENS, retrieval_tools=("cg_expand_card", "cg_expand_artifact", "cg_find_context")
     )

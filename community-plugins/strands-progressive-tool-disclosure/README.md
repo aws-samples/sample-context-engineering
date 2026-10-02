@@ -2,15 +2,15 @@
 
 Progressive Tool Disclosure for Strands Agents. Instead of sending every tool's full specification on
 every model call, the plugin sends in `tool_specs` only the tools that are callable on the call —
-`find_tools`, `get_tool_details`, the `always_available` tools and the schemas loaded and still live
+`ptd_find_tools`, `ptd_get_tool_details`, the `always_available` tools and the schemas loaded and still live
 by TTL — and lists every other tool as one line in the system prompt: its name and a summary of its
 description, at most `catalog_chars` characters. The model loads full schemas with
-`get_tool_details([names])`, and they leave again after `ttl_cycles` idle cycles. `find_tools`
+`ptd_get_tool_details([names])`, and they leave again after `ttl_cycles` idle cycles. `ptd_find_tools`
 searches when no catalog name fits.
 
 A tool that left `tool_specs` leaves nothing behind that invites a call: in the messages each call
 sends, the closed exchanges of tools that call does not carry are folded to one sentence — `The tool X
-was called and the result was: Y` — and the plugin's own `find_tools` / `get_tool_details` exchanges
+was called and the result was: Y` — and the plugin's own `ptd_find_tools` / `ptd_get_tool_details` exchanges
 are dropped. The turn in flight is never folded. The evidence stays, the call shape the model would
 copy does not.
 
@@ -20,8 +20,10 @@ is intact, regardless of what one call shows.
 
 ## Install
 
+Not published to PyPI. From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install strands-progressive-tool-disclosure
+pip install -e community-plugins/strands-progressive-tool-disclosure
 ```
 
 One runtime dependency: `strands-agents`. The default index is standard-library only. The default
@@ -52,11 +54,11 @@ agent = Agent(
 | `summarizer` | `Callable[[ToolSpec, int], str \| Awaitable[str]] \| None` | `None` | Writes a catalog line for a description longer than the limit. `None` uses the agent's model; usage is reported as `summary_usage`. Failures fall back to a boundary cut. |
 | `ttl_cycles` | `int >= 1` | `3` | Idle cycles a loaded schema survives after its last use. Every call that runs the tool renews it. |
 | `always_available` | `Sequence[str]` | `()` | Names that carry their full specification on every call, skipping the discovery cycle. |
-| `index` | `ToolIndex \| None` | `LexicalToolIndex()` | Search implementation behind `find_tools`. Any object exposing `build` and `search`. |
+| `index` | `ToolIndex \| None` | `LexicalToolIndex()` | Search implementation behind `ptd_find_tools`. Any object exposing `build` and `search`. |
 | `top_k` | `int >= 1` | `3` | How many tools a single search lists. |
 
 A call to a catalog name that skipped the load is cancelled with a message pointing at
-`get_tool_details`, and nothing is loaded on the model's behalf — a recovery that loaded it would
+`ptd_get_tool_details`, and nothing is loaded on the model's behalf — a recovery that loaded it would
 teach the model that calling a catalog name directly works. A tool whose parameters are all optional
 is exempt: it is callable with no arguments, so the call is not a guess.
 

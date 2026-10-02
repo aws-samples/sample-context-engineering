@@ -126,7 +126,7 @@ async def test_oversized_result_is_rewritten_to_marker_disclaimer_preview_and_re
     assert "[Filtered: this is an EXCERPT, not the whole result" in content
     assert "cannot be computed from this excerpt" in content
     # The with-reference branch names the tool and the budgets.
-    assert "retrieve_all_context" in content
+    assert "rf_retrieve_all_context" in content
     assert "max_chunks`/`max_tokens" in content
     # The preview, and the reference token that resolves it.
     assert TARGET_LINE in content
@@ -191,10 +191,10 @@ async def test_guard_1_non_tool_message_result_passes_through():
 
 async def test_guard_2_own_retrieval_tool_is_never_filtered():
     middleware = _middleware()
-    result = ToolMessage(content=_payload(), tool_call_id="tc1", name="retrieve_all_context")
+    result = ToolMessage(content=_payload(), tool_call_id="tc1", name="rf_retrieve_all_context")
 
     out = await middleware.awrap_tool_call(
-        _request(name="retrieve_all_context"), _handler(result)
+        _request(name="rf_retrieve_all_context"), _handler(result)
     )
 
     assert out is result
@@ -307,7 +307,7 @@ async def test_max_result_tokens_must_be_positive():
         RelevanceFilterMiddleware(max_result_tokens=0)
 
 
-# --------------------------------------------------------------------------- retrieve_all_context
+# --------------------------------------------------------------------------- rf_retrieve_all_context
 
 
 async def _filtered(middleware: RelevanceFilterMiddleware, text: str | None = None) -> tuple[str, str]:
@@ -323,7 +323,7 @@ async def _filtered(middleware: RelevanceFilterMiddleware, text: str | None = No
 
 async def test_retrieval_tool_is_registered_and_named():
     middleware = _middleware()
-    assert [t.name for t in middleware.tools] == ["retrieve_all_context"]
+    assert [t.name for t in middleware.tools] == ["rf_retrieve_all_context"]
 
 
 async def test_retrieve_by_line_range():
@@ -415,7 +415,7 @@ def _retrieval_exchange(call_id: str = "r1", payload: str = "the whole result") 
     return [
         AIMessage(
             content="checking the whole result",
-            tool_calls=[{"id": call_id, "name": "retrieve_all_context", "args": {"reference": "mem_1_tc1_0"}}],
+            tool_calls=[{"id": call_id, "name": "rf_retrieve_all_context", "args": {"reference": "mem_1_tc1_0"}}],
             id=f"ai-{call_id}",
         ),
         ToolMessage(content=payload, tool_call_id=call_id, id=f"tm-{call_id}"),
@@ -461,7 +461,7 @@ def test_after_agent_keeps_a_mixed_assistant_message_and_its_other_result():
     mixed = AIMessage(
         content="two calls",
         tool_calls=[
-            {"id": "r1", "name": "retrieve_all_context", "args": {"reference": "mem_1_tc1_0"}},
+            {"id": "r1", "name": "rf_retrieve_all_context", "args": {"reference": "mem_1_tc1_0"}},
             {"id": "o1", "name": "query_ledger", "args": {}},
         ],
         id="ai-mixed",
@@ -515,7 +515,7 @@ async def test_opt_out_keeps_filtering_but_stores_nothing():
     assert middleware._store is None
     assert list(middleware.tools) == []
     assert "[ref: " not in content
-    assert "retrieve_all_context" not in content
+    assert "rf_retrieve_all_context" not in content
     assert "Say that the result was filtered instead of computing it from the excerpt." in content
     assert middleware._rankings == {}
 
@@ -594,7 +594,7 @@ async def test_end_to_end_filters_the_result_and_cleans_up_the_retrieval():
                 tool_calls=[
                     {
                         "id": "r1",
-                        "name": "retrieve_all_context",
+                        "name": "rf_retrieve_all_context",
                         "args": {"reference": "mem_1_tc1_0", "pattern": "TARGET-ROW", "context_lines": 0},
                     }
                 ],

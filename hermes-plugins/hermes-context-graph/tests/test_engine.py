@@ -53,12 +53,12 @@ def test_is_context_engine() -> None:
 
 def test_tool_schemas() -> None:
     names = [s["function"]["name"] for s in _engine().get_tool_schemas()]
-    assert names == ["expand_card", "expand_artifact", "find_context"]
+    assert names == ["cg_expand_card", "cg_expand_artifact", "cg_find_context"]
 
 
 def test_artifact_tool_can_be_disabled() -> None:
     names = [s["function"]["name"] for s in _engine(include_artifact_tool=False).get_tool_schemas()]
-    assert "expand_artifact" not in names
+    assert "cg_expand_artifact" not in names
 
 
 def test_handle_unknown_tool_json() -> None:
@@ -107,7 +107,7 @@ def test_find_context_then_expand_card() -> None:
     convo = _conversation()
     e.on_turn_complete(convo[:8])
     e.select_context(convo)  # build the graph/cards
-    found = json.loads(e.handle_tool_call("find_context", {"need": "electronics refund"}))
+    found = json.loads(e.handle_tool_call("cg_find_context", {"need": "electronics refund"}))
     assert "result" in found
 
 
@@ -116,7 +116,7 @@ def test_expand_artifact_recovers_stored_tool_result() -> None:
     convo = _conversation()
     e.on_turn_complete(convo[:8])  # stores c1_0, c2_0
     e.select_context(convo)
-    out = json.loads(e.handle_tool_call("expand_artifact", {"reference": "c1_0"}))
+    out = json.loads(e.handle_tool_call("cg_expand_artifact", {"reference": "c1_0"}))
     assert "30 days" in out["result"]
 
 
@@ -124,7 +124,7 @@ def test_expand_artifact_unknown_reference() -> None:
     e = _engine()
     e.on_turn_complete(_conversation()[:8])
     e.select_context(_conversation())
-    out = json.loads(e.handle_tool_call("expand_artifact", {"reference": "ghost_0"}))
+    out = json.loads(e.handle_tool_call("cg_expand_artifact", {"reference": "ghost_0"}))
     # resolution returns an unknown/absent message, carried as result (not an exception)
     assert "result" in out or "error" in out
 
@@ -134,8 +134,8 @@ def test_retrieval_budget_exhaustion() -> None:
     convo = _conversation()
     e.on_turn_complete(convo[:8])
     e.select_context(convo)
-    first = json.loads(e.handle_tool_call("find_context", {"need": "x"}))
-    second = json.loads(e.handle_tool_call("find_context", {"need": "y"}))
+    first = json.loads(e.handle_tool_call("cg_find_context", {"need": "x"}))
+    second = json.loads(e.handle_tool_call("cg_find_context", {"need": "y"}))
     assert "budget is spent" in second["result"]
 
 
@@ -151,5 +151,5 @@ def test_on_turn_complete_does_not_mutate_messages() -> None:
 
 def test_handle_tool_call_before_any_projection() -> None:
     e = _engine()
-    out = json.loads(e.handle_tool_call("find_context", {"need": "x"}))
+    out = json.loads(e.handle_tool_call("cg_find_context", {"need": "x"}))
     assert "no earlier turns" in out["result"]

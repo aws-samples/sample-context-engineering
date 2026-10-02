@@ -22,7 +22,7 @@ job of deciding what of a large payload survives" — was wrong:
   yet**: it decides what of that payload is worth writing down (`plugin.py:611`, the
   `@hook`-decorated `_on_after_tool_call`). It has one second engagement point, and it is a clean-up
   rather than a decision about a payload: `_on_after_invocation` (`plugin.py:589`) removes its own
-  `retrieve_all_context` exchanges from `agent.messages` once the turn has ended (§5).
+  `rf_retrieve_all_context` exchanges from `agent.messages` once the turn has ended (§5).
 - **`ContextGraph` acts at delivery**, on a history that **already exists**. It never sees a payload;
   it sees whatever was written down, and folds it to Titles / Descriptions / Full Content.
 - **`ProgressiveToolDisclosure` acts at delivery too**, and writes **three** fields of the call: it cuts
@@ -57,7 +57,7 @@ Construction order inside `build_plugins`, and what each plugin is attached with
   carrying `reranker` (`runner.py:318`), `relevance_threshold`, `chunk_tokens`, `preview_tokens`.
   Appended at `runner.py:325`. The store root is namespaced by run tag as well as configuration
   (`runner.py:297`), so two runs executing at once cannot serve each other's stored sub-blocks back
-  through `retrieve_all_context` (comment at `runner.py:293`–`runner.py:296`). The reranker is
+  through `rf_retrieve_all_context` (comment at `runner.py:293`–`runner.py:296`). The reranker is
   `_MeteredDensityReranker` or `_MeteredReranker`, selected at `runner.py:300` by `DENSITY_RERANK`
   (`runner.py:192`).
 - **Context graph** — built under `if config.graph:` (`runner.py:330`), **after** the relevance filter
@@ -187,7 +187,7 @@ Registration sites:
 
 - `RelevanceFilter`: **two** `@hook`-decorated methods — `_on_after_tool_call` on `AfterToolCallEvent`
   (`plugin.py:611`) and `_on_after_invocation` on `AfterInvocationEvent` (`plugin.py:589`); both events
-  imported at `plugin.py:22`. Plus one `@tool` member, `retrieve_all_context` (`plugin.py:403`,
+  imported at `plugin.py:22`. Plus one `@tool` member, `rf_retrieve_all_context` (`plugin.py:403`,
   decorator at `plugin.py:402`), which is registered by default and **de-registered in `init_agent`**
   (`plugin.py:321`) only when the flag is off — see §5.
 - `ContextGraph`: four engagement points in `init_agent`
@@ -195,15 +195,15 @@ Registration sites:
   BeforeInvocationEvent)` (line 647), `agent.add_hook(self._on_message_added, MessageAddedEvent)`
   (line 648), `agent.add_hook(self._on_after_tool_call, AfterToolCallEvent)` (line 649), and
   `self._projection.register(agent)` (line 650), which inserts its delivery handler at index zero of
-  `InvokeModelStage`. Plus three `@tool` members — `expand_card` (line 1077), `expand_artifact`
-  (line 1105), `find_context` (line 1148) — of which `expand_artifact` is dropped when
+  `InvokeModelStage`. Plus three `@tool` members — `cg_expand_card` (line 1077), `cg_expand_artifact`
+  (line 1105), `cg_find_context` (line 1148) — of which `cg_expand_artifact` is dropped when
   `include_artifact_tool` is false (`_drop_artifact_tool_if_excluded`, line 653, called at line 645,
   guard at line 668).
 - `ProgressiveToolDisclosure`: one `InvokeModelStage.Input` middleware handler
   (`strands-progressive-tool-disclosure/.../plugin.py`, registered at line 1122) plus **two**
   `@hook`-decorated methods — `_on_before_tool_call` on `BeforeToolCallEvent` (line 1347) and
-  `_on_after_tool_call` on `AfterToolCallEvent` (line 1383) — and two `@tool` members, `find_tools`
-  (line 1242) and `get_tool_details` (line 1302).
+  `_on_after_tool_call` on `AfterToolCallEvent` (line 1383) — and two `@tool` members, `ptd_find_tools`
+  (line 1242) and `ptd_get_tool_details` (line 1302).
 
 Events with more than one subscriber in the `all` configuration:
 
@@ -222,7 +222,7 @@ only; `BeforeToolCallEvent` → `ProgressiveToolDisclosure._on_before_tool_call`
 **`RelevanceFilter.include_retrieval_tool` defaults to `True`** — the signature default at
 `plugin.py:286`, documented in the class docstring at `plugin.py:256` and in `__init__`'s at
 `plugin.py:297`. So in the default configuration the filter **does** store the raw sub-blocks and
-**does** mint a reference token, and `retrieve_all_context` is registered alongside the graph's own
+**does** mint a reference token, and `rf_retrieve_all_context` is registered alongside the graph's own
 three tools. The harness passes the flag through from the environment:
 `include_retrieval_tool=RELEVANCE_RETRIEVAL_TOOL` (`runner.py:315`), where
 `RELEVANCE_RETRIEVAL_TOOL = os.environ.get("VALIDATION_RELEVANCE_RETRIEVAL_TOOL", "1") != "0"`
@@ -230,7 +230,7 @@ three tools. The harness passes the flag through from the environment:
 
 Three things make that safe, and none of them is "only one tool exists".
 
-**1. The tool was narrowed and renamed.** `retrieve_context` is gone; `retrieve_all_context`
+**1. The tool was narrowed and renamed.** `retrieve_context` is gone; `rf_retrieve_all_context`
 (`plugin.py:403`) loads the **whole** of one filtered result, for the one question an excerpt cannot
 answer — a maximum, a total, a count, a ranking across every row. Its docstring says so in the
 imperative, and the filter's own disclaimer says the same where the model reads the excerpt: `_disclaimer`
@@ -246,7 +246,7 @@ filtered (`plugin.py:121`–`plugin.py:122`). That disclaimer sits between the `
 call ask for the whole result instead of paging.
 
 **2. A retrieval does not ride along.** `_on_after_invocation` (`plugin.py:589`) removes this plugin's
-own `retrieve_all_context` exchanges from `agent.messages` as the invocation ends — `_drop_tool_exchanges`
+own `rf_retrieve_all_context` exchanges from `agent.messages` as the invocation ends — `_drop_tool_exchanges`
 (`plugin.py:132`) drops the `toolUse` and its `toolResult` as a pair, whole messages when a message
 holds nothing else, dropping `reasoningContent` from any assistant message it rewrites. The removal
 happens **before the next user message closes the turn**, so a context graph deriving that turn's Card
@@ -257,22 +257,22 @@ removes at `runner.py:312`–`runner.py:314`: every retrieval re-sent on every l
 made this arm dearer than no plugin on Haiku 4.5 (+21.6%).
 
 **3. It is deliberately kept out of `always_available`.** In the disclosure arm the tool is a catalog
-name like any other, reached through `get_tool_details`, so its schema is off every call until an
+name like any other, reached through `ptd_get_tool_details`, so its schema is off every call until an
 aggregate question comes up (`runner.py:370`–`runner.py:374`). The graph's own
 `retrieval_tool_names` property states the same exclusion from the other side (graph `plugin.py`,
 lines 691–692).
 
-**So the graph keeps its `expand_artifact`.** The old `include_artifact_tool=not config.relevance` drop
+**So the graph keeps its `cg_expand_artifact`.** The old `include_artifact_tool=not config.relevance` drop
 was removed once the collision it guarded against stopped existing — it is now
 `include_artifact_tool=True` (`runner.py:357`), recorded as not dropped at `runner.py:360`. That drop
 was measured, not assumed, and `_GRAPH_ARTIFACT_TOOL` (`runner.py:245`) is kept as the record of it: on
 the first 60-turn run the `all` configuration was the only one that could not answer A5, and the model
-said why — it had called `expand_artifact` with a reference the relevance filter had minted, over a
-store `expand_artifact` cannot read. What changed is not the store topology but the presentation: the
+said why — it had called `cg_expand_artifact` with a reference the relevance filter had minted, over a
+store `cg_expand_artifact` cannot read. What changed is not the store topology but the presentation: the
 filter's tool now names a different job in its own description and in the disclaimer that points at it,
-and it is loaded from the catalog rather than sitting in `tool_specs` beside `expand_artifact`. Whether
+and it is loaded from the catalog rather than sitting in `tool_specs` beside `cg_expand_artifact`. Whether
 the model still confuses the two is measured by the `all` arm, not assumed (`runner.py:245` docstring).
-The graph's `expand_card` and `find_context` were never part of this: they reach back into the
+The graph's `cg_expand_card` and `cg_find_context` were never part of this: they reach back into the
 conversation's own turns, a different job again.
 
 **`VALIDATION_RELEVANCE_RETRIEVAL_TOOL=0` measures the excerpt alone.** Filtering itself — chunk,
@@ -284,7 +284,7 @@ optional. Three things then do not happen:
 2. **No reference token is minted.** `references` stays empty, so the `[ref: …]` suffix
    (`plugin.py:752`–`plugin.py:754`) is never appended and the disclaimer takes its
    nothing-to-retrieve branch (`plugin.py:121`–`plugin.py:122`).
-3. **No `retrieve_all_context` tool is registered.** `init_agent` drops the auto-discovered tool,
+3. **No `rf_retrieve_all_context` tool is registered.** `init_agent` drops the auto-discovered tool,
    matched by `tool_name` rather than by a literal (`plugin.py:337`–`plugin.py:340`) — which is why the
    plugin suppresses the other two: "a reference would be a promise nothing can keep"
    (`plugin.py:298`–`plugin.py:299`).
@@ -297,7 +297,7 @@ emitted at all for the graph's hook to read.
 Default configuration means `include_retrieval_tool=True`: one tool result filtered to a marker, a
 disclaimer and a preview **with** a reference token, the graph folding history, the disclosure plugin
 projecting `toolConfig`, folding the closed turns' tool exchanges and appending its catalog to the
-system prompt — and `retrieve_all_context` reachable only from that catalog.
+system prompt — and `rf_retrieve_all_context` reachable only from that catalog.
 
 ```mermaid
 sequenceDiagram
@@ -314,7 +314,7 @@ sequenceDiagram
     Note over Graph: BeforeInvocationEvent — freeze TurnChoice<br/>graph plugin.py line 927
     Graph->>Disc: per-call input (InvokeModelStage.Input), graph FIRST at index 0
     Note over Graph: deliver() folds messages to Titles/Descriptions/Full<br/>projection.py:175 forces index 0 · replace() keeps system_prompt
-    Note over Disc: _project writes THREE fields · disclosure plugin.py line 977<br/>tool_specs = find_tools + get_tool_details + always_available + loaded<br/>retrieve_all_context is NOT always_available · it sits in the catalog<br/>messages = closed tool exchanges folded to sentences · catalog appended to system_prompt
+    Note over Disc: _project writes THREE fields · disclosure plugin.py line 977<br/>tool_specs = ptd_find_tools + ptd_get_tool_details + always_available + loaded<br/>rf_retrieve_all_context is NOT always_available · it sits in the catalog<br/>messages = closed tool exchanges folded to sentences · catalog appended to system_prompt
     Disc->>Model: model call (folded history + projected toolConfig + catalog)
 
     Model->>Tool: toolUse (a scenario tool)
@@ -325,10 +325,10 @@ sequenceDiagram
     Tool-->>Rel: AfterToolCallEvent (oversized result)
     Note over Rel: _on_after_tool_call -> _filter_and_rewrite<br/>store write, then marker + disclaimer + preview + ref token
 
-    Model->>Rel: optional retrieve_all_context (aggregate question only)<br/>loaded from the catalog with get_tool_details first
+    Model->>Rel: optional rf_retrieve_all_context (aggregate question only)<br/>loaded from the catalog with ptd_get_tool_details first
     Rel-->>Model: whole result, by pattern or chunk/token budget
 
-    Note over Rel: AfterInvocationEvent — _on_after_invocation drops<br/>the retrieve_all_context exchanges from agent.messages<br/>plugin.py:589 · before the next user message closes the turn
+    Note over Rel: AfterInvocationEvent — _on_after_invocation drops<br/>the rf_retrieve_all_context exchanges from agent.messages<br/>plugin.py:589 · before the next user message closes the turn
 
     Note over Graph: next BeforeInvocationEvent — recompute + freeze choice
     Graph->>Disc: next per-call input (InvokeModelStage.Input)
@@ -375,7 +375,7 @@ the conversation had ever touched (line 947). The `referenced` block, its two he
 `runner.py:20`–`runner.py:24`.
 
 A load lives `ttl_cycles` cycles without use — `_DEFAULT_TTL_CYCLES = 3` in the plugin (line 89), and
-`3` from the harness too (`config.py:421`). `get_tool_details` loads (line 1302, `_renew` at line 630
+`3` from the harness too (`config.py:421`). `ptd_get_tool_details` loads (line 1302, `_renew` at line 630
 called from line 1336), `_on_after_tool_call` renews on every call that **actually ran** — a cancelled
 call renews nothing (line 1383) — and `_expire` drops anything idle for more than `ttl_cycles`
 (line 607). The `BeforeToolCall` hook renews nothing at all any more.
@@ -383,8 +383,8 @@ call renews nothing (line 1383) — and `_expire` drops anything idle for more t
 **How the model is told to use the catalog.** `_CATALOG_PROMPT_HEADER` (line 162, rendered by
 `_catalog_prompt_block` at line 187) states the rule where the names are read: the listed tools are NOT
 in the tool list and MUST NOT be called directly, a direct call is rejected without running, and then
-three numbered steps — call `get_tool_details` with the names as a list, call them on the next call, and
-repeat step 1 if a call is rejected because the tool was unloaded. `find_tools` is named as the fallback
+three numbered steps — call `ptd_get_tool_details` with the names as a list, call them on the next call, and
+repeat step 1 if a call is rejected because the tool was unloaded. `ptd_find_tools` is named as the fallback
 for a need no listed name fits. The loading tool's own result header repeats the expiry
 (`_DETAILS_LOADED_HEADER`, line 100).
 
@@ -394,7 +394,7 @@ and anything in `always_available`; it allows a name in `state.projected`, the n
 projection actually carried (read at line 1372), so a tool that expired between the projection and the
 call is never mistaken for a guess. Otherwise, if the tool has a required parameter
 (`_requires_parameters`, line 335) the call is cancelled with `_PREMATURE_CALL_MESSAGE` (line 128,
-applied at line 1379), which points the model at `get_tool_details`. It does **not** load the tool on
+applied at line 1379), which points the model at `ptd_get_tool_details`. It does **not** load the tool on
 the model's behalf: the old "they are available now — call it again" recovery taught the model that
 calling a catalog name directly works, which is the one shortcut the catalog rule forbids.
 
@@ -408,14 +408,14 @@ always_available=[
 ```
 
 Two things about this composition. `"retrieve_context"` **was removed** and its successor
-`retrieve_all_context` was **not** put back: it is for the rare question that needs a whole result, so
+`rf_retrieve_all_context` was **not** put back: it is for the rare question that needs a whole result, so
 it stays in the catalog and costs a load only then (`runner.py:370`–`runner.py:374`, and the graph's own
 `retrieval_tool_names` docstring at lines 691–692). And what remains is derived, not literal — the
-graph's `retrieval_tool_names` (graph `plugin.py`, property at line 675, returning `expand_card`,
-`find_context`, and `expand_artifact` only when it was not de-registered) plus **one literal,
+graph's `retrieval_tool_names` (graph `plugin.py`, property at line 675, returning `cg_expand_card`,
+`cg_find_context`, and `cg_expand_artifact` only when it was not de-registered) plus **one literal,
 `list_accounts`** — which is a **domain tool of the scenario, not a plugin's** (comment at
 `runner.py:376`–`runner.py:378`). The graph's three must be always-available because a tool that is only
-in the catalog is not in `tool_specs` at all and has to be loaded with `get_tool_details` before it can
+in the catalog is not in `tool_specs` at all and has to be loaded with `ptd_get_tool_details` before it can
 be called, so a retrieval tool left to discovery would cost a cycle learning what the folded-context
 guidance already told the model to do (`runner.py:370`–`runner.py:372`; the same argument from the
 plugin's side at graph `plugin.py`, lines 678–683).
@@ -432,7 +432,7 @@ message, which is why the turn in flight is untouched and why a rewritten or mer
 loses its `reasoningContent` (`_without_reasoning`, line 764). And Converse rejects text placed before
 the `toolResult` answering the previous assistant message, so user messages put their `toolResult`
 blocks first (`_results_first`, line 772 — both applied by `_tidy` at line 782, which picks by role at
-line 784). The plugin's own `find_tools` / `get_tool_details` exchanges are dropped outright, with no
+line 784). The plugin's own `ptd_find_tools` / `ptd_get_tool_details` exchanges are dropped outright, with no
 sentence (line 816). Emptied messages are dropped and same-role neighbours merged; if the folded span
 ends with a user message it is joined into the opening user message of the turn in flight (line 886–889).
 

@@ -253,7 +253,7 @@ def test_override_reflects_the_projection():
     assert "what did topic 1 cost?" in rendered
     assert TOPIC_4 in rendered
     # The guidance names the tools this middleware actually registers.
-    assert "expand_card" in rendered
+    assert "cg_expand_card" in rendered
 
 
 def test_a_full_pass_is_the_identical_call():
@@ -368,18 +368,18 @@ def test_a_state_without_a_graph_starts_from_a_fresh_one():
 def test_the_three_retrieval_tools_are_registered_with_model_facing_arguments_only():
     """The injected ``runtime`` is not part of the schema the model is shown.
 
-    Registered in the Strands plugin's own order, ``expand_artifact`` between the two that read the
+    Registered in the Strands plugin's own order, ``cg_expand_artifact`` between the two that read the
     conversation's turns, so the set a model is shown is the same set in the same order on both bindings.
     """
     middleware = ContextGraphMiddleware(matcher=MockMatcher())
 
-    assert [each.name for each in middleware.tools] == ["expand_card", "expand_artifact", "find_context"]
+    assert [each.name for each in middleware.tools] == ["cg_expand_card", "cg_expand_artifact", "cg_find_context"]
     assert all(isinstance(each, BaseTool) for each in middleware.tools)
     by_name = {each.name: each for each in middleware.tools}
-    assert sorted(by_name["expand_card"].args) == ["titles"]
-    assert sorted(by_name["find_context"].args) == ["need", "tag"]
-    assert sorted(by_name["expand_artifact"].args) == ["line_range", "pattern", "reference"]
-    assert "earlier turns" in by_name["expand_card"].description
+    assert sorted(by_name["cg_expand_card"].args) == ["titles"]
+    assert sorted(by_name["cg_find_context"].args) == ["need", "tag"]
+    assert sorted(by_name["cg_expand_artifact"].args) == ["line_range", "pattern", "reference"]
+    assert "earlier turns" in by_name["cg_expand_card"].description
 
 
 def test_expand_card_raises_a_collapsed_card_to_full_content():
@@ -390,7 +390,7 @@ def test_expand_card_raises_a_collapsed_card_to_full_content():
     graph = state["context_graph"]
     assert graph.choice.by_title[TOPIC_4].dialogue == "title"
 
-    answer = middleware.expand_card(graph, [TOPIC_4])
+    answer = middleware.cg_expand_card(graph, [TOPIC_4])
 
     assert TOPIC_4 in answer
     assert graph.choice.by_title[TOPIC_4] == CardChoice(dialogue="full", evidence="full")
@@ -405,7 +405,7 @@ def test_expand_card_names_a_title_it_cannot_find():
     middleware = ContextGraphMiddleware(matcher=MockMatcher(), min_cards=1)
     _, state = project_once(middleware)
 
-    answer = middleware.expand_card(state["context_graph"], ["no such turn"])
+    answer = middleware.cg_expand_card(state["context_graph"], ["no such turn"])
 
     assert "no earlier turn" in answer
     assert "'no such turn'" in answer
@@ -417,7 +417,7 @@ def test_expand_card_reports_a_partial_batch():
     middleware = ContextGraphMiddleware(matcher=matcher, min_cards=1)
     _, state = project_once(middleware)
 
-    answer = middleware.expand_card(state["context_graph"], [TOPIC_4, "no such turn"])
+    answer = middleware.cg_expand_card(state["context_graph"], [TOPIC_4, "no such turn"])
 
     assert f"'{TOPIC_4}' arrives in full" in answer
     assert "nothing was raised for it" in answer
@@ -429,7 +429,7 @@ def test_expand_card_accepts_a_scalar_title():
     middleware = ContextGraphMiddleware(matcher=matcher, min_cards=1)
     _, state = project_once(middleware)
 
-    assert TOPIC_4 in middleware.expand_card(state["context_graph"], TOPIC_4)
+    assert TOPIC_4 in middleware.cg_expand_card(state["context_graph"], TOPIC_4)
 
 
 def test_expand_card_leaves_a_full_pass_alone():
@@ -438,7 +438,7 @@ def test_expand_card_leaves_a_full_pass_alone():
     _, state = project_once(middleware)
     graph = state["context_graph"]
 
-    middleware.expand_card(graph, [TOPIC_4])
+    middleware.cg_expand_card(graph, [TOPIC_4])
 
     assert graph.choice.full_pass is True
     assert dict(graph.choice.by_title) == {}
@@ -452,7 +452,7 @@ def test_find_context_answers_with_the_candidates_that_clear_the_floor():
     _, state = project_once(middleware)
     graph = state["context_graph"]
 
-    answer = middleware.find_context(graph, "topic 1 cost")
+    answer = middleware.cg_find_context(graph, "topic 1 cost")
 
     assert "1 earlier turn(s) match 'topic 1 cost'" in answer
     assert f"- title: {TOPIC_1}" in answer
@@ -468,7 +468,7 @@ def test_find_context_names_what_it_did_not_find():
     _, state = project_once(middleware)
     graph = state["context_graph"]
 
-    answer = middleware.find_context(graph, "quarterly bonus policy")
+    answer = middleware.cg_find_context(graph, "quarterly bonus policy")
 
     assert "nothing in this conversation matches 'quarterly bonus policy'" in answer
     assert graph.reuse == {}
@@ -480,8 +480,8 @@ def test_find_context_narrows_by_tag():
     _, state = project_once(middleware)
     graph = state["context_graph"]
 
-    narrowed = middleware.find_context(graph, "anything", tag="lookup")
-    missing = middleware.find_context(graph, "anything", tag="no-such-tag")
+    narrowed = middleware.cg_find_context(graph, "anything", tag="lookup")
+    missing = middleware.cg_find_context(graph, "anything", tag="no-such-tag")
 
     assert f"- title: {TOPIC_1}" in narrowed
     assert "among the turns tagged 'no-such-tag'" in missing
@@ -494,9 +494,9 @@ def test_the_retrieval_budget_is_spent_per_turn():
     _, state = project_once(middleware)
     graph = state["context_graph"]
 
-    first = middleware.expand_card(graph, [TOPIC_4])
-    second = middleware.expand_card(graph, [TOPIC_2])
-    third = middleware.find_context(graph, "topic 2")
+    first = middleware.cg_expand_card(graph, [TOPIC_4])
+    second = middleware.cg_expand_card(graph, [TOPIC_2])
+    third = middleware.cg_find_context(graph, "topic 2")
 
     assert "arrives in full" in first
     assert "already spent its 1 retrieval calls" in second
@@ -510,9 +510,9 @@ def test_a_tool_call_returns_the_state_update_and_the_answer():
     matcher = MockMatcher({"topic 1": 0.95})
     middleware = ContextGraphMiddleware(matcher=matcher, min_cards=1)
     _, state = project_once(middleware)
-    expand_card = {each.name: each for each in middleware.tools}["expand_card"]
+    cg_expand_card = {each.name: each for each in middleware.tools}["cg_expand_card"]
 
-    command = expand_card.invoke({"titles": [TOPIC_4], "runtime": _runtime(state, "call-7")})
+    command = cg_expand_card.invoke({"titles": [TOPIC_4], "runtime": _runtime(state, "call-7")})
 
     assert isinstance(command, Command)
     graph = command.update["context_graph"]
@@ -527,9 +527,9 @@ def test_a_tool_call_returns_the_state_update_and_the_answer():
 def test_a_tool_reached_before_any_projection_gets_a_fresh_graph():
     """No graph in state is answered as an empty graph, not as somebody else's."""
     middleware = ContextGraphMiddleware(matcher=MockMatcher())
-    find_context = {each.name: each for each in middleware.tools}["find_context"]
+    cg_find_context = {each.name: each for each in middleware.tools}["cg_find_context"]
 
-    command = find_context.invoke({"need": "anything", "runtime": _runtime({"messages": []}, "call-1")})
+    command = cg_find_context.invoke({"need": "anything", "runtime": _runtime({"messages": []}, "call-1")})
 
     assert isinstance(command.update["context_graph"], GraphState)
     assert command.update["context_graph"].cards == {}
@@ -564,7 +564,7 @@ def test_the_pruning_notice_fires_exactly_once():
     assert "FakeSummarizationMiddleware" in str(caught[0].message)
     assert "state['messages']" in str(caught[0].message)
     # Degrades and never blocks: the tools are registered exactly as they are without the notice.
-    assert [each.name for each in middleware.tools] == ["expand_card", "expand_artifact", "find_context"]
+    assert [each.name for each in middleware.tools] == ["cg_expand_card", "cg_expand_artifact", "cg_find_context"]
 
 
 def test_nothing_is_said_about_a_middleware_list_that_prunes_nothing():
@@ -625,7 +625,7 @@ def test_the_persisted_graph_survives_the_copy_langgraph_makes_of_it():
     assert type(state["context_graph"].choice.by_title) is dict
     assert copy.deepcopy(state["context_graph"]) is not None
 
-    command = {each.name: each for each in middleware.tools}["expand_card"].invoke(
+    command = {each.name: each for each in middleware.tools}["cg_expand_card"].invoke(
         {"titles": [TOPIC_4], "runtime": _runtime(state, "call-1")}
     )
 
@@ -668,7 +668,7 @@ class ScriptedChatModel(BaseChatModel):
 def test_end_to_end_the_agent_sees_the_projection_and_keeps_its_history():
     """On a real ``create_agent`` graph: the call is projected, the state is not, and the tool wires up.
 
-    The model is scripted to reach for ``expand_card`` on the first turn, which exercises the whole tool
+    The model is scripted to reach for ``cg_expand_card`` on the first turn, which exercises the whole tool
     path through LangGraph's own tool node -- the ``Command`` it returns is what puts the fed-back note in
     the persisted graph, and that note is the only thing that crosses the turn boundary: the elevation
     itself ends with the turn, since the next projection recomputes the choice from the graph.
@@ -680,7 +680,7 @@ def test_end_to_end_the_agent_sees_the_projection_and_keeps_its_history():
         turns=[
             AIMessage(
                 content="",
-                tool_calls=[{"id": "r1", "name": "expand_card", "args": {"titles": [TOPIC_4]}}],
+                tool_calls=[{"id": "r1", "name": "cg_expand_card", "args": {"titles": [TOPIC_4]}}],
                 id="ai-1",
             ),
             AIMessage(content="topic 1 cost 100 reais", id="ai-2"),
@@ -694,7 +694,7 @@ def test_end_to_end_the_agent_sees_the_projection_and_keeps_its_history():
 
     # The provider saw the projection: fewer messages than the history, and the folded block with them.
     assert len(model.seen[0]) < len(history)
-    assert any("expand_card" in str(message.content) for message in model.seen[0])
+    assert any("cg_expand_card" in str(message.content) for message in model.seen[0])
     # The persisted history keeps every message it started with, plus what the run added.
     assert [message.id for message in history] == [
         message.id for message in final["messages"][: len(history)]

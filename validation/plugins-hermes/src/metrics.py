@@ -63,12 +63,12 @@ class _CallTag:
 _CALL_TAG: contextvars.ContextVar[_CallTag | None] = contextvars.ContextVar("validation_call_tag", default=None)
 
 
-RETRIEVAL_TOOLS = ("retrieve_all_context", "expand_artifact", "expand_card", "find_context")
+RETRIEVAL_TOOLS = ("rf_retrieve_all_context", "cg_expand_artifact", "cg_expand_card", "cg_find_context")
 """Tools whose result brings stored content back into the history, in this harness.
 
-``retrieve_all_context`` is the relevance filter's (registered by default; its exchanges leave the
-history when the turn ends); the other three are the context graph's. ``find_tools`` and
-``get_tool_details`` are excluded: they return tool specs, not content. The earlier count keyed off
+``rf_retrieve_all_context`` is the relevance filter's (registered by default; its exchanges leave the
+history when the turn ends); the other three are the context graph's. ``ptd_find_tools`` and
+``ptd_get_tool_details`` are excluded: they return tool specs, not content. The earlier count keyed off
 ``retrieve_offloaded_content``, a tool from an earlier SDK integration that never exists here, so the column read 0.
 """
 

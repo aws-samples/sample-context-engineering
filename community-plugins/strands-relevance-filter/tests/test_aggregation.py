@@ -39,7 +39,7 @@ async def _filtered(plugin: RelevanceFilter) -> tuple[FakeAgent, str]:
 
 
 def _ctx(agent: FakeAgent) -> ToolContext:
-    tool_use = ToolUse(toolUseId="r1", name="retrieve_all_context", input={})
+    tool_use = ToolUse(toolUseId="r1", name="rf_retrieve_all_context", input={})
     return ToolContext(tool_use=tool_use, agent=agent, invocation_state={})  # type: ignore[arg-type]
 
 
@@ -58,7 +58,7 @@ async def test_disclaimer_reports_metadata_and_names_the_retrieval_call() -> Non
     assert "original: 6 lines, 6 chunks" in marker
     assert "shown: 1 chunk(s), lines 2" in marker  # the top-scored chunk is line 2
     assert "maximum" in marker and "count" in marker
-    assert "`retrieve_all_context`" in marker and "max_chunks" in marker and "pattern" in marker
+    assert "`rf_retrieve_all_context`" in marker and "max_chunks" in marker and "pattern" in marker
     assert "[ref: " in marker
 
 
@@ -69,7 +69,7 @@ async def test_disclaimer_without_the_tool_says_not_to_aggregate_the_excerpt() -
 
     assert "EXCERPT" in marker
     assert "Say that the result was filtered" in marker
-    assert "retrieve_all_context" not in marker
+    assert "rf_retrieve_all_context" not in marker
 
 
 # --------------------------------------------------------------------------------------------------
@@ -82,7 +82,7 @@ async def test_max_chunks_returns_the_most_relevant_chunks_in_document_order() -
     plugin = _plugin(FakeReranker(scores=[0.1, 0.9, 0.2, 0.3, 0.4, 0.8]))
     agent, _ = await _filtered(plugin)
 
-    out = await plugin.retrieve_all_context(
+    out = await plugin.rf_retrieve_all_context(
         reference="mem_1_t1_0", tool_context=_ctx(agent), max_chunks=2, max_tokens=1000
     )
 
@@ -98,7 +98,7 @@ async def test_max_chunks_and_max_tokens_large_enough_return_everything() -> Non
     plugin = _plugin(FakeReranker())
     agent, _ = await _filtered(plugin)
 
-    out = await plugin.retrieve_all_context(
+    out = await plugin.rf_retrieve_all_context(
         reference="mem_1_t1_0", tool_context=_ctx(agent), max_chunks=1000, max_tokens=10_000
     )
 
@@ -111,10 +111,10 @@ async def test_max_tokens_lifts_the_default_cap_on_a_pattern_read() -> None:
     plugin = _plugin(FakeReranker())
     agent, _ = await _filtered(plugin)
 
-    capped = await plugin.retrieve_all_context(
+    capped = await plugin.rf_retrieve_all_context(
         reference="mem_1_t1_0", tool_context=_ctx(agent), pattern="row", context_lines=0
     )
-    full = await plugin.retrieve_all_context(
+    full = await plugin.rf_retrieve_all_context(
         reference="mem_1_t1_0", tool_context=_ctx(agent), pattern="row", context_lines=0, max_tokens=10_000
     )
 
@@ -127,7 +127,7 @@ async def test_max_tokens_alone_reads_the_head_within_the_budget() -> None:
     plugin = _plugin(FakeReranker())
     agent, _ = await _filtered(plugin)
 
-    out = await plugin.retrieve_all_context(reference="mem_1_t1_0", tool_context=_ctx(agent), max_tokens=20)
+    out = await plugin.rf_retrieve_all_context(reference="mem_1_t1_0", tool_context=_ctx(agent), max_tokens=20)
 
     assert _ROWS[0] in out
     assert _ROWS[5] not in out
@@ -141,7 +141,7 @@ async def test_budget_below_one_is_rejected(field: str, bad: object) -> None:
     agent, _ = await _filtered(plugin)
 
     with pytest.raises(ValueError):
-        await plugin.retrieve_all_context(reference="mem_1_t1_0", tool_context=_ctx(agent), **{field: bad})
+        await plugin.rf_retrieve_all_context(reference="mem_1_t1_0", tool_context=_ctx(agent), **{field: bad})
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_max_chunks_without_a_ranking_reads_in_document_order() -> None:
     plugin.init_agent(agent)  # type: ignore[arg-type]
     reference = await plugin._store.store("x_0", _TEXT.encode(), "text/plain")
 
-    out = await plugin.retrieve_all_context(
+    out = await plugin.rf_retrieve_all_context(
         reference=reference, tool_context=_ctx(agent), max_chunks=2, max_tokens=1000
     )
 
@@ -184,7 +184,7 @@ async def test_a_retrieval_exchange_is_removed_at_the_end_of_the_turn() -> None:
     question = {"role": "user", "content": [{"text": "largest refund?"}]}
     call = {"role": "assistant", "content": [_use("s", "statement")]}
     result = {"role": "user", "content": [_res("s")]}
-    retrieve = {"role": "assistant", "content": [{"text": "reading the rest"}, _use("r", "retrieve_all_context")]}
+    retrieve = {"role": "assistant", "content": [{"text": "reading the rest"}, _use("r", "rf_retrieve_all_context")]}
     retrieved = {"role": "user", "content": [_res("r")]}
     answer = {"role": "assistant", "content": [{"text": "R$ 911,35 on 2026-07-01"}]}
     messages = [question, call, result, retrieve, retrieved, answer]
@@ -198,7 +198,7 @@ async def test_a_retrieval_exchange_is_removed_at_the_end_of_the_turn() -> None:
 @pytest.mark.asyncio
 async def test_a_mixed_call_keeps_the_other_tools_and_drops_reasoning() -> None:
     reasoning = {"reasoningContent": {"reasoningText": {"text": "t"}}}
-    mixed = {"role": "assistant", "content": [reasoning, _use("r", "retrieve_all_context"), _use("s", "statement")]}
+    mixed = {"role": "assistant", "content": [reasoning, _use("r", "rf_retrieve_all_context"), _use("s", "statement")]}
     results = {"role": "user", "content": [_res("r"), _res("s")]}
     answer = {"role": "assistant", "content": [{"text": "done"}]}
     question = {"role": "user", "content": [{"text": "q"}]}
@@ -213,7 +213,7 @@ async def test_a_mixed_call_keeps_the_other_tools_and_drops_reasoning() -> None:
 @pytest.mark.asyncio
 async def test_an_unanswered_retrieval_call_is_left_alone() -> None:
     question = {"role": "user", "content": [{"text": "q"}]}
-    messages = [question, {"role": "assistant", "content": [_use("r", "retrieve_all_context")]}]
+    messages = [question, {"role": "assistant", "content": [_use("r", "rf_retrieve_all_context")]}]
     snapshot = [dict(m) for m in messages]
 
     kept = await _end_turn(_plugin(FakeReranker()), messages)
@@ -225,7 +225,7 @@ async def test_an_unanswered_retrieval_call_is_left_alone() -> None:
 async def test_cleanup_is_a_no_op_with_the_tool_off() -> None:
     messages = [
         {"role": "user", "content": [{"text": "q"}]},
-        {"role": "assistant", "content": [_use("r", "retrieve_all_context")]},
+        {"role": "assistant", "content": [_use("r", "rf_retrieve_all_context")]},
         {"role": "user", "content": [_res("r")]},
         {"role": "assistant", "content": [{"text": "a"}]},
     ]

@@ -255,8 +255,8 @@ def _incoming_specs(agent: Agent, names: Sequence[str], find_tools_position: int
     Deep copies rather than the registry's own objects, so an example cannot reach the registry the next example reads,
     and so "the projection emitted the incoming specification" is a claim identity can actually settle.
 
-    Both plugin tools have to be present or the call is a passthrough, so they are always added — ``find_tools`` at a
-    generated position and ``get_tool_details`` last, which is the arrival order least likely to agree by accident with
+    Both plugin tools must be present or the call is a passthrough, so both are always added — ``ptd_find_tools`` at a
+    generated position and ``ptd_get_tool_details`` last, the arrival order least likely to agree by accident with
     the order the projection must produce.
 
     Args:
@@ -980,7 +980,7 @@ def test_the_index_is_built_once_per_registry_fingerprint(
     # through the search rather than merely present in the call.
     assert index.searches == []
     need = late.replace("_", " ")
-    found = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+    found = _run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     assert index.searches == [need]
     assert found.startswith(_MATCHES_HEADER)
@@ -991,7 +991,7 @@ def test_the_index_is_built_once_per_registry_fingerprint(
     assert state.exposed == {}
     assert state.loads == 0
 
-    loaded = _run(plugin.get_tool_details(names=[late], tool_context=_tool_context(agent, GET_TOOL_DETAILS_NAME)))
+    loaded = _run(plugin.ptd_get_tool_details(names=[late], tool_context=_tool_context(agent, GET_TOOL_DETAILS_NAME)))
 
     assert loaded.startswith(_DETAILS_LOADED_HEADER)
     assert f"- {late}:" in loaded
@@ -1046,7 +1046,7 @@ def test_passthrough_triggers_on_either_structural_guard(
         synthetic: dict[str, Any] = {"name": unknown, "description": "x", "inputSchema": {}}
         incoming.insert(min(find_tools_position, len(incoming)), synthetic)
     # The window between ``init_agent`` and the plugin registry registering the vended tools. Either one missing is
-    # enough: without ``get_tool_details`` the model cannot load a hidden schema, and without ``find_tools`` it cannot
+    # enough: lacking ``ptd_get_tool_details`` the model can't load a hidden schema, lacking ``ptd_find_tools`` it can't
     # find one, so in both cases there is nothing to hide.
     missing = {
         "no_find_tools": {FIND_TOOLS_NAME},
@@ -1161,8 +1161,8 @@ def test_per_agent_state_is_isolated(
     # Every channel that writes state, exercised on the first agent only: a projection, a search, a load and a
     # premature call.
     _run(plugin._projection_handler(_context(first, _incoming_specs(first, names), [])))
-    _run(plugin.find_tools(need=first_need, tool_context=_tool_context(first)))
-    _run(plugin.get_tool_details(names=[loaded], tool_context=_tool_context(first, GET_TOOL_DETAILS_NAME)))
+    _run(plugin.ptd_find_tools(need=first_need, tool_context=_tool_context(first)))
+    _run(plugin.ptd_get_tool_details(names=[loaded], tool_context=_tool_context(first, GET_TOOL_DETAILS_NAME)))
     plugin._on_before_tool_call(_before_tool_call(first, premature))
 
     assert plugin._states.get(second) is None, "activity on one agent created state on another"
@@ -1170,8 +1170,8 @@ def test_per_agent_state_is_isolated(
 
     # Now the second agent runs the same channels with a need of its own.
     _run(plugin._projection_handler(_context(second, _incoming_specs(second, names), [])))
-    _run(plugin.find_tools(need=second_need, tool_context=_tool_context(second)))
-    _run(plugin.get_tool_details(names=[loaded], tool_context=_tool_context(second, GET_TOOL_DETAILS_NAME)))
+    _run(plugin.ptd_find_tools(need=second_need, tool_context=_tool_context(second)))
+    _run(plugin.ptd_get_tool_details(names=[loaded], tool_context=_tool_context(second, GET_TOOL_DETAILS_NAME)))
     plugin._on_before_tool_call(_before_tool_call(second, premature))
 
     # Requirement 1.4 and 10.5: two agents, one plugin instance, two states — and updating one leaves the other exactly

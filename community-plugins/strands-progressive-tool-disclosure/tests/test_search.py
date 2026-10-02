@@ -1,4 +1,4 @@
-"""Property tests for the search tool: what one ``find_tools`` invocation lists, and what it does not do.
+"""Property tests for the search tool: what one ``ptd_find_tools`` invocation lists, and what it does not do.
 
 Feature: progressive-tool-disclosure-plugin, Property 9: Search lists exactly the registry-present matches and
 exposes nothing.
@@ -13,8 +13,8 @@ Feature: progressive-tool-disclosure-plugin, Property 11: Search text lists name
 
 Validates: Requirements 5.4, 5.5, 5.11.
 
-Search no longer reaches a schema: it finds, and ``get_tool_details`` loads. So the central claim of this file is a
-negative one, asserted on its own rather than as a side condition — ``find_tools`` exposes NOTHING. The disclosure
+Search no longer reaches a schema: it finds, and ``ptd_get_tool_details`` loads. So the central claim of this file is a
+negative one, asserted on its own rather than as a side condition — ``ptd_find_tools`` exposes NOTHING. The disclosure
 state is captured before the invocation and compared field for field after it: no name is added to ``exposed``, no
 pre-existing exposure has its last-use cycle moved, and ``loads`` stays at zero, because a search is not a load. The
 summary cache is asserted empty for the same reason: a search composes its lines by truncation off the registry, so no
@@ -310,7 +310,7 @@ def test_search_lists_the_registry_present_matches_and_exposes_nothing(
     state = _seed(plugin, agent, seeded, cycle)
     before = dict(state.exposed)
 
-    result = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+    result = _run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     matched = _expected_matches(ranked, top_k)
     listable = _listable(matched, agent)
@@ -328,14 +328,14 @@ def test_search_lists_the_registry_present_matches_and_exposes_nothing(
     else:
         assert result == plugin_module._NO_MATCH_GUIDANCE
     for name in dropped:
-        # As a line, not as a substring: the header names ``get_tool_details`` itself, and that mention is the
+        # As a line, not as a substring: the header names ``ptd_get_tool_details`` itself, and that mention is the
         # instruction, not a listing of it.
         assert f"- {name}:" not in result, f"a match with nothing to load was listed: {name}"
 
     # THE claim of the redesign: a search finds, it does not disclose. Not one name is added to the exposures and not
     # one pre-existing exposure has its last use moved -- asserted as an equality against the state captured before.
     added = set(state.exposed) - set(before)
-    assert state.exposed == before, f"find_tools exposed something: added=<{added}> | exposed=<{state.exposed}>"
+    assert state.exposed == before, f"ptd_find_tools exposed something: added=<{added}> | exposed=<{state.exposed}>"
     for name in listable:
         assert name not in state.exposed or name in seeded, f"a listed match was exposed by the search: {name}"
 
@@ -349,7 +349,7 @@ def test_search_lists_the_registry_present_matches_and_exposes_nothing(
 
     # Requirement 5.9: the same need again, one cycle further on. Same absence of disclosure, one more search.
     agent.event_loop_metrics.cycle_count = cycle + later
-    repeat = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+    repeat = _run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     assert index.calls == [(need, top_k), (need, top_k)], "a repeat search did not search exactly once more"
     assert repeat == result, "a repeat search answered differently"
@@ -390,7 +390,7 @@ def test_a_blank_need_short_circuits_the_search(
     state = _seed(plugin, agent, seeded, cycle)
     before = dict(state.exposed)
 
-    result = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+    result = _run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     # Requirement 5.6: zero searches. Returning the right guidance while still ranking a top_k of noise would pass a
     # test that only read the return value, which is why this is asserted by counting.
@@ -431,7 +431,7 @@ def test_search_text_lists_names_and_short_descriptions_only(
     agent = _agent(plugin)
     state = _seed(plugin, agent, (), cycle)
 
-    result = _run(plugin.find_tools(need=need, tool_context=_tool_context(agent)))
+    result = _run(plugin.ptd_find_tools(need=need, tool_context=_tool_context(agent)))
 
     registry = agent.tool_registry.registry
     listable = _listable(_expected_matches(ranked, top_k), agent)
@@ -463,4 +463,4 @@ def test_search_text_lists_names_and_short_descriptions_only(
     # exposes nothing at all.
     for name in ABSENT_NAMES:
         assert name not in result, f"a registry-absent match was listed: {name}"
-    assert state.exposed == {}, f"find_tools exposed something: {state.exposed}"
+    assert state.exposed == {}, f"ptd_find_tools exposed something: {state.exposed}"

@@ -431,7 +431,7 @@ def test_a_call_to_a_loaded_tool_runs(middleware):
 
 
 def test_a_load_from_the_same_batch_does_not_sanction_a_guess(middleware):
-    """``get_tool_details`` running beside the guessed call recorded the current cycle, not an earlier one."""
+    """``ptd_get_tool_details`` running beside the guessed call recorded the current cycle, not an earlier one."""
     outcome, handler = _guard(middleware, "get_balance", loaded={"get_balance": 1})
     assert isinstance(outcome, ToolMessage)
     assert handler.calls == []
@@ -773,7 +773,7 @@ def test_a_fold_leaves_no_provider_tool_use_part_behind():
         AIMessage(content="done", id="a3"),
         HumanMessage(content="second", id="h4"),
     ]
-    folded = _fold_messages(history, active={"find_tools"})
+    folded = _fold_messages(history, active={"ptd_find_tools"})
 
     call_ids = set()
     for message in folded:
@@ -819,7 +819,7 @@ def test_text_an_outer_middleware_attached_to_a_tool_result_does_not_open_a_new_
     """Regression from the live all arm: the context graph attaches its collapsed-turns digest to the
     latest user-role message, which mid-turn is a tool result. The adapter renders that as a ToolMessage
     followed by a marked HumanMessage. Read back as a fresh user turn, it made this turn's own
-    get_tool_details exchange look closed, the fold removed it, and the model reloaded forever."""
+    ptd_get_tool_details exchange look closed, the fold removed it, and the model reloaded forever."""
     from langgraph_progressive_tool_disclosure._adapter import ATTACHED_TEXT_KEY
     from langgraph_progressive_tool_disclosure.middleware import _fold_messages
 
@@ -835,7 +835,7 @@ def test_text_an_outer_middleware_attached_to_a_tool_result_does_not_open_a_new_
         ToolMessage(content="Loaded get_balance", tool_call_id="c1", name=GET_TOOL_DETAILS_NAME, id="t1"),
         HumanMessage(content="<collapsed_turns>digest</collapsed_turns>", additional_kwargs={ATTACHED_TEXT_KEY: True}),
     ]
-    folded = _fold_messages(history, active={"find_tools", GET_TOOL_DETAILS_NAME, "get_balance"})
+    folded = _fold_messages(history, active={"ptd_find_tools", GET_TOOL_DETAILS_NAME, "get_balance"})
 
     assert any(isinstance(m, ToolMessage) and m.tool_call_id == "c1" for m in folded)
     assert any(isinstance(m, AIMessage) and m.tool_calls for m in folded)

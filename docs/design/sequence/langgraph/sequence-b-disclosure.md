@@ -24,9 +24,9 @@ and the differences are structural rather than cosmetic — graph state instead 
 On every model call the middleware rewrites **three** fields of the request, all through one
 `request.override` (`middleware.py:798`).
 
-`tools` is reduced to the entries callable on this call: the two disclosure tools `find_tools` and
-`get_tool_details`, the `always_available` names, and the tools whose schema was **loaded** by a prior
-`get_tool_details` and is still live under a TTL measured in cycles (`_active_names`
+`tools` is reduced to the entries callable on this call: the two disclosure tools `ptd_find_tools` and
+`ptd_get_tool_details`, the `always_available` names, and the tools whose schema was **loaded** by a prior
+`ptd_get_tool_details` and is still live under a TTL measured in cycles (`_active_names`
 `middleware.py:327`, applied by `_keep_active` `middleware.py:396`). Every entry kept is the caller's own
 object, verbatim — there is no reduced form of a tool in the list, only presence or absence
 (`_keep_active` docstring `middleware.py:401`). Every other bound tool reaches the model as **one line of
@@ -56,13 +56,13 @@ active tool list and the catalog **partition** the bound set between them — th
 skipping exactly the active names, so no tool appears in both and none is missing from both
 (`catalog_prompt_block` `catalog.py:365`, docstring `catalog.py:348`).
 
-**The common path is catalog → `get_tool_details([names])` → call.** The model reads a name in the system
-message, calls `get_tool_details` with the names it wants, which records them in `loaded_tools` through a
+**The common path is catalog → `ptd_get_tool_details([names])` → call.** The model reads a name in the system
+message, calls `ptd_get_tool_details` with the names it wants, which records them in `loaded_tools` through a
 `Command` state update (`_load` `middleware.py:1003`, `Command` at `middleware.py:1053`) and answers with a
-short confirmation; the full schemas arrive on the *next* model call. `find_tools` is the **fallback**
+short confirmation; the full schemas arrive on the *next* model call. `ptd_find_tools` is the **fallback**
 for a need no catalog name fits: it ranks the bound specifications through the `LexicalToolIndex`
 (`tool_index.py:177`) term-frequency `search` (`tool_index.py:214`) and lists names plus summaries, and
-it **writes no state** — loading is `get_tool_details`' one job, so the model takes the same road to a
+it **writes no state** — loading is `ptd_get_tool_details`' one job, so the model takes the same road to a
 schema wherever it started (`_search` `middleware.py:967`, docstring `middleware.py:970`).
 
 The guard lives in the tool-call seam rather than in a hook. `wrap_tool_call` (`middleware.py:821`)
@@ -93,7 +93,7 @@ flowchart TB
         RW["_rewrite · request.override of tools, messages, system_message<br/>middleware.py:749 · 798"]
         KEEP["_keep_active · caller objects verbatim, presence or absence<br/>middleware.py:396"]
         SYS["_with_catalog · a replacement SystemMessage<br/>middleware.py:371 · 393"]
-        TOOLS["find_tools and get_tool_details as closures · self.tools<br/>middleware.py:925 · 947 · 634"]
+        TOOLS["ptd_find_tools and ptd_get_tool_details as closures · self.tools<br/>middleware.py:925 · 947 · 634"]
         WTC["wrap_tool_call · awrap_tool_call · _cancellation<br/>middleware.py:821 · 849 · 858"]
         ST["loaded_tools in graph state · _merge_loads reducer<br/>middleware.py:170 · 138 · state_schema 572"]
     end
@@ -127,7 +127,7 @@ flowchart TB
     WTC -.->|"recomputes the active set for the chosen cycle 885 · 888"| ST
 ```
 
-Two facts the picture is worth reading for. First, **only `get_tool_details` writes state** — the arrow
+Two facts the picture is worth reading for. First, **only `ptd_get_tool_details` writes state** — the arrow
 into `loaded_tools` has exactly one source, and both the rewrite and the guard are readers
 (`middleware.py:776`, `middleware.py:886`). Second, the adapter's return path is **not** symmetric with
 its outbound path: `to_neutral_list_with_sources` converts every message and reports, per neutral message,
@@ -153,14 +153,14 @@ middleware imports the singular `to_langchain`, the plain `to_neutral_list` and 
 |---|----------------|----------------|------------------|-------|---------|
 | 1 | `AgentMiddleware` base class (subclassed) | `middleware.py:541` `class ProgressiveToolDisclosureMiddleware(AgentMiddleware)` | The base class is reached only through `_compat.py`, which imports `AgentMiddleware`, `AgentState`, `ModelRequest` and `ModelResponse` from `langchain.agents.middleware` (`_compat.py:8`) | — | — |
 | 2 | `state_schema` class attribute | `middleware.py:572` | Read by `create_agent` when it builds the graph, so `loaded_tools` becomes part of the thread's checkpointed state | — | Extends the agent state with `DisclosureState` (`middleware.py:162`) |
-| 3 | `tools` instance attribute | `middleware.py:634`, set before `super().__init__()` (`middleware.py:635`) | The middleware contributes its two tools to the agent's bound set | — | Adds `find_tools` and `get_tool_details` to the agent |
+| 3 | `tools` instance attribute | `middleware.py:634`, set before `super().__init__()` (`middleware.py:635`) | The middleware contributes its two tools to the agent's bound set | — | Adds `ptd_find_tools` and `ptd_get_tool_details` to the agent |
 | 4 | `wrap_model_call` | `middleware.py:641`, priming in `_prime_summaries` (`middleware.py:725`), rewrite in `_rewrite` (`middleware.py:749`) | Wraps the model call. No explicit order — the position in the chain is the order the caller lists the middleware in | `request.tools`, `request.messages` (for the fold), `request.state["messages"]` (for the cycle and the TTL, `middleware.py:774`), `request.state["loaded_tools"]`, `request.system_message`, `request.model` | Returns `request.override(**overrides)` (`middleware.py:798`) carrying new `tools` and `messages`, plus `system_message` when the catalog is non-empty (`middleware.py:786`). Mutates the instance's index and summary cache through `_ensure_index` (`middleware.py:800`) and `build_catalog` (`middleware.py:785`), and the cache plus `summary_usage` through the priming (`middleware.py:715`, `middleware.py:708`). Writes **no** graph state. Logs the decision it took at debug level — the cycle, the kept-over-bound tool counts, the catalog's token estimate, the whole `loaded_tools` map and the active names minus the two disclosure tools (`middleware.py:790`, `middleware.py:795`, `middleware.py:796`), which is what makes a tool that is loaded yet not active readable off one line. |
 | 5 | `awrap_model_call` | `middleware.py:666` | Async twin. The rewrite itself does no I/O and is the same `_rewrite` call (`middleware.py:674`), so only the priming differs: `_aprime_summaries` (`middleware.py:733`) awaits the summary calls concurrently | Same as row 4 | Same as row 4 |
 | 6 | `request.model`, invoked directly | `middleware.py:729` (`invoke`), `middleware.py:743` (`ainvoke`) | The default summarizer's own call, outside the handler chain, so no middleware — this one included — sees it (section comment `middleware.py:680`). Skipped entirely when a caller passed a `summarizer`, when the catalog is suppressed, or when the request carries no model (`middleware.py:685`) | `request.model`, `request.tools` (`middleware.py:687`) | The summary cache (`middleware.py:715`) and `summary_usage` (`middleware.py:708`). Writes **no** graph state, and the call carries no tools, no history and no middleware |
 | 7 | `wrap_tool_call` | `middleware.py:821`, decision in `_cancellation` (`middleware.py:858`) | Wraps each tool call. Returns the cancellation instead of calling `handler` when the call was a guess (`middleware.py:846`) | `request.tool_call`, `request.runtime.tools`, `request.state["messages"]`, `request.state["loaded_tools"]`, `self._always_available` | Returns a `ToolMessage` with `status="error"` (`middleware.py:900`). Writes no graph state — the one thing it records is the instance counter `premature_cancellations` (`middleware.py:899`). |
 | 8 | `awrap_tool_call` | `middleware.py:849` | Async twin, same decision (`middleware.py:855`) | Same as row 7 | Same as row 7 |
-| 9 | `@tool` closure `find_tools` | `middleware.py:925` decorator, `middleware.py:926` function | Built in `_build_tools` (`middleware.py:914`) and handed to the agent through `self.tools`. Receives a `ToolRuntime` injected by the framework | `runtime.tools` (`middleware.py:984`), the `need` argument, the index | **Nothing.** It returns a plain `str` (`middleware.py:1001`), so no state update can travel with it. |
-| 10 | `@tool` closure `get_tool_details` | `middleware.py:947` decorator, `middleware.py:948` function | Same construction as row 9. Returns a `Command`, which is how a LangGraph tool writes state | `runtime.tools`, `runtime.state["messages"]`, `runtime.tool_call_id` (`middleware.py:1047`), the `names` argument | Returns `Command(update=...)` (`middleware.py:1053`) carrying the answer `ToolMessage` (`middleware.py:1045`) and, only when something was loaded (`middleware.py:1051`), the `loaded_tools` delta. |
+| 9 | `@tool` closure `ptd_find_tools` | `middleware.py:925` decorator, `middleware.py:926` function | Built in `_build_tools` (`middleware.py:914`) and handed to the agent through `self.tools`. Receives a `ToolRuntime` injected by the framework | `runtime.tools` (`middleware.py:984`), the `need` argument, the index | **Nothing.** It returns a plain `str` (`middleware.py:1001`), so no state update can travel with it. |
+| 10 | `@tool` closure `ptd_get_tool_details` | `middleware.py:947` decorator, `middleware.py:948` function | Same construction as row 9. Returns a `Command`, which is how a LangGraph tool writes state | `runtime.tools`, `runtime.state["messages"]`, `runtime.tool_call_id` (`middleware.py:1047`), the `names` argument | Returns `Command(update=...)` (`middleware.py:1053`) carrying the answer `ToolMessage` (`middleware.py:1045`) and, only when something was loaded (`middleware.py:1051`), the `loaded_tools` delta. |
 | 11 | `Annotated` state reducer | `middleware.py:170`, reducer `_merge_loads` (`middleware.py:138`) | Applied by LangGraph when it merges channel writes at the end of a superstep | The map already in state and the incoming update | Produces a new merged map, keeping the **later** cycle per name (`middleware.py:158`). Neither argument is mutated (`middleware.py:156`). |
 
 Supporting framework imports (the surface used, not attachment points): `AIMessage`, `BaseMessage`,
@@ -196,7 +196,7 @@ terms, every one of them intersected with the names the agent actually has:
 
 | Order | Class | Membership source (`file.py:LINE`) | What the model receives |
 |-------|-------|-------------------------------------|--------------------------|
-| 1 | `{find_tools, get_tool_details}` | `PLUGIN_TOOL_NAMES` (`catalog.py:66`), first term at `middleware.py:356` | The caller's own tool objects, verbatim — emitted unconditionally, which is what makes the tool list non-empty on every rewritten call |
+| 1 | `{ptd_find_tools, ptd_get_tool_details}` | `PLUGIN_TOOL_NAMES` (`catalog.py:66`), first term at `middleware.py:356` | The caller's own tool objects, verbatim — emitted unconditionally, which is what makes the tool list non-empty on every rewritten call |
 | 2 | `always_available` | `self._always_available` tuple (`middleware.py:617`), second term at `middleware.py:357` | The caller's own objects on every call |
 | 3 | live loads | `loaded_tools` from state (`middleware.py:776`), aged by `_last_used` over the persisted history (`middleware.py:283`, `middleware.py:778`), third term at `middleware.py:358` | The caller's own objects while the load is live under the TTL |
 | 4 | catalog residue | every bound name **not** in the active set, skipped while rendering (`catalog.py:365`, `catalog.py:410`) | **Nothing in `tools`.** One line `- name: summary` in the system message (`catalog.py:368`), under the header at `catalog.py:372` |
@@ -206,8 +206,8 @@ unbound since it was loaded cannot resurrect from a stale `loaded_tools` entry (
 `middleware.py:350`, applied at `middleware.py:356`, `middleware.py:357` and `middleware.py:361`).
 
 **Passthrough is structural, not a flag.** `_rewrite` returns the request untouched when the disclosure
-tools are not a subset of the bound names (`middleware.py:763`): without `get_tool_details` there is no
-way to load a hidden schema and without `find_tools` no way to find one, so there is nothing to hide
+tools are not a subset of the bound names (`middleware.py:763`): without `ptd_get_tool_details` there is no
+way to load a hidden schema and without `ptd_find_tools` no way to find one, so there is nothing to hide
 (docstring `middleware.py:756`). That single subset test is also what covers the no-tools case, since an
 empty bound set cannot contain either name.
 
@@ -254,7 +254,7 @@ off `request.state["messages"]`, falling back to `request.messages` only when st
 (`middleware.py:774`), and `_last_used` is given that same list (`middleware.py:778`). The reason is
 composition: a middleware wrapping this one — the context graph binding does exactly this — may have
 projected the call's messages down to a smaller set, and counting `AIMessage` objects on a projection
-yields a cycle **behind** the one `get_tool_details` recorded from state. The load then never satisfies
+yields a cycle **behind** the one `ptd_get_tool_details` recorded from state. The load then never satisfies
 `used < cycle` in `_active_names` (`middleware.py:361`), the tool never becomes callable, and the model
 reloads it forever. Reading the persisted history is what the Strands binding gets for free from
 `event_loop_metrics.cycle_count`, which no projection touches either (comment `middleware.py:769`
@@ -263,7 +263,7 @@ through `middleware.py:773`).
 **A load numbered on a longer history is clamped, not discarded.** Reading state fixes the projection
 case, but state itself can shrink: a middleware that *removes* messages from it — the relevance filter's
 end-of-run cleanup drops its closed retrieval exchanges — takes `AIMessage` objects out of the list the
-cycle is counted from, so a load `get_tool_details` recorded before the removal reads as a cycle in the
+cycle is counted from, so a load `ptd_get_tool_details` recorded before the removal reads as a cycle in the
 future. `_last_used` therefore does not take `loaded` as given: an entry whose cycle is greater than the
 cycle being decided is treated as a load made **just before** it, `before - 1` (`middleware.py:312`,
 comment `middleware.py:307` through `middleware.py:311`). Left as recorded, such an entry fails
@@ -307,7 +307,7 @@ the call **vouch for its own tool** (`middleware.py:295`).
 Their companion is the inequality in `_active_names`: a load or a use counts only when it happened on an
 **earlier** cycle than the one being decided, `used < cycle` (`middleware.py:361`). That does two jobs at
 once — it is trivially true on the normal path, since a tool loaded on cycle *k* is callable from *k+1*,
-and it is what makes the guard correct, because a sibling `get_tool_details` that ran in the same batch as
+and it is what makes the guard correct, because a sibling `ptd_get_tool_details` that ran in the same batch as
 a guessed call recorded the *current* cycle and so cannot make the guess look sanctioned (docstring
 `middleware.py:336`). The test suite pins that case by name:
 `test_a_load_from_the_same_batch_does_not_sanction_a_guess` in the binding's `tests/test_middleware.py`.
@@ -322,7 +322,7 @@ set of loads produces the same map whichever order the writes arrive in (`middle
 `middleware.py:158`).
 
 The channel carries a reducer at all because **two writes can land in one step**: the model can call
-`get_tool_details` twice in the same batch, and each call answers with its own `Command`, so a plain
+`ptd_get_tool_details` twice in the same batch, and each call answers with its own `Command`, so a plain
 assignment would let one of the two win outright and lose the other's loads (`middleware.py:141`). A
 LangGraph channel with no reducer does not merely overwrite in that situation — it refuses the second
 write and fails the step, which is why any state key a parallel tool call can write needs one.
@@ -453,7 +453,7 @@ A live reload loop hinged on exactly that check. The context graph binding attac
 digest to the latest user-role message, which mid-turn is a tool result, so the digest arrived here as a
 bare `HumanMessage` after a `ToolMessage`. Read as a message of its own it carries no `toolResult`, so
 `_current_turn_start` (`catalog.py:444`) put the turn boundary **at the digest** — which made this turn's
-own `get_tool_details` exchange a closed exchange of a preceding turn, the fold dropped it
+own `ptd_get_tool_details` exchange a closed exchange of a preceding turn, the fold dropped it
 (`catalog.py:569`), and the model, never shown the load it had just made, loaded the same tool again on
 every call. The binding's `tests/test_middleware.py` pins the case as
 `test_text_an_outer_middleware_attached_to_a_tool_result_does_not_open_a_new_turn`. The marker is declared
@@ -599,7 +599,7 @@ sequenceDiagram
         RW-->>MW: request.override(tools, messages, system_message) [middleware.py:798]
     end
     MW->>Provider: handler(request) [middleware.py:664]
-    Note over Provider: tools = find_tools + get_tool_details + always_available + live loads
+    Note over Provider: tools = ptd_find_tools + ptd_get_tool_details + always_available + live loads
     Note over Provider: system = the caller's message plus the catalog block as one more text block
     Note over Provider: messages = the folded copy · no call shape for a tool absent from tools
 ```
@@ -637,7 +637,7 @@ the opening position, so on a provider that caches by prefix the operator's text
 ## 9. The common path — catalog, load, call
 
 Two model calls and no guessing: the names live in the system message, the schemas arrive through
-`get_tool_details`, and use renews the TTL without any write at all.
+`ptd_get_tool_details`, and use renews the TTL without any write at all.
 
 `_load` (`middleware.py:1003`) tolerates the two shapes a model actually sends: a bare string instead of a
 list (`middleware.py:1017`) and duplicates, which are de-duplicated with order kept and each name stripped
@@ -652,12 +652,12 @@ result is resident in the history while a tool list is per call and forgettable 
 sequenceDiagram
     participant Model
     participant MW as the middleware
-    participant Tool as get_tool_details [middleware.py:947]
+    participant Tool as ptd_get_tool_details [middleware.py:947]
     participant State as loaded_tools channel [middleware.py:170]
 
     Note over Model: Call N · cycle = k · reads the catalog in the system message
     MW-->>Model: tools = callable only · system += catalog · messages folded [middleware.py:798]
-    Model->>Tool: get_tool_details(["list_investment_transactions"])
+    Model->>Tool: ptd_get_tool_details(["list_investment_transactions"])
     Tool->>MW: _load(names, runtime) [middleware.py:963,1003]
     MW->>MW: bare string tolerated · duplicates dropped · names stripped [middleware.py:1017,1018]
     MW->>MW: cycle = number of AIMessages in state MINUS one [middleware.py:1023]
@@ -675,16 +675,16 @@ sequenceDiagram
     MW->>MW: no write · the call itself renews through _last_used next time [middleware.py:322]
 ```
 
-`get_tool_details` takes a **list**, which is what keeps a step needing three tools to one cycle rather
+`ptd_get_tool_details` takes a **list**, which is what keeps a step needing three tools to one cycle rather
 than three (docstring `middleware.py:951`). The answer `ToolMessage` is built by the middleware itself
 (`middleware.py:1045`) rather than by the framework wrapping a returned string, because the tool's return
 type is `Command` — that is the only way a LangGraph tool writes a state channel, and `loaded_tools` is
 added to the update **only** when something was actually loaded (`middleware.py:1051`).
 
-## 10. The fallback — `find_tools` searches, it does not load
+## 10. The fallback — `ptd_find_tools` searches, it does not load
 
-`find_tools` exists for a need the model cannot map to any listed name. It ranks specifications and
-reports names plus summaries, and then stops: the model still goes through `get_tool_details`, so there is
+`ptd_find_tools` exists for a need the model cannot map to any listed name. It ranks specifications and
+reports names plus summaries, and then stops: the model still goes through `ptd_get_tool_details`, so there is
 one road to a schema instead of two (docstring `middleware.py:970`).
 
 A blank need is not searched at all and returns guidance (`middleware.py:981`, `middleware.py:982`). A
@@ -696,12 +696,12 @@ set does not have, and either disclosure tool, are skipped (`middleware.py:996`)
 ```mermaid
 sequenceDiagram
     participant Model
-    participant Tool as find_tools [middleware.py:925]
+    participant Tool as ptd_find_tools [middleware.py:925]
     participant MW as _search [middleware.py:967]
     participant Idx as LexicalToolIndex [tool_index.py:177]
 
     Note over Model: no catalog name fits the need
-    Model->>Tool: find_tools("list investment transactions")
+    Model->>Tool: ptd_find_tools("list investment transactions")
     Tool->>MW: _search(need, runtime) [middleware.py:945]
     alt need is blank
         MW-->>Model: _EMPTY_NEED_GUIDANCE [middleware.py:982,101]
@@ -717,7 +717,7 @@ sequenceDiagram
                 MW-->>Model: _NO_MATCH_GUIDANCE [middleware.py:1000,104]
             else names to report
                 MW-->>Model: _MATCHES_HEADER plus one line per match · NOTHING loaded [middleware.py:1001,79]
-                Model->>Tool: get_tool_details([names]) · then exactly as section 9
+                Model->>Tool: ptd_get_tool_details([names]) · then exactly as section 9
             end
         end
     end
@@ -748,7 +748,7 @@ awaitables.
 A guessed call is a name the model read in the catalog and called without loading it. The guard does not
 consult a stored "what was projected" set; it **recomputes** the active set for the cycle the model chose
 on (`middleware.py:885` through `middleware.py:889`). That single choice is what makes two cases come out
-right at once: a sibling `get_tool_details` in the same batch recorded the current cycle and so cannot
+right at once: a sibling `ptd_get_tool_details` in the same batch recorded the current cycle and so cannot
 sanction the guess, and a tool that expired *since* the call was issued is not mistaken for a guess
 either (docstring `middleware.py:829`).
 
@@ -758,7 +758,7 @@ answers it already (`middleware.py:879`, comment `middleware.py:878`). A name in
 returns (`middleware.py:890`). Only then is the parameter test applied (`middleware.py:895`).
 
 **The guard loads nothing on the model's behalf.** It cancels with `_PREMATURE_CALL_MESSAGE`
-(`middleware.py:901`), which names the tool and points at `get_tool_details`. A recovery that loaded the
+(`middleware.py:901`), which names the tool and points at `ptd_get_tool_details`. A recovery that loaded the
 tool and invited an immediate retry would teach the model that calling a catalog name directly works,
 which is the very shortcut the catalog rule forbids (docstring `middleware.py:128`).
 
@@ -789,9 +789,9 @@ sequenceDiagram
                 else X requires parameters
                     Cancel->>Cancel: log the cancellation, count it on the instance [middleware.py:898,899]
                     Cancel-->>WTC: ToolMessage · status error · _PREMATURE_CALL_MESSAGE [middleware.py:900,901,904]
-                    WTC-->>Model: "'X' did not run: it is not loaded... call get_tool_details with [X] first"
-                    Note over Model: X is NOT loaded by the guard · the model must call get_tool_details itself
-                    Model->>WTC: get_tool_details(["X"]) · then exactly as section 9
+                    WTC-->>Model: "'X' did not run: it is not loaded... call ptd_get_tool_details with [X] first"
+                    Note over Model: X is NOT loaded by the guard · the model must call ptd_get_tool_details itself
+                    Model->>WTC: ptd_get_tool_details(["X"]) · then exactly as section 9
                 end
             end
         end
@@ -818,9 +818,9 @@ docstring `middleware.py:861`).
 ```mermaid
 stateDiagram-v2
     [*] --> Catalog: bound · one line in the system-message catalog [catalog.py:368]
-    Catalog --> Loaded: get_tool_details([name]) · Command writes loaded_tools[name] = cycle [middleware.py:1033,1053]
+    Catalog --> Loaded: ptd_get_tool_details([name]) · Command writes loaded_tools[name] = cycle [middleware.py:1033,1053]
     Catalog --> Cancelled: guessed call · cancelled, and NOTHING is loaded [middleware.py:900]
-    Cancelled --> Catalog: the model must call get_tool_details itself
+    Cancelled --> Catalog: the model must call ptd_get_tool_details itself
     Loaded --> Live: the next call sees used strictly earlier than cycle [middleware.py:361]
     Live --> Live: called again · _last_used reads the use out of the AIMessage, no write [middleware.py:322]
     Live --> Idle: not called · cycle minus used is still at most ttl_cycles, so it is kept [middleware.py:361]
@@ -836,21 +836,21 @@ stateDiagram-v2
     end note
 ```
 
-`find_tools` appears nowhere in this diagram on purpose: a search writes no state, so a tool's lifecycle
-is driven by `get_tool_details`, by use, and by inactivity.
+`ptd_find_tools` appears nowhere in this diagram on purpose: a search writes no state, so a tool's lifecycle
+is driven by `ptd_get_tool_details`, by use, and by inactivity.
 
 ## 13. Verbatim text the model sees
 
 **Write targets.** `tools` and `messages` always, `system_message` when the catalog block is non-empty,
 all through one `request.override` (`middleware.py:781` through `middleware.py:798`). The two tool
-answers are **messages**: `find_tools` returns a plain string the framework wraps (`middleware.py:1001`),
-and `get_tool_details` builds its own `ToolMessage` inside a `Command` (`middleware.py:1045`,
+answers are **messages**: `ptd_find_tools` returns a plain string the framework wraps (`middleware.py:1001`),
+and `ptd_get_tool_details` builds its own `ToolMessage` inside a `Command` (`middleware.py:1045`,
 `middleware.py:1053`) — which is why the schema itself is deliberately kept out of it (docstring
 `middleware.py:88`), and why the fold drops those two exchanges once they are spent (`catalog.py:569`).
 
 ### 13.1 The system-message catalog header — `CATALOG_PROMPT_HEADER` (`catalog.py:83`)
 
-Quoted literally, `{get_tool_details}` and `{find_tools}` being substituted with the two tool names at
+Quoted literally, `{ptd_get_tool_details}` and `{ptd_find_tools}` being substituted with the two tool names at
 `catalog.py:372`:
 
 ```text
@@ -860,11 +860,11 @@ The tools listed below are NOT in your tool list, and you MUST NOT call them dir
 are not loaded, and a direct call is rejected without running.
 
 To use any of them, always follow these steps:
-1. Call `get_tool_details` with the names you need, as a list, in one call.
+1. Call `ptd_get_tool_details` with the names you need, as a list, in one call.
 2. On your next call they are in your tool list with their full parameters. Call them from there.
 3. A tool left unused for a few calls is unloaded again. If a call to it is rejected, repeat step 1.
 
-If no name below fits what you need, call `find_tools` with the need in your own words, then go to
+If no name below fits what you need, call `ptd_find_tools` with the need in your own words, then go to
 step 1 with the names it returns.
 
 The tools that ARE in your tool list for this call you call directly.
@@ -888,7 +888,7 @@ No sigil and no marker: the names are not in `tools`, so nothing in the call cla
 nothing has to be walked back. Step 3 is what makes release intelligible from the model's side — a
 rejected call is a documented state with a documented recovery, not a surprise.
 
-### 13.2 `get_tool_details` docstring — exactly as the model receives it (`middleware.py:949`)
+### 13.2 `ptd_get_tool_details` docstring — exactly as the model receives it (`middleware.py:949`)
 
 ```text
 Load the full parameters of one or more tools from the catalog, so you can call them.
@@ -898,7 +898,7 @@ your next call. A tool left unused for a few calls is unloaded; to call it after
 this again with its name.
 
 Args:
-    names: Exact tool names, as written in the catalog or in a `find_tools` result.
+    names: Exact tool names, as written in the catalog or in a `ptd_find_tools` result.
     runtime: Injected by the framework. Not user-facing.
 
 Returns:
@@ -907,20 +907,20 @@ Returns:
 ```
 
 Its input schema is not a source literal: it is derived by `@tool` (`middleware.py:947`) from the
-signature `get_tool_details(names: list[str], runtime: ToolRuntime)` (`middleware.py:948`). The only
+signature `ptd_get_tool_details(names: list[str], runtime: ToolRuntime)` (`middleware.py:948`). The only
 model-facing parameter is `names`, a list of strings — `ToolRuntime` is injected. The tool is a **closure,
 not a method**, precisely so that no `self` surfaces as a parameter the model is asked to fill (docstring
 `middleware.py:917`, `middleware = self` at `middleware.py:923`).
 
-### 13.3 `find_tools` docstring — exactly as the model receives it (`middleware.py:927`)
+### 13.3 `ptd_find_tools` docstring — exactly as the model receives it (`middleware.py:927`)
 
 ```text
 Search for tools that can do what you need, when no name in the tool catalog fits.
 
 This only finds tools; it does not load them. It answers with matching tool names and one
-line about each. To use any of them, call `get_tool_details` with their names, then call them.
+line about each. To use any of them, call `ptd_get_tool_details` with their names, then call them.
 
-If a name in the catalog already fits what you need, skip this and call `get_tool_details`
+If a name in the catalog already fits what you need, skip this and call `ptd_get_tool_details`
 directly.
 
 Args:
@@ -934,14 +934,14 @@ Returns:
     or to reword it when there is nothing to list.
 ```
 
-Same derivation, from `find_tools(need: str, runtime: ToolRuntime)` (`middleware.py:926`): the only
+Same derivation, from `ptd_find_tools(need: str, runtime: ToolRuntime)` (`middleware.py:926`): the only
 model-facing parameter is `need`, a string. Both names come from the core rather than from a constructor
 knob — `FIND_TOOLS_NAME` (`catalog.py:57`) and `GET_TOOL_DETAILS_NAME` (`catalog.py:60`), collected into
 `PLUGIN_TOOL_NAMES` (`catalog.py:66`) — and the second is deliberately not `get_details`: a verb-noun that
 generic is one a domain tool can already hold, and a collision would silently shadow one of the two
 (`catalog.py:63`).
 
-### 13.4 `get_tool_details` results
+### 13.4 `ptd_get_tool_details` results
 
 Header literal `_DETAILS_LOADED_HEADER` (`middleware.py:84`), which states the release rule in the same
 breath as the load:
@@ -971,7 +971,7 @@ _DETAILS_EMPTY_GUIDANCE = (
 )
 ```
 
-### 13.5 `find_tools` results
+### 13.5 `ptd_find_tools` results
 
 Header literal `_MATCHES_HEADER` (`middleware.py:79`), which states in the same breath that nothing was
 loaded:
@@ -1097,7 +1097,7 @@ nothing on any agent (`middleware.py:607` through `middleware.py:612`, docstring
 | `summarizer` | `None` (`middleware.py:578`) | **Yes** | What writes a line when a description does not fit. Receives `(spec, max_chars)` and must be synchronous (`ToolSummarizer` `middleware.py:73`). `None` means **the agent's own model**: one plain call per tool, primed into the cache before the rewrite reads it (`middleware.py:628`, `middleware.py:729`), with the token cost added to `summary_usage` (`middleware.py:708`). A supplied summarizer is called by the cache itself instead (`catalog.py:309`), and either way a failure falls back to truncation at a sentence or word boundary (`middleware.py:721`, `catalog.py:311`). `_validate_summarizer` (`middleware.py:525`) — `None` or callable. |
 | `ttl_cycles` | `DEFAULT_TTL_CYCLES = 3` (`middleware.py:67`; ctor `middleware.py:579`) | No | Cycles a loaded tool survives without a call; a call renews it with no write (`middleware.py:322`). `_validate_positive_int` (`middleware.py:458`) — int ≥ 1, `bool` and `float` rejected (`middleware.py:470`, docstring `middleware.py:461`). |
 | `always_available` | `()` empty tuple (`middleware.py:580`) | No | Names callable on every call, skipping the discovery cycle and exempt from the guard (`middleware.py:357`, `middleware.py:872`). `_validate_always_available` (`middleware.py:488`) — a sequence of non-empty strings; a bare string is rejected, since it would configure one name per character (`middleware.py:499`, docstring `middleware.py:492`). Stored as a tuple so the caller's sequence cannot change the configuration after the fact (`middleware.py:617`, comment `middleware.py:616`). |
-| `index` | `None` → `LexicalToolIndex()` (`middleware.py:581`; instantiated `middleware.py:621`) | **Yes** | Search implementation behind `find_tools`. `None` selects the default term-frequency index (`tool_index.py:177`), which needs no network. `_validate_index` (`middleware.py:508`) — `None`, or an object with a callable `build` and `search`, checked by member because `ToolIndex` is a structural protocol (docstring `middleware.py:513`). |
+| `index` | `None` → `LexicalToolIndex()` (`middleware.py:581`; instantiated `middleware.py:621`) | **Yes** | Search implementation behind `ptd_find_tools`. `None` selects the default term-frequency index (`tool_index.py:177`), which needs no network. `_validate_index` (`middleware.py:508`) — `None`, or an object with a callable `build` and `search`, checked by member because `ToolIndex` is a structural protocol (docstring `middleware.py:513`). |
 | `top_k` | `DEFAULT_TOP_K = 3` (`middleware.py:70`; ctor `middleware.py:582`) | No | How many tools one search lists, passed at `middleware.py:988`. `_validate_positive_int` (`middleware.py:458`) — int ≥ 1. |
 
 Six parameters, none positional, and **no placement flag, no `referenced_source` bridge and no tool-name

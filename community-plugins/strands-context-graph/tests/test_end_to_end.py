@@ -13,7 +13,7 @@ and the only tool the agent owns returns a constant. Nothing here needs credenti
 Two scenarios, because they need different scripts:
 
 - The collapse scenario (``collapse_run``) tunes the thresholds so exactly one earlier turn lands at Description, and
-  scripts the model to call ``expand_card`` for it. That single turn carries the round trip: the first call of the turn
+  scripts the model to call ``cg_expand_card`` for it. One turn carries the round trip: the first call of the turn
   goes out with that turn folded into a block, the tool raises it, and the *second* call of the same turn — the
   autonomous tool loop's — carries the turn whole again.
 - The regression scenario (``expand_threshold=0.0``) needs a script that runs identically with and *without* the plugin,
@@ -69,7 +69,7 @@ RECALL_ASK = "so what did that migration actually cost us"
 LEDGER_RESULT = "march ledger: 412 entries, 3 unreconciled"
 """What the agent's tool returns. Constant, so the turn is a function of the script alone."""
 
-PLUGIN_TOOL_NAMES = frozenset({"expand_card", "expand_artifact", "find_context"})
+PLUGIN_TOOL_NAMES = frozenset({"cg_expand_card", "cg_expand_artifact", "cg_find_context"})
 """The three tools Requirement 1.2 adds to the registry, held aside in the regression comparison."""
 
 COLLAPSED_HEADER = "<collapsed_turns>"
@@ -352,7 +352,7 @@ COLLAPSE_SCRIPT = (
     text_response(MIGRATION_ANSWER),
     tool_response("ledger_lookup", "use-ledger", month="march"),
     text_response("three entries are still open"),
-    tool_response("expand_card", "use-expand", titles=[MIGRATION_ASK]),
+    tool_response("cg_expand_card", "use-expand", titles=[MIGRATION_ASK]),
     text_response("the migration cost is in the turn you just gave me back"),
 )
 """Six provider calls over four turns: turn three's tool loop takes two, turn four's takes two."""

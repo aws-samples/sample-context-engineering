@@ -2,7 +2,7 @@
 
 The integrated build reads an offloader's Stash and is a guest in it. Standalone, the plugin owns a store that is
 **always present** (Requirement 15.1), and ``ContextManager`` interop becomes an optional fallback bridge. What this
-module owns is the contract, the default, and the resolution order ``tools.expand_artifact`` reads through: own store
+module owns is the contract, the default, and the resolution order ``tools.cg_expand_artifact`` reads through: own store
 first, the Stash second when a manager happens to be registered, prose naming the miss last (Requirements 15.2, 15.3,
 15.4).
 
@@ -378,7 +378,7 @@ def absent_message(reference: str) -> str:
         Prose naming the reference and the absence.
     """
     return (
-        f"expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever "
+        f"cg_expand_artifact | no artifact storage holds reference '{reference}' on this agent | nothing was ever "
         "offloaded under that reference, which means the full results are already in the conversation"
     )
 
@@ -393,7 +393,7 @@ def unknown_message(reference: str) -> str:
         Prose naming the reference and how to name one correctly.
     """
     return (
-        f"expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a "
+        f"cg_expand_artifact | unknown reference '{reference}' | copy a reference exactly as it was shown to you in a "
         "turn's title or preview"
     )
 
@@ -411,8 +411,8 @@ def non_textual_message(reference: str) -> str:
         Prose naming the reference and stating that the content is not text.
     """
     return (
-        f"expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not apply to "
-        "it, and it cannot be returned as text"
+        f"cg_expand_artifact | reference '{reference}' holds non-textual content | line_range and pattern do not "
+        "apply to it, and it cannot be returned as text"
     )
 
 

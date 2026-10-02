@@ -345,15 +345,15 @@ def test_an_empty_catalog_adds_no_header() -> None:
 def test_the_block_names_both_plugin_tools_so_the_rule_is_actionable() -> None:
     """A listing the model cannot act on is worse than no listing: the header must name the way out.
 
-    Both names are required, in their respective roles: ``get_tool_details`` is the common path off the
-    catalog, and ``find_tools`` the fallback for a need no listed name fits.
+    Both names are required, in their respective roles: ``ptd_get_tool_details`` is the common path off the
+    catalog, and ``ptd_find_tools`` the fallback for a need no listed name fits.
     """
     block = _catalog_prompt_block([_spec("audit_log", "Reads the audit log.")], set(), {"audit_log": "Reads."})
 
     assert GET_TOOL_DETAILS_NAME in block
     assert FIND_TOOLS_NAME in block
     assert block.startswith(
-        _CATALOG_PROMPT_HEADER.format(find_tools=FIND_TOOLS_NAME, get_tool_details=GET_TOOL_DETAILS_NAME)
+        _CATALOG_PROMPT_HEADER.format(ptd_find_tools=FIND_TOOLS_NAME, ptd_get_tool_details=GET_TOOL_DETAILS_NAME)
     )
 
 

@@ -502,7 +502,7 @@ class RelevancePreview:
         """Return the preview of :meth:`build` together with what the selection did.
 
         The statistics are what the plugin's disclaimer reports to the model -- how much of the
-        result it is looking at -- and the chunk ranking is what ``retrieve_all_context`` reuses to hand
+        result it is looking at -- and the chunk ranking is what ``rf_retrieve_all_context`` reuses to hand
         back more chunks in relevance order without scoring the text a second time.
 
         Args:

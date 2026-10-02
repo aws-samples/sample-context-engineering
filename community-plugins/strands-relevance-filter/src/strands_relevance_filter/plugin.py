@@ -3,7 +3,7 @@
 Attaches to the SDK's public extension surface only. The hook guards a tool result through the
 cancelled-call, own-tool, delegation, size, ``should_filter``, and emptiness checks, then stores the raw
 sub-blocks and rewrites ``event.result`` into the marker, a disclaimer carrying the processing metadata,
-a verbatim, budget-bounded preview, and reference tokens. The ``retrieve_all_context`` ``@tool`` reads those
+a verbatim, budget-bounded preview, and reference tokens. The ``rf_retrieve_all_context`` ``@tool`` reads those
 references back by span, pattern, chunk count or token budget, and its exchanges are removed from the
 history when the invocation ends.
 """
@@ -237,7 +237,7 @@ class RelevanceFilter(Plugin):
 
     When a tool result exceeds ``max_result_tokens``, its raw sub-blocks are written to ``store`` and
     the in-context result is replaced with a marker, a verbatim relevance preview scored against the
-    query in progress, and reference tokens the model can pass to ``retrieve_all_context``. Selection is
+    query in progress, and reference tokens the model can pass to ``rf_retrieve_all_context``. Selection is
     verbatim — chosen chunks reach the model character-for-character — so numeric, monetary, and
     tabular content stays exact.
 
@@ -254,7 +254,7 @@ class RelevanceFilter(Plugin):
         config: Preview tuning (reranker, threshold, chunk and preview budgets). Every key is
             optional; see :class:`RelevanceConfig` for the defaults.
         include_retrieval_tool: Whether to store the raw content and register the
-            ``retrieve_all_context`` tool that reads it back. Defaults to True. The tool is for the one
+            ``rf_retrieve_all_context`` tool that reads it back. Defaults to True. The tool is for the one
             question an excerpt cannot answer -- one that needs every row -- and its exchanges are
             removed from the history when the invocation ends, so a retrieval is paid for in the turn
             that asked for it and not on every later call. With progressive tool disclosure, leave it
@@ -294,7 +294,7 @@ class RelevanceFilter(Plugin):
             max_result_tokens: Filter only results above this estimated token count.
             config: Preview tuning; read key by key with the documented defaults at use time, so a
                 partial config is as valid as a full one.
-            include_retrieval_tool: Store the raw content and register ``retrieve_all_context``.
+            include_retrieval_tool: Store the raw content and register ``rf_retrieve_all_context``.
                 Defaults to True. False also suppresses the store write and the reference token: with
                 no tool to resolve it, a reference would be a promise nothing can keep.
             should_filter: Callback ``(tool_name, token_count, **kwargs) -> bool``, sync or async.
@@ -312,7 +312,7 @@ class RelevanceFilter(Plugin):
         self._should_filter = should_filter
         # Built on first use, never here: constructing a reranker would reach for AWS credentials.
         self._preview: RelevancePreview | None = None
-        # Chunk ranking of each stored reference, by descending relevance, so ``retrieve_all_context`` can
+        # Chunk ranking of each stored reference, by descending relevance, so ``rf_retrieve_all_context`` can
         # hand back more chunks in relevance order without scoring the text again.
         self._rankings: dict[str, tuple[int, ...]] = {}
         # The base scans this instance for @hook and @tool methods, so it runs last.
@@ -336,7 +336,7 @@ class RelevanceFilter(Plugin):
             self._store._bind(id(agent))
         if not self._include_retrieval_tool:
             # Drop the auto-discovered retrieval tool, matched by tool_name rather than a literal.
-            retrieval_tool_name = self.retrieve_all_context.tool_name
+            retrieval_tool_name = self.rf_retrieve_all_context.tool_name
             self._tools = [t for t in self._tools if t.tool_name != retrieval_tool_name]
 
     def _resolve_preview(self) -> RelevancePreview:
@@ -400,7 +400,7 @@ class RelevanceFilter(Plugin):
         return query[-_MAX_QUERY_CHARS:]
 
     @tool(context=True)
-    async def retrieve_all_context(
+    async def rf_retrieve_all_context(
         self,
         reference: str,
         tool_context: ToolContext,
@@ -587,7 +587,7 @@ class RelevanceFilter(Plugin):
 
     @hook  # type: ignore[call-overload]  # bound method; the @hook overloads describe a one-arg callback
     async def _on_after_invocation(self, event: AfterInvocationEvent) -> None:
-        """Remove this plugin's ``retrieve_all_context`` exchanges from the history once the turn has ended.
+        """Remove this plugin's ``rf_retrieve_all_context`` exchanges from the history once the turn has ended.
 
         A retrieval is for the answer in flight. Kept, its result -- possibly the whole of a large tool
         result, since the model may ask for all of it -- would ride along on every later call and be
@@ -602,7 +602,7 @@ class RelevanceFilter(Plugin):
         if not self._include_retrieval_tool:
             return
         messages = event.agent.messages
-        kept = _drop_tool_exchanges(messages, self.retrieve_all_context.tool_name)
+        kept = _drop_tool_exchanges(messages, self.rf_retrieve_all_context.tool_name)
         if kept is not messages:
             logger.debug("messages=<%d->%d> | retrieval exchanges removed from the history", len(messages), len(kept))
             messages[:] = kept
@@ -624,7 +624,7 @@ class RelevanceFilter(Plugin):
 
         # (2) Recursion guard: the retrieval tool's own (possibly large) output must stay intact,
         # otherwise retrieving content would re-filter it. Matched by tool_name, never a literal.
-        if event.tool_use.get("name") == self.retrieve_all_context.tool_name:
+        if event.tool_use.get("name") == self.rf_retrieve_all_context.tool_name:
             return
 
         # (3) A delegation result becomes the final user-facing answer, and no later model call could
@@ -673,7 +673,7 @@ class RelevanceFilter(Plugin):
         await self._filter_and_rewrite(event, token_count, full_text)
 
     async def _store_raw(self, event: AfterToolCallEvent) -> list[str] | None:
-        """Optionally store the raw scorable sub-blocks so ``retrieve_all_context`` can read them back.
+        """Optionally store the raw scorable sub-blocks so ``rf_retrieve_all_context`` can read them back.
 
         This is an add-on to filtering, never a precondition of it. With the retrieval tool off, or
         no store configured, nothing is stored and an empty list is returned.
@@ -747,7 +747,7 @@ class RelevanceFilter(Plugin):
         if len(references) == 1 and len(scorable) == 1:
             self._rankings[references[0]] = stats.ranking
 
-        disclaimer = _disclaimer(token_count, stats, references, self.retrieve_all_context.tool_name)
+        disclaimer = _disclaimer(token_count, stats, references, self.rf_retrieve_all_context.tool_name)
         marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n{disclaimer}\n\n{preview}"
         if references:
             token = f"[ref: {references[0]}]" if len(references) == 1 else f"[refs: {', '.join(references)}]"

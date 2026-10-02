@@ -11,8 +11,8 @@ def test_all_arm_is_composed_engine_with_six_tools() -> None:
     assert engine.name == "all-three"
     names = {s["function"]["name"] for s in engine.get_tool_schemas()}
     assert names == {
-        "retrieve_all_context", "find_tools", "get_tool_details",
-        "expand_card", "expand_artifact", "find_context",
+        "rf_retrieve_all_context", "ptd_find_tools", "ptd_get_tool_details",
+        "cg_expand_card", "cg_expand_artifact", "cg_find_context",
     }
 
 
