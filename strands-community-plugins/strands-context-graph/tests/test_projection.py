@@ -15,11 +15,12 @@ import logging
 from types import MappingProxyType
 
 import pytest
+from context_core.graph.projection import current_turn_ids
+from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
 from strands._middleware.registry import MiddlewareRegistry
 from strands._middleware.stages import InvokeModelContext, InvokeModelStage
 
-from strands_context_graph.projection import Projection, current_turn_ids
-from strands_context_graph.state import Card, CardChoice, TurnChoice, _GraphState
+from strands_context_graph.plugin import _Delivery as Projection
 
 DESCRIPTION_TOKENS = 100
 """The plugin's own default, so the budgeting these tests see is the one production sees."""
@@ -136,11 +137,12 @@ def projection(state=None, messages=None, *, description_tokens=DESCRIPTION_TOKE
 
 
 def warnings_of(caplog):
-    """The warning records the delivery itself emitted, the primitive's own fail-open logging excluded."""
+    """The warning records the delivery emitted: the binding's own, and the core ``deliver`` it calls."""
     return [
         record
         for record in caplog.records
-        if record.levelno == logging.WARNING and record.name == "strands_context_graph.projection"
+        if record.levelno == logging.WARNING
+        and record.name in {"strands_context_graph.plugin", "context_core.graph.projection"}
     ]
 
 
@@ -221,7 +223,9 @@ async def test_delivery_replaces_only_messages_and_dynamic_trailing_blocks():
     # ``m4`` is the message the block was folded into. The SDK's fold rebuilds that one message from ``role``,
     # ``content`` and ``metadata``, so the per-call copy of it carries no ``tracking_id`` — the identity lives on in
     # ``agent.messages``, which this path never touches.
-    assert [message.get("tracking_id") for message in delivered.messages] == ["m0", "m1", None]
+    # The folded message keeps its own tracking_id: the core fold carries it (the SDK primitive dropped it). It never
+    # reaches the provider -- the SDK reduces messages to role and content before Model.stream -- see test_sdk_parity.
+    assert [message.get("tracking_id") for message in delivered.messages] == ["m0", "m1", "m4"]
     assert delivered.dynamic_trailing_blocks == 3
     # The received context is untouched in place: same list object, same messages, same counter.
     assert context.messages == before
@@ -286,7 +290,9 @@ async def test_the_fold_runs_on_a_tool_result_turn_too():
 
     delivered = await handler.deliver(context)
 
-    assert [message.get("tracking_id") for message in delivered.messages] == ["m0", "m1", "m4", "m5", None]
+    # The folded message keeps its own tracking_id: the core fold carries it (the SDK primitive dropped it). It never
+    # reaches the provider -- the SDK reduces messages to role and content before Model.stream -- see test_sdk_parity.
+    assert [message.get("tracking_id") for message in delivered.messages] == ["m0", "m1", "m4", "m5", "m6"]
     assert delivered.dynamic_trailing_blocks == 3
     assert COLLAPSED_TITLE in delivered.messages[-1]["content"][-1]["text"]
 
@@ -299,7 +305,7 @@ async def test_a_failing_compaction_degrades_to_the_received_context(monkeypatch
     def boom(*_args, **_kwargs):
         raise RuntimeError("compaction failed")
 
-    monkeypatch.setattr("strands_context_graph.projection.render_final_block", boom)
+    monkeypatch.setattr("context_core.graph.projection.render_final_block", boom)
     handler, context = projection(graph())
 
     with caplog.at_level(logging.WARNING):
@@ -316,7 +322,7 @@ async def test_a_failing_removal_degrades_to_the_received_context(monkeypatch, c
     def boom(*_args, **_kwargs):
         raise RuntimeError("removal failed")
 
-    monkeypatch.setattr("strands_context_graph.projection.apply_removal", boom)
+    monkeypatch.setattr("context_core.graph.projection.apply_removal", boom)
     handler, context = projection(graph())
 
     with caplog.at_level(logging.WARNING):
@@ -336,7 +342,7 @@ async def test_the_next_call_retries_after_a_failure(monkeypatch):
             raise RuntimeError("transient")
         return "<collapsed_turns>\n- " + COLLAPSED_TITLE + "\n</collapsed_turns>"
 
-    monkeypatch.setattr("strands_context_graph.projection.render_final_block", once)
+    monkeypatch.setattr("context_core.graph.projection.render_final_block", once)
     handler, context = projection(graph())
 
     assert await handler.deliver(context) is context
@@ -348,20 +354,9 @@ async def test_the_next_call_retries_after_a_failure(monkeypatch):
     assert retried.dynamic_trailing_blocks == 3
 
 
-@pytest.mark.asyncio
-async def test_no_failure_state_survives_the_call(monkeypatch):
-    """The in-flight record is reset around the one await, so a later render sees no stale error."""
-    from strands_context_graph import projection as module
-
-    def boom(*_args, **_kwargs):
-        raise RuntimeError("compaction failed")
-
-    monkeypatch.setattr(module, "render_final_block", boom)
-    handler, context = projection(graph())
-
-    await handler.deliver(context)
-
-    assert module._DELIVERY.get() is None
+# (The old ``test_no_failure_state_survives_the_call`` checked that a ``ContextVar`` carrying the in-flight request was
+# reset after a failed render. The delivery no longer has one -- the core's ``deliver`` is a plain function -- and the
+# property it protected, that a failure leaves nothing behind, is ``test_the_next_call_retries_after_a_failure``.)
 
 
 # ---- registration ---------------------------------------------------------------------------------

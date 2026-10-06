@@ -19,13 +19,14 @@ import warnings
 import weakref
 
 import pytest
+from context_core.graph import store as store_module
 from strands._middleware.registry import MiddlewareRegistry
 from strands._middleware.stages import InvokeModelStage
 from strands.agent.conversation_manager import NullConversationManager
 
-from strands_context_graph import store as store_module
+from strands_context_graph._compat import STRANDS_HOST_SYMBOLS
 from strands_context_graph.plugin import ContextGraph
-from strands_context_graph.projection import Projection
+from strands_context_graph.plugin import _Delivery as Projection
 
 REFERENCE = "mem_1_tu-3_0"
 """One reference, shaped like a real placeholder."""
@@ -80,7 +81,7 @@ async def test_a_raising_text_helper_still_reads_a_bare_string(monkeypatch):
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._EXTRACT_TEXT_SYMBOL: _exploding}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["extract_text"]: _exploding}),
     )
     store = store_module.InMemoryReferenceStore()
     store.put(REFERENCE, "decoded text")
@@ -98,7 +99,7 @@ async def test_a_raising_text_helper_reports_a_richer_block_as_non_textual(monke
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._EXTRACT_TEXT_SYMBOL: _exploding}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["extract_text"]: _exploding}),
     )
     store = store_module.InMemoryReferenceStore()
     store.put(REFERENCE, {"image": {"format": "png"}})
@@ -117,7 +118,7 @@ def test_a_raising_search_helper_degrades_to_the_same_prose_as_an_absent_one(mon
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._SEARCH_CONTENT_SYMBOL: _exploding}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["search_content"]: _exploding}),
     )
 
     with pytest.raises(ValueError, match="targeted reads are unavailable"):
@@ -129,7 +130,7 @@ def test_a_raising_search_helper_leaves_a_whole_read_alone(monkeypatch):
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._SEARCH_CONTENT_SYMBOL: _exploding}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["search_content"]: _exploding}),
     )
 
     assert store_module.read_artifact("a\nb\nc") == "a\nb\nc"
@@ -144,7 +145,7 @@ def test_the_search_helpers_own_refusal_keeps_its_words(monkeypatch):
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._SEARCH_CONTENT_SYMBOL: _refusing}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["search_content"]: _refusing}),
     )
 
     with pytest.raises(ValueError, match="outside the content"):
@@ -160,7 +161,7 @@ async def test_a_manager_that_no_longer_carries_the_stash_is_absent(monkeypatch)
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._CONTEXT_MANAGER_SYMBOL: _ManagerWithoutStash}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["context_manager"]: _ManagerWithoutStash}),
     )
     agent = _Agent({"cm": _ManagerWithoutStash()})
 

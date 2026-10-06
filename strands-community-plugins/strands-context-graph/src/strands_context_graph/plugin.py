@@ -25,7 +25,7 @@ an exception:
   notice is the conservative direction, so degradation here costs a false alarm and never a missed one.
 
 The ordering itself remains the caveat of Requirement 17.2 — it has no standalone escape hatch and fails as a worse
-answer rather than an exception — and the delivery path's own couplings are documented in :mod:`.projection`. The
+answer rather than an exception — and the delivery path's own couplings are documented on :class:`_Delivery`. The
 README's private-API table lists the whole set with what would remove each one.
 """
 
@@ -35,52 +35,179 @@ import logging
 import math
 import warnings
 import weakref
-from collections.abc import Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import replace
 from numbers import Real
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias
 
-from strands._middleware.stages import InvokeModelStage
-from strands.agent.conversation_manager import NullConversationManager
-from strands.hooks.events import AfterToolCallEvent, BeforeInvocationEvent, MessageAddedEvent
-from strands.plugins import Plugin
-from strands.tools.decorator import tool
-from strands.types.tools import ToolContext
+import context_core.graph.tools as tools
+from context_core.graph.cards import derive_and_register_artifacts, is_turn_boundary
+from context_core.graph.matcher import EmbeddingSimilarityMatcher as _CoreEmbeddingSimilarityMatcher
+from context_core.graph.matcher import SimilarityMatcher
+from context_core.graph.projection import Thresholds, choose, close_turns, deliver
+from context_core.graph.scoring import expire_reuse
+from context_core.graph.state import _GraphState, _GraphStates
+from context_core.graph.store import InMemoryReferenceStore, record_references
 
-from . import tools
-from .cards import (
-    closed_turn_ranges,
-    derive_and_register,
-    derive_and_register_artifacts,
-    is_turn_boundary,
-    link_newly_measurable,
-    rebuild_into,
+from ._adapter import message_to_neutral, messages_from_neutral, messages_to_neutral, result_to_neutral
+from ._compat import (
+    AfterToolCallEvent,
+    BeforeInvocationEvent,
+    InvokeModelStage,
+    MessageAddedEvent,
+    NullConversationManager,
+    Plugin,
+    ToolContext,
+    tool,
 )
-from .matcher import SimilarityMatcher
-from .projection import Projection
-from .scoring import (
-    compute_notes,
-    distribute,
-    expire_reuse,
-    full_pass_choice,
-    titles_in_turn_order,
-    warm_up_choice,
-)
-from .state import TurnChoice, _GraphState, _GraphStates
-from .store import InMemoryReferenceStore, record_references
 
 if TYPE_CHECKING:
-    from strands.agent.agent import Agent
-    from strands.types.content import Messages
-    from strands.types.tools import ToolResult
+    from ._compat import Agent, InvokeModelContext
 
 _ReferenceStores: TypeAlias = "weakref.WeakKeyDictionary[Agent, InMemoryReferenceStore]"
 """Per-agent reference store map, keyed weakly for the same reason ``_GraphStates`` is: a reference is discovered from
 one agent's tool results and means nothing on another, and the store is dropped along with the agent it belongs to
 (Requirements 14.1, 14.4)."""
 
-__all__ = ["ContextGraph"]
+__all__ = ["ContextGraph", "EmbeddingSimilarityMatcher"]
 
 logger = logging.getLogger(__name__)
+
+_USER_AGENT_EXTRA = "strands-agents"
+"""AWS user-agent tag of this package, so embedding calls from a Strands agent stay attributed to Strands."""
+
+
+class EmbeddingSimilarityMatcher(_CoreEmbeddingSimilarityMatcher):
+    """:class:`context_core.graph.matcher.EmbeddingSimilarityMatcher`, tagged ``strands-agents`` in the user agent.
+
+    Every argument is the core class's; only the ``user_agent_extra`` default differs.
+    """
+
+    def __init__(self, *args: Any, user_agent_extra: str = _USER_AGENT_EXTRA, **kwargs: Any) -> None:
+        """Build the core matcher with this package's user-agent tag."""
+        super().__init__(*args, user_agent_extra=user_agent_extra, **kwargs)
+
+
+class _LazyMatcher:
+    """A matcher that resolves the real one only when something scores, or reads its vectors.
+
+    ``choose`` takes a matcher up front, but below ``min_cards`` it never calls it. Handing it this wrapper keeps the
+    default matcher unbuilt on that path, which is what the plugin did when it resolved the matcher after the warm-up
+    check (Requirements 2.16, 11.3). ``vectors`` is optional on the protocol, so it is forwarded only when the resolved
+    matcher has it.
+    """
+
+    def __init__(self, resolve: Callable[[], SimilarityMatcher]) -> None:
+        """Keep the resolver; build nothing."""
+        self._resolve = resolve
+
+    def score(self, question: str, descriptions: Sequence[str]) -> Sequence[float]:
+        """Score through the resolved matcher."""
+        return self._resolve().score(question, descriptions)
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward anything else -- ``vectors`` in particular -- to the resolved matcher, absent when it is."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._resolve(), name)
+
+
+class _Delivery:
+    """The ``InvokeModelStage.Input`` handler: removal plus final block, through :func:`context_core.graph.deliver`.
+
+    Built once per plugin instance and shared by every agent the instance is wired to: it holds no per-agent state of
+    its own, reading the graph out of the weakly keyed map it is handed, so two agents never see each other's Cards.
+
+    The fold used to go through the SDK's ``_create_injection_middleware``; the core's fold is a framework-free copy of
+    the same primitive (pinned by ``tests/test_sdk_parity.py``), and like the SDK's it reports how many trailing blocks
+    of the last message are per-call content. That count is *added* to the context's ``dynamic_trailing_blocks``, as the
+    SDK primitive did, so a provider keeps the final block out of its cached prefix.
+
+    Args:
+        states: The plugin's per-agent state map. Read only, never written to from here.
+        description_tokens: Token ceiling of one Card's entry in the final block.
+        retrieval_tools: Callable returning the names of the retrieval tools currently registered, read on every call
+            because the plugin's tool list can be edited after construction.
+    """
+
+    def __init__(
+        self,
+        states: _GraphStates,
+        *,
+        description_tokens: int,
+        retrieval_tools: Callable[[], Collection[str]],
+    ) -> None:
+        """Keep what every delivery needs. Nothing is built."""
+        self._states = states
+        self._description_tokens = description_tokens
+        self._retrieval_tools = retrieval_tools
+
+    def register(self, agent: Agent) -> bool:
+        """Add :meth:`deliver` as the *first* input handler of ``InvokeModelStage``.
+
+        Input handlers run in registration order, which is the order of the ``plugins=[...]`` list. Index zero resolves
+        the required ordering whatever that list says: the graph removes before any transient memory injection of the
+        same stage, whose text must not be folded into a message the removal then drops (Requirement 9.5).
+
+        The move to index zero reaches into ``registry._handlers``, the one private member of the registry this plugin
+        touches, and it is the *only* part of the registration allowed to fail: a build that renamed the map leaves the
+        delivery registered at the back of the stage instead of crashing the wiring (Requirement 9.6).
+
+        Args:
+            agent: The agent whose middleware registry to register on.
+
+        Returns:
+            Whether the delivery ended up at the front of the stage.
+        """
+        registry = agent._middleware_registry
+        registry.add_middleware(InvokeModelStage.Input, self.deliver)
+        try:
+            handlers = registry._handlers[InvokeModelStage]
+            handlers.insert(0, handlers.pop())
+        except Exception:
+            logger.warning(
+                "could not move the delivery to the front of InvokeModelStage | it stays registered in wiring order, "
+                "so the ordering against a memory manager is no longer guaranteed",
+                exc_info=True,
+            )
+            return False
+        return True
+
+    async def deliver(self, context: InvokeModelContext) -> InvokeModelContext:
+        """Apply the removal and the compaction, as one step that either happens or does not.
+
+        Args:
+            context: The per-call invocation context. Read only, never modified in place.
+
+        Returns:
+            A new context carrying the removal and the final block, or the received context itself -- by object
+            identity on a full pass, on an empty request, and on any failure (Requirements 9.8, 16.2, 16.3).
+        """
+        try:
+            state = self._states.get(context.agent)
+            # A state that does not exist yet is a fresh state, and a fresh state is a full pass.
+            if state is None or state.choice.full_pass:
+                return context
+
+            neutral = messages_to_neutral(context.messages)
+            thresholds = Thresholds(
+                description_tokens=self._description_tokens,
+                retrieval_tools=tuple(self._retrieval_tools()),
+            )
+            projected, appended = deliver(state, neutral, thresholds)
+            if projected is neutral:
+                # Nothing removed, or the core degraded: the same context object.
+                return context
+
+            return replace(
+                context,
+                messages=messages_from_neutral(projected),
+                dynamic_trailing_blocks=context.dynamic_trailing_blocks + appended,
+            )
+        except Exception:
+            logger.warning("delivery failed | passing the received context through unchanged", exc_info=True)
+            return context
+
 
 _DEFAULT_NAME = "strands:context-graph"
 """Default plugin name; override to tell multiple instances apart in logs."""
@@ -180,50 +307,6 @@ _RARITY_WEIGHT = 0.70
 two terms of one internal ranking, and the construct exposes no parameter for it."""
 
 
-def _identities_in(messages: Messages) -> tuple[str, ...]:
-    """Return the Durable Identities of ``messages``, in order and without duplicates.
-
-    The same shape the rebuild scan hands :func:`~.cards.derive_and_register`, which is what makes the incremental
-    construction and the scan produce the same Card for the same turn (Requirements 14.3, 14.5). It is also the one
-    place a vanished message drops out of the graph: an identity is collected only from a message that is present in
-    ``agent.messages``, so a Card can never reference one that is not (Requirement 14.7).
-
-    Args:
-        messages: The messages of one turn, in order. Read only.
-
-    Returns:
-        The identities. A message carrying none contributes nothing: it is a message without a Card.
-    """
-    return tuple(dict.fromkeys(identity for message in messages if (identity := message.get("tracking_id"))))
-
-
-def _question_of(messages: Messages) -> str:
-    """Return the text the turn's Cards are scored against: the texts of the last user message.
-
-    Read off the invocation's input messages rather than ``agent.messages``: ``BeforeInvocationEvent`` fires before the
-    turn's message is appended, so the question is not in the history yet.
-
-    Args:
-        messages: The messages to read the question from, in order. Read only.
-
-    Returns:
-        The texts of the last user message, joined. Empty when no user message carries text, which scores every Card
-        against nothing and therefore leaves the whole graph at its floor.
-    """
-    for message in reversed(messages):
-        if message.get("role") != "user":
-            continue
-        texts = [
-            block["text"]
-            for block in message.get("content") or ()
-            if isinstance(block, dict) and isinstance(block.get("text"), str)
-        ]
-        if texts:
-            return " ".join(texts)
-
-    return ""
-
-
 def _cycle_of(agent: object) -> int:
     """Return the model cycle counter of ``agent``, which is the clock the fed-back Note is aged by.
 
@@ -284,7 +367,7 @@ def _folds_memory(plugin: object) -> bool:
 def _delivery_precedes_memory_fold(agent: object, *, delivery_is_first: bool) -> bool:
     """Return whether the graph's delivery is provably the first input handler of the call-assembly stage.
 
-    The one thing this plugin does control: :meth:`~.projection.Projection.register` inserts the delivery at index zero
+    The one thing this plugin does control: :meth:`_Delivery.register` inserts the delivery at index zero
     of ``InvokeModelStage``'s handler list, and the registry runs input handlers in list order, so a memory fold sitting
     behind it in that same list folds into a message list from which nothing will later be discarded (Requirement 9.5).
 
@@ -300,7 +383,7 @@ def _delivery_precedes_memory_fold(agent: object, *, delivery_is_first: bool) ->
 
     Args:
         agent: The agent being wired, after the delivery has been registered. Read only.
-        delivery_is_first: What :meth:`~.projection.Projection.register` reported: whether it could put the delivery at
+        delivery_is_first: What :meth:`_Delivery.register` reported: whether it could put the delivery at
             the front of the stage's handler list.
 
     Returns:
@@ -597,8 +680,8 @@ class ContextGraph(Plugin):
         self._stores: _ReferenceStores = weakref.WeakKeyDictionary()
 
         # The delivery handler, built once: it holds no per-agent state, reading the graph out of the map above, so one
-        # instance serves every agent ``init_agent`` registers it on (see ``Projection.register``).
-        self._projection = Projection(
+        # instance serves every agent ``init_agent`` registers it on (see ``_Delivery.register``).
+        self._projection = _Delivery(
             self._states,
             description_tokens=self._description_tokens,
             # Read late, on every render: ``_tools`` is a plain list and a caller may de-register a retrieval tool
@@ -778,23 +861,6 @@ class ContextGraph(Plugin):
             self._stores[agent] = store
         return store
 
-    def _card_config(self) -> dict[str, Any]:
-        """Return the values a Card is derived under, shared by the incremental step and by the rebuild scan.
-
-        One source for both, which is what makes them comparable: the scan is only equal to the incremental graph if it
-        ran under the same ceilings and the same link threshold (Requirement 14.5). ``rarity_weight`` belongs here even
-        though it is not a construction parameter, since it decides which Tags a Card keeps.
-
-        Returns:
-            The keyword arguments both derivation entry points take.
-        """
-        return {
-            "description_tokens": self._description_tokens,
-            "tags_per_card": self._tags_per_card,
-            "rarity_weight": _RARITY_WEIGHT,
-            "link_threshold": self._link_threshold,
-        }
-
     # ---- the write half: the turn boundary ----------------------------------------------------
 
     def _on_message_added(self, event: MessageAddedEvent) -> None:
@@ -815,60 +881,23 @@ class ContextGraph(Plugin):
         alone by the scan: a miss costs one embedding on the next turn the read half runs, never a Card.
 
         A late write half is a turn with no Card yet, which projects Full Content — the behavior without the plugin —
-        and per-Card failures are absorbed by :func:`~.cards.derive_and_register`, which logs one ``warning`` carrying
-        ``exc_info`` and registers nothing (Requirements 16.4, 16.5).
+        and per-Card failures are absorbed by :func:`context_core.graph.cards.derive_and_register`, which logs one
+        ``warning`` carrying ``exc_info`` and registers nothing (Requirements 16.4, 16.5).
 
         Args:
             event: The message event, for the agent and the message just added.
         """
         agent = event.agent
         state = self._state_for(agent)
-        messages = agent.messages
 
-        try:
-            closed = closed_turn_ranges(messages)
-            if not closed:
-                # Nothing has closed yet: no turn to card, and nothing to rebuild from.
-                return
+        if state.cards and not is_turn_boundary(message_to_neutral(event.message)):
+            # Mid-turn: nothing closed, so nothing to derive. An empty graph goes on to the scan whatever the message,
+            # which is the restore case.
+            return
 
-            if not state.cards:
-                # The restore case, and equally the first closed boundary of a fresh agent, where the scan and the
-                # incremental step derive the same single Card and the two paths' turn ordinals stay aligned from here.
-                self._rebuild(agent, state)
-                return
-
-            if not is_turn_boundary(event.message):
-                # Mid-turn: nothing closed, so nothing to derive.
-                return
-
-            start, stop = closed[-1]
-            turn_ids = _identities_in(messages[start:stop])
-            if not turn_ids:
-                # A turn whose messages all lack a Durable Identity: messages without a Card, projected whole.
-                return
-
-            # The ordinal is the position of the boundary among the closed turns, not ``state.turn``, so a turn's Card
-            # is the same whether it was derived turn by turn or by one scan (Requirement 14.3).
-            derive_and_register(state, messages, turn_ids, len(closed) - 1, **self._card_config())
-        except Exception:
-            logger.warning("closing the turn's card failed | the turn's messages go whole", exc_info=True)
-
-    def _rebuild(self, agent: Agent, state: _GraphState) -> None:
-        """Derive the whole graph of ``agent``'s conversation onto ``state`` in one scan.
-
-        Idempotent by way of ``rebuild_into``, which clears the Cards and Links before the scan, and which sets the turn
-        ordinal from the count of closed boundaries so the scan and the incremental path agree on it. Failures do not
-        propagate: a graph that did not come back holds no Card, and a message with no Card travels at Full Content
-        (Requirements 16.4, 16.5).
-
-        Args:
-            agent: The agent whose conversation the graph is derived from. Read only.
-            state: The graph state to fill. Left as it was when the scan failed.
-        """
-        try:
-            rebuild_into(state, agent.messages, **self._card_config())
-        except Exception:
-            logger.warning("graph rebuild by scan failed | the whole conversation goes at full content", exc_info=True)
+        # ``close_turns`` returns early when nothing has closed, scans the whole conversation when the graph is empty,
+        # and otherwise derives the Card of the last closed turn; its own failures are logged and absorbed.
+        close_turns(state, messages_to_neutral(agent.messages), self._thresholds())
 
     # ---- the write half: the artifact side of one tool call -----------------------------------
 
@@ -904,8 +933,8 @@ class ContextGraph(Plugin):
 
             cards = derive_and_register_artifacts(
                 state,
-                agent.messages,
-                cast("ToolResult", raw),
+                messages_to_neutral(agent.messages),
+                result_to_neutral(raw),  # type: ignore[arg-type]  # narrowed to dict above
                 str(event.tool_use.get("name") or ""),
                 state.turn,
                 description_tokens=self._description_tokens,
@@ -943,7 +972,18 @@ class ContextGraph(Plugin):
         # is ever summed (Requirements 13.2, 13.4). Recomputing the choice here is also what ends a tool's Resolution
         # raise with the turn that asked for it (Requirement 12.14).
         expire_reuse(state, _cycle_of(event.agent))
-        state.choice = self._compute_choice(state, event)
+        # ``BeforeInvocationEvent`` fires before the turn's message is appended, so the question is read off the
+        # invocation's input messages rather than the history. ``choose`` scores, fills the vector index from the
+        # vectors that round paid for, hands out the body budget, and degrades to the full pass on any failure
+        # (Requirements 10.4, 11.3, 16.1).
+        question_messages = event.messages if event.messages is not None else event.agent.messages
+        state.choice = choose(
+            state,
+            messages_to_neutral(question_messages),
+            _LazyMatcher(self._matcher_for),
+            self._body_budget,
+            self._thresholds(),
+        )
         # After the increment the ordinal names the turn now opening, whose boundary the write half is about to see. The
         # Card of the turn just before it does not exist yet — a turn is closed by what comes after it — so that turn
         # has no Card and its messages travel at Full Content (Requirement 16.5).
@@ -951,102 +991,26 @@ class ContextGraph(Plugin):
         # Counted per turn, so it starts each turn at zero.
         state.retrieval_cycles = 0
 
-    def _compute_choice(self, state: _GraphState, event: BeforeInvocationEvent) -> TurnChoice:
-        """Score the graph against the turn's question, fill the vector index, and hand out the body budget.
+    def _thresholds(self) -> Thresholds:
+        """Return what the core decides under, built from this instance's fixed configuration.
 
-        Any failure at any step degrades to the full pass — the behavior without the plugin — with exactly one warning
-        carrying ``exc_info`` and no failure state kept, so the next turn computes a choice again (Requirement 16.1).
-
-        Args:
-            state: The graph state. Read, except for ``vectors``, which this fills from the embedding the scoring round
-                already paid for.
-            event: The invocation event, for the question and the agent.
+        ``retrieval_tools`` is read from the current tool list rather than fixed here, because a caller may de-register
+        a retrieval tool after construction and guidance must not name a tool the agent no longer has.
 
         Returns:
-            The frozen choice of this turn.
+            The thresholds for the write half, the read half and the delivery.
         """
-        try:
-            skipped = warm_up_choice(state, expand_threshold=self._expand_threshold, min_cards=self._min_cards)
-            if skipped is not None:
-                # Below ``min_cards`` the only possible decision is "send it all", so no embedding is paid for a
-                # decision the size of the graph already made (Requirements 8.12, 11.3).
-                return skipped
-
-            question = _question_of(event.messages if event.messages is not None else event.agent.messages)
-            matcher = self._matcher_for()
-            # The one embedding round of the turn: the question as the query, the Descriptions as the documents
-            # (Requirement 10.4).
-            notes = compute_notes(state, question, matcher)
-            if not notes:
-                # The matcher failed or answered malformed, which reads as "score nothing, send everything" and not as
-                # "nothing is relevant".
-                return full_pass_choice()
-
-            # Only on this path, and only after the scoring round: the vectors are already in the matcher's own cache
-            # under the document purpose, so filling the index sends nothing. Above the ``min_cards`` short circuit it
-            # would have sent a request for a decision that was never taken, which Requirement 11.3 forbids.
-            self._cache_description_vectors(state, matcher)
-
-            return distribute(
-                notes,
-                state,
-                expand_threshold=self._expand_threshold,
-                collapse_floor=self._collapse_floor,
-                body_budget=self._body_budget,
-            )
-        except Exception:
-            logger.warning("turn choice failed | the whole conversation goes at full content", exc_info=True)
-            return full_pass_choice()
-
-    def _cache_description_vectors(self, state: _GraphState, matcher: SimilarityMatcher) -> None:
-        """Fill ``state.vectors`` from the Descriptions the scoring round just embedded.
-
-        Without this the index stays empty, and an empty index is not a slow path but a missing feature: the similarity
-        Link is measured from this index alone, by a hook Requirement 3.2 keeps free of network calls, so an unfilled
-        index makes every pair unmeasurable and the ``similar`` Link never forms at all. The three structural Link kinds
-        still form, which is why a graph with no ``similar`` edge looks like a working graph in the counters.
-
-        Two properties keep it free. It runs only where :meth:`_compute_choice` has already scored, so the document
-        vectors sit in the matcher's cache; and ``vectors`` is optional on the protocol, so a matcher that does not
-        publish one leaves the index as it was rather than failing the turn.
-
-        Stale Titles are dropped rather than left to accumulate: a Description that changed makes its entry unusable
-        anyway — :func:`_cached_similarity` compares the cached text before trusting the vector — and a Title no longer
-        in the graph will not be asked about again.
-
-        Args:
-            state: The graph state. ``vectors`` is replaced; nothing else is touched.
-            matcher: The matcher that just scored, and therefore already holds these vectors.
-        """
-        published = getattr(matcher, "vectors", None)
-        if published is None:
-            return
-
-        titles = titles_in_turn_order(state)
-        descriptions = tuple(state.cards[title].description for title in titles)
-        try:
-            vectors = published(descriptions)
-        except Exception:
-            # Same posture as the scoring round: an unusable index costs Links, never the turn.
-            logger.debug("graph description vectors unavailable for %d card(s)", len(titles), exc_info=True)
-            return
-
-        if len(vectors) != len(titles):
-            # Includes the empty answer the matcher returns when the embedding was unavailable. A partial index would
-            # pair vectors with the wrong Titles, which is worse than no index.
-            return
-
-        filled = {
-            title: (description, tuple(vector))
-            for title, description, vector in zip(titles, descriptions, vectors, strict=True)
-        }
-        # A Title whose entry is unchanged has already been measured against everything; one that is new, or whose
-        # Description was rewritten, is what the second pass is for.
-        newly_measurable = [title for title, entry in filled.items() if state.vectors.get(title) != entry]
-        state.vectors = filled
-
-        if newly_measurable:
-            link_newly_measurable(state, newly_measurable, link_threshold=self._link_threshold)
+        return Thresholds(
+            expand_threshold=self._expand_threshold,
+            collapse_floor=self._collapse_floor,
+            description_tokens=self._description_tokens,
+            tags_per_card=self._tags_per_card,
+            rarity_weight=_RARITY_WEIGHT,
+            min_cards=self._min_cards,
+            link_threshold=self._link_threshold,
+            reuse_ttl_cycles=self._reuse_ttl_cycles,
+            retrieval_tools=self.retrieval_tool_names,
+        )
 
     def _matcher_for(self) -> SimilarityMatcher:
         """Return the similarity matcher, building the default one on first need.
@@ -1062,14 +1026,12 @@ class ContextGraph(Plugin):
             return self._matcher
 
         if self._resolved_matcher is None:
-            from .matcher import EmbeddingSimilarityMatcher
-
             # Its Bedrock client is built lazily too, so this construction is still free of I/O (Requirement 11.4).
             self._resolved_matcher = EmbeddingSimilarityMatcher()
 
         return self._resolved_matcher
 
-    # ---- the three retrieval tools: bodies in ``tools.py``, configuration and state here ------
+    # ---- the three retrieval tools: bodies in ``context_core.graph.tools``, configuration and state here
     # Auto-discovered by the plugin registry, which registers exactly these three and no other
     # (Requirement 12.1): they are the only ``@tool`` members of the class.
 

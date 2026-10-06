@@ -19,10 +19,9 @@ from collections.abc import Sequence
 from types import MappingProxyType
 
 import pytest
-
-from strands_context_graph.state import Card, CardChoice, ToolPair, TurnChoice, _GraphState
-from strands_context_graph.store import InMemoryReferenceStore, absent_message, non_textual_message, unknown_message
-from strands_context_graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
+from context_core.graph.state import Card, CardChoice, ToolPair, TurnChoice, _GraphState
+from context_core.graph.store import InMemoryReferenceStore, absent_message, non_textual_message, unknown_message
+from context_core.graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
 
 CYCLE = 7
 """One cycle counter, so an expiry cycle is checkable by hand."""
@@ -299,7 +298,7 @@ async def test_a_stash_that_does_not_hold_the_reference_answers_unknown(monkeypa
         async def retrieve(self, reference: str) -> object | None:
             return None
 
-    from strands_context_graph import store as store_module
+    from context_core.graph import store as store_module
 
     monkeypatch.setattr(store_module, "_stash_of", lambda agent: Stash())
 

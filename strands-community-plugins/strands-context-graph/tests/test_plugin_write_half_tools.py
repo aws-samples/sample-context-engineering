@@ -11,10 +11,10 @@ The agent is a plain class carrying only ``messages``, so it is weak-referenceab
 import logging
 from collections.abc import Sequence
 
+from context_core.graph.store import InMemoryReferenceStore
 from strands.hooks.events import AfterToolCallEvent
 
 from strands_context_graph import ContextGraph
-from strands_context_graph.store import InMemoryReferenceStore
 
 REFERENCE = "mem_1_tu-3_0"
 """The reference an offloader's placeholder names, in the inline shape."""
@@ -191,7 +191,7 @@ def test_a_failed_store_write_still_leaves_the_card(monkeypatch, caplog) -> None
 
     monkeypatch.setattr(InMemoryReferenceStore, "note", explode)
 
-    with caplog.at_level(logging.WARNING, logger="strands_context_graph.store"):
+    with caplog.at_level(logging.WARNING, logger="context_core.graph.store"):
         plugin._on_after_tool_call(event(agent, offloaded()))
 
     assert REFERENCE in plugin._states[agent].cards

@@ -18,15 +18,16 @@ Three guarantees:
 from collections.abc import Callable
 
 import pytest
-
-from strands_context_graph import store as store_module
-from strands_context_graph.store import (
+from context_core.graph import store as store_module
+from context_core.graph.store import (
     InMemoryReferenceStore,
     absent_message,
     read_artifact,
     resolve_artifact,
     unknown_message,
 )
+
+from strands_context_graph._compat import STRANDS_HOST_SYMBOLS
 
 REFERENCE = "mem_1_tu-3_0"
 """One reference, shaped like a real placeholder, used by every case below."""
@@ -144,7 +145,7 @@ def bridged(monkeypatch: pytest.MonkeyPatch) -> Callable[[object], _TripwireAgen
     monkeypatch.setattr(
         store_module,
         "_optional_symbol",
-        _symbol_table({store_module._CONTEXT_MANAGER_SYMBOL: _FakeContextManager}),
+        _symbol_table({STRANDS_HOST_SYMBOLS["context_manager"]: _FakeContextManager}),
     )
 
     def _agent(stash: object) -> _TripwireAgent:

@@ -21,11 +21,10 @@ call, no embedding is reached on any path.
 from collections.abc import Sequence
 
 import pytest
+from context_core.graph.scoring import _REUSE_BONUS, compute_notes, expire_reuse, record_reuse
+from context_core.graph.state import Card, Link, _GraphState
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.scoring import _REUSE_BONUS, compute_notes, expire_reuse, record_reuse
-from strands_context_graph.state import Card, Link, _GraphState
 
 PROPERTY_SETTINGS = settings(max_examples=100, deadline=None)
 

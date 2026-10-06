@@ -23,12 +23,11 @@ import copy
 from types import MappingProxyType
 from typing import Any
 
+from context_core.graph.cards import closed_turn_ranges, rebuild_into
+from context_core.graph.removal import apply_removal, remove_messages
+from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.cards import closed_turn_ranges, rebuild_into
-from strands_context_graph.removal import apply_removal, remove_messages
-from strands_context_graph.state import CardChoice, TurnChoice, _GraphState
 
 REGISTRATION = {
     "description_tokens": 100,

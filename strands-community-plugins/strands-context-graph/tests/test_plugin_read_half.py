@@ -14,11 +14,11 @@ from collections.abc import Sequence
 from types import MappingProxyType
 
 import pytest
+from context_core.graph.matcher import EmbeddingSimilarityMatcher
+from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
 from strands.hooks.events import BeforeInvocationEvent
 
 from strands_context_graph import ContextGraph
-from strands_context_graph.matcher import EmbeddingSimilarityMatcher
-from strands_context_graph.state import Card, CardChoice, TurnChoice, _GraphState
 
 
 class _Agent:
@@ -204,7 +204,7 @@ def test_a_failed_matcher_degrades_to_a_full_pass_without_a_warning(caplog):
     agent = _Agent()
     state = wired(plugin, agent, *three_cards(), turn=3)
 
-    with caplog.at_level(logging.DEBUG, logger="strands_context_graph.plugin"):
+    with caplog.at_level(logging.DEBUG, logger="context_core.graph.projection"):
         plugin._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=[user("What now?")]))
 
     assert state.choice.full_pass
@@ -213,18 +213,18 @@ def test_a_failed_matcher_degrades_to_a_full_pass_without_a_warning(caplog):
 
 def test_any_exception_stores_a_full_pass_and_logs_exactly_one_warning(monkeypatch, caplog):
     """Requirement 16.1: a failure anywhere in the computation is one warning with ``exc_info`` and a full pass."""
-    from strands_context_graph import plugin as plugin_module
+    from context_core.graph import projection as projection_module
 
     def explode(*args, **kwargs):
         raise RuntimeError("distribution failed")
 
-    monkeypatch.setattr(plugin_module, "distribute", explode)
+    monkeypatch.setattr(projection_module, "distribute", explode)
 
     plugin = ContextGraph(matcher=CountingMatcher())
     agent = _Agent()
     state = wired(plugin, agent, *three_cards(), turn=3)
 
-    with caplog.at_level(logging.WARNING, logger="strands_context_graph.plugin"):
+    with caplog.at_level(logging.WARNING, logger="context_core.graph.projection"):
         plugin._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=[user("What now?")]))
 
     assert state.choice.full_pass

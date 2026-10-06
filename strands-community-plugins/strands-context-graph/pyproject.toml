@@ -28,7 +28,7 @@ classifiers = [
 # The only runtime dependency, pinned to a range with a real upper bound. The plugin derives Cards by regex scan and
 # scores them through the SDK's Bedrock path, so it needs no graph library and no similarity library. The upper bound
 # is a major bound because the plugin depends on private SDK symbols (see the README's private-API caveats).
-dependencies = ["strands-agents>=1.44.0,<2.0.0"]
+dependencies = ["agent-context-core>=0.1.0,<0.2", "strands-agents>=1.44.0,<2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/aws-samples/sample-context-engineering"

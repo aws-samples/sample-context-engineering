@@ -26,11 +26,10 @@ Three claims per generated store:
 import asyncio
 from types import MappingProxyType
 
+from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
+from context_core.graph.store import InMemoryReferenceStore, read_artifact, resolve_artifact
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.state import Card, CardChoice, TurnChoice, _GraphState
-from strands_context_graph.store import InMemoryReferenceStore, read_artifact, resolve_artifact
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,

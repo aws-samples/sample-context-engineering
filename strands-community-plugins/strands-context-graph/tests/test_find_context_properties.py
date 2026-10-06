@@ -18,11 +18,10 @@ puts at or above the floor, capped at five and ordered by ``(-similarity, turn, 
 
 from collections.abc import Sequence
 
+from context_core.graph.state import Card, ToolPair, _GraphState
+from context_core.graph.tools import _MAX_CANDIDATES, find_context
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.state import Card, ToolPair, _GraphState
-from strands_context_graph.tools import _MAX_CANDIDATES, find_context
 
 CYCLE = 7
 """One cycle counter, so a recorded fed-back Note has a checkable expiry."""

@@ -26,6 +26,9 @@ from types import MappingProxyType
 from typing import Any
 
 import pytest
+from context_core.graph.cards import rebuild_into
+from context_core.graph.projection import _card_config
+from context_core.graph.state import CardChoice, TurnChoice
 from strands import Agent
 from strands._middleware.stages import InvokeModelContext
 from strands.agent.conversation_manager import NullConversationManager, SlidingWindowConversationManager
@@ -33,7 +36,6 @@ from strands.hooks.events import MessageAddedEvent
 from strands.models.model import Model
 
 from strands_context_graph import ContextGraph
-from strands_context_graph.state import CardChoice, TurnChoice
 
 WINDOW_SIZE = 2
 """Small enough that the trim reaches the folded turn, which is the whole point of the fixture."""
@@ -278,7 +280,7 @@ def test_expand_card_still_promises_a_turn_it_can_no_longer_produce(trimmed):
     Nothing about the tool is broken — it answers, it raises the Resolution, it does not raise an exception. It simply
     promises content that the manager deleted, which is exactly why the protection has to be the wiring-time notice.
     """
-    from strands_context_graph import tools
+    from context_core.graph import tools
 
     graph, agent, manager = trimmed
     fold_the_middle_turn(graph, agent)
@@ -297,7 +299,7 @@ def test_a_rebuild_by_scan_cannot_recover_the_trimmed_turn(trimmed):
     trim(agent, manager)
 
     state = graph._states[agent]
-    graph._rebuild(agent, state)
+    rebuild_into(state, agent.messages, **_card_config(graph._thresholds()))
 
     assert FOLDED_TITLE not in state.cards
     assert all(FOLDED_ANSWER not in card.description for card in state.cards.values())

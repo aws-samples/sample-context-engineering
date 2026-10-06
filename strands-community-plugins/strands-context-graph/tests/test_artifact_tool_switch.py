@@ -90,7 +90,7 @@ def test_an_excluded_tool_is_not_advertised_to_the_model() -> None:
     Measured before the guidance read the registered set, a run produced ``tool not found in registry`` five times for
     exactly this reason -- the model was told to call the tool the harness had removed.
     """
-    from strands_context_graph.compaction import guidance
+    from context_core.graph.compaction import guidance
 
     plugin = ContextGraph(matcher=_Matcher(), include_artifact_tool=False)
     registered(plugin)

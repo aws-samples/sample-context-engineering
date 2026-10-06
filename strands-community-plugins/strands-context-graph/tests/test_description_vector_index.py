@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from context_core.graph.state import Card, _GraphState
 from strands.hooks.events import BeforeInvocationEvent
 
 from strands_context_graph import ContextGraph
-from strands_context_graph.state import Card, _GraphState
 
 DIMENSIONS = 4
 """Vector width. Small on purpose: these tests assert wiring, not embedding quality."""
@@ -239,7 +239,7 @@ def test_a_card_registered_after_the_choice_is_linked_on_the_next_one() -> None:
     has never been embedded and every pair touching it is unmeasurable. Filling the index alone does not fix this: the
     measurement has to be retried on the following choice, which is what ``link_newly_measurable`` is for.
     """
-    from strands_context_graph.cards import register_card
+    from context_core.graph.cards import register_card
 
     same = [1.0, 0.0, 0.0, 0.0]
     matcher = VectorMatcher(

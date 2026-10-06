@@ -22,12 +22,11 @@ import re
 from dataclasses import replace
 from typing import Any
 
+from context_core.graph.cards import derive_card
+from context_core.graph.describe import compose_description
+from context_core.graph.state import Card
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.cards import derive_card
-from strands_context_graph.describe import compose_description
-from strands_context_graph.state import Card
 
 UNBOUNDED = 10_000
 """A budget no Description built here can reach, for reading the untruncated form."""

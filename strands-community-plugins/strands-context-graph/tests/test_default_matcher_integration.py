@@ -28,8 +28,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
-
-from strands_context_graph.matcher import EmbeddingSimilarityMatcher
+from context_core.graph.matcher import EmbeddingSimilarityMatcher
 
 ENABLE_VAR = "STRANDS_CONTEXT_GRAPH_BEDROCK_TESTS"
 

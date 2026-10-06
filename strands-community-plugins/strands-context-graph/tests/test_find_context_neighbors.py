@@ -13,8 +13,8 @@ thing in different words are invisible to each other there.
 from __future__ import annotations
 
 import pytest
-from strands_context_graph.state import Link
-from strands_context_graph.tools import _similar_neighbors, find_context
+from context_core.graph.state import Link
+from context_core.graph.tools import _similar_neighbors, find_context
 
 from tests.test_tools import CYCLE, TTL, card, graph
 

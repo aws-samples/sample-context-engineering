@@ -28,11 +28,10 @@ placeholder shapes, numeric lines, messages with no ``tracking_id``, and whole t
 import copy
 from typing import Any
 
+from context_core.graph.cards import closed_turn_ranges, derive_and_register, rebuild
+from context_core.graph.state import Card, _GraphState
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.cards import closed_turn_ranges, derive_and_register, rebuild
-from strands_context_graph.state import Card, _GraphState
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,

@@ -16,11 +16,10 @@ token:
 
 import re
 
+from context_core.graph.describe import _estimate_tokens, compose_description
+from context_core.graph.state import Card, ToolPair
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.describe import _estimate_tokens, compose_description
-from strands_context_graph.state import Card, ToolPair
 
 UNBOUNDED = 100_000
 """A budget no generated Description can reach, for comparing against the untruncated form."""

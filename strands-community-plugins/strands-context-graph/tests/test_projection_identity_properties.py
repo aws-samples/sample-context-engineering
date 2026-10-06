@@ -27,6 +27,8 @@ from collections.abc import Sequence
 from types import MappingProxyType
 from typing import Any
 
+from context_core.graph.cards import rebuild
+from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from strands._middleware.registry import MiddlewareRegistry
@@ -34,9 +36,7 @@ from strands._middleware.stages import InvokeModelContext
 from strands.hooks.events import BeforeInvocationEvent
 
 from strands_context_graph import ContextGraph
-from strands_context_graph.cards import rebuild
-from strands_context_graph.projection import Projection
-from strands_context_graph.state import CardChoice, TurnChoice, _GraphState
+from strands_context_graph.plugin import _Delivery as Projection
 
 PROPERTY_SETTINGS = settings(max_examples=100, deadline=None)
 

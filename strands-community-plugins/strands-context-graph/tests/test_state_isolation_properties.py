@@ -18,11 +18,10 @@ import copy
 import weakref
 from typing import Any
 
+from context_core.graph.cards import closed_turn_ranges, derive_and_register, rebuild_into
+from context_core.graph.state import _GraphState
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-
-from strands_context_graph.cards import closed_turn_ranges, derive_and_register, rebuild_into
-from strands_context_graph.state import _GraphState
 
 DERIVATION = {"description_tokens": 100, "tags_per_card": 5, "rarity_weight": 0.5}
 REGISTRATION = {**DERIVATION, "link_threshold": 0.5}

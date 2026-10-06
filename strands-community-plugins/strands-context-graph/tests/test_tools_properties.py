@@ -31,17 +31,16 @@ from collections.abc import Sequence
 from types import MappingProxyType
 from typing import Any
 
-from hypothesis import HealthCheck, given, settings
-from hypothesis import strategies as st
-
-from strands_context_graph.state import Card, CardChoice, ToolPair, TurnChoice, _GraphState
-from strands_context_graph.store import (
+from context_core.graph.state import Card, CardChoice, ToolPair, TurnChoice, _GraphState
+from context_core.graph.store import (
     InMemoryReferenceStore,
     absent_message,
     non_textual_message,
     unknown_message,
 )
-from strands_context_graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
+from context_core.graph.tools import _MAX_CANDIDATES, expand_artifact, expand_card, find_context
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,

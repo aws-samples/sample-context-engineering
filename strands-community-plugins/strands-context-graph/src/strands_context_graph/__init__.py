@@ -23,6 +23,10 @@ the default matcher's score distribution and are not portable; another matcher n
 ``expand_threshold=0.0, collapse_floor=0.0`` projects every Card at Full Content, producing a call identical field for
 field to the one produced without the plugin, which tells a graph problem apart from a pre-existing one.
 
+The decision logic -- Card derivation, scoring, the Turn Choice, removal, compaction, the reference store and the
+retrieval-tool bodies -- lives in ``agent-context-core`` (:mod:`context_core.graph`); this package is the Strands
+binding over it. ``EmbeddingSimilarityMatcher`` is the core matcher tagged ``strands-agents`` in the AWS user agent.
+
 Example Usage:
     ```python
     from strands import Agent
@@ -36,8 +40,9 @@ Example Usage:
     ```
 """
 
-from .matcher import EmbeddingSimilarityMatcher, SimilarityMatcher
-from .plugin import ContextGraph
+from context_core.graph.matcher import SimilarityMatcher
+
+from .plugin import ContextGraph, EmbeddingSimilarityMatcher
 
 __all__ = [
     "ContextGraph",

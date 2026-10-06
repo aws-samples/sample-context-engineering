@@ -13,6 +13,8 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from context_core.graph.cards import rebuild_into
+from context_core.graph.projection import _card_config
 from strands.hooks.events import MessageAddedEvent
 
 from strands_context_graph import ContextGraph
@@ -173,7 +175,7 @@ def test_the_rebuild_is_idempotent() -> None:
 
     plugin._on_message_added(event(agent, agent.messages[-1]))
     first = dict(plugin._states[agent].cards)
-    plugin._rebuild(agent, plugin._states[agent])
+    rebuild_into(plugin._states[agent], agent.messages, **_card_config(plugin._thresholds()))
 
     assert plugin._states[agent].cards == first
 
@@ -231,7 +233,7 @@ def test_the_scan_leaves_the_vector_cache_alone() -> None:
 
 def test_a_failed_card_derivation_registers_nothing_and_does_not_propagate(monkeypatch, caplog) -> None:
     """Requirements 16.4, 16.5: the hook completes, that turn keeps no Card, the failure stays in the log."""
-    from strands_context_graph import cards as cards_module
+    from context_core.graph import cards as cards_module
 
     plugin = graph()
     agent = _Agent()
@@ -242,7 +244,7 @@ def test_a_failed_card_derivation_registers_nothing_and_does_not_propagate(monke
 
     monkeypatch.setattr(cards_module, "derive_card", explode)
 
-    with caplog.at_level(logging.WARNING, logger="strands_context_graph.cards"):
+    with caplog.at_level(logging.WARNING, logger="context_core.graph.cards"):
         add(plugin, agent, user("and the overdraft limit?", "m3"))
 
     assert plugin._states[agent].cards == {}
@@ -258,17 +260,17 @@ def test_a_failed_card_derivation_registers_nothing_and_does_not_propagate(monke
 
 def test_a_failed_rebuild_keeps_no_card_and_does_not_propagate(monkeypatch, caplog) -> None:
     """Requirement 16.4: a scan that could not run leaves an empty graph, which is a full-content conversation."""
-    from strands_context_graph import plugin as plugin_module
+    from context_core.graph import projection as projection_module
 
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("scan exploded")
 
-    monkeypatch.setattr(plugin_module, "rebuild_into", explode)
+    monkeypatch.setattr(projection_module, "rebuild_into", explode)
 
     plugin = graph()
     agent = _Agent(conversation())
 
-    with caplog.at_level(logging.WARNING, logger="strands_context_graph.plugin"):
+    with caplog.at_level(logging.WARNING, logger="context_core.graph.projection"):
         plugin._on_message_added(event(agent, agent.messages[-1]))
 
     assert plugin._states[agent].cards == {}

@@ -1,15 +1,18 @@
-"""The three retrieval tools: what makes a wrong automatic choice cost a cycle instead of an answer.
+"""The bodies of the three retrieval tools: what makes a wrong automatic choice cost a cycle instead of an answer.
+
+Framework-agnostic: a binding keeps each tool's signature and model-facing docstring, and calls in here.
 
 The graph decides a Resolution per Card from a Note, and the Note is a guess. A wrong guess leaves the model not with a
 worse answer but with a Title, an explicit invitation to ask. These three are what the invitation leads to:
 
 - :func:`expand_card` asks by Title, reads the graph, and raises both axes for the rest of the turn.
-- :func:`expand_artifact` asks by reference, reads the plugin's own store and then the optional Stash bridge, and raises
+- :func:`expand_artifact` asks by reference, reads the binding's store and then the optional Stash bridge, and raises
   nothing: the content comes back inline.
 - :func:`find_context` asks by Description in the model's own words, reads the same vector index the Turn Choice scores
   against, and raises nothing.
 
-Five properties are shared by all three. Nothing here calls a language model or touches ``agent.messages``: none holds a
+Five properties are shared by all three. Nothing here calls a language model or touches the host's message history:
+none holds a
 handle on the model, none holds a mutable reference to the history (Requirement 12.13). Every failure is a return value,
 never an exception — an unknown Title, an unknown reference, non-textual content and an absent store all come back as
 prose naming what was missing (Requirements 12.3, 12.6, 12.7, 12.12, 16.8), because a raise would report the *tool*
@@ -71,7 +74,7 @@ def _exhausted(tool: str, state: _GraphState, max_retrieval_cycles: int | None) 
 
     Args:
         tool: Name of the calling tool, for the message.
-        state: Graph state of the agent. Read only here.
+        state: Graph state of the conversation. Read only here.
         max_retrieval_cycles: The ceiling, or ``None`` for unbounded retrieval.
 
     Returns:
@@ -113,12 +116,12 @@ def expand_card(
     for what you need at once is cheaper than discovering it one title at a time.
 
     Args:
-        state: Graph state of the agent. ``choice``, ``reuse`` and ``retrieval_cycles`` are mutated; ``cards`` read
+        state: Graph state. ``choice``, ``reuse`` and ``retrieval_cycles`` are mutated; ``cards`` read
             only.
         titles: Titles of the Cards the model asked for, as they were shown to it. A bare string is accepted as a
             single title: the schema says array, and a model that sends the scalar anyway should be answered rather
             than corrected.
-        cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
+        cycle: Current cycle counter, supplied by the host.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
         max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
 
@@ -203,7 +206,7 @@ async def expand_artifact(
 ) -> str:
     """Read the artifact behind ``reference``, whole or in part, through the store resolution order.
 
-    The read is delegated and never reimplemented: :func:`~.store.resolve_artifact` consults the plugin's own store
+    The read is delegated and never reimplemented: :func:`~.store.resolve_artifact` consults the binding's own store
     first and the optional ``ContextManager`` Stash second (Requirements 15.2, 15.3), and
     :func:`~.store.read_artifact` bounds a targeted read by ``_MAX_RESULT_TOKENS`` (Requirement 12.4). This module
     opens no file, resolves no path and builds no URI.
@@ -212,14 +215,14 @@ async def expand_artifact(
     the next turn is the fed-back Note on the artifact's Card.
 
     Args:
-        state: Graph state of the agent. Its ``reuse`` and ``retrieval_cycles`` are mutated.
-        store: The plugin's own reference store for this agent. Read only.
+        state: Graph state of the conversation. Its ``reuse`` and ``retrieval_cycles`` are mutated.
+        store: The binding's own reference store for this conversation. Read only.
         agent: The agent of the call, for the optional Stash bridge. Read only, and typed loosely because the tool
-            reaches here from a ``ToolContext`` whose ``agent`` is typed for backwards compatibility.
+            reaches here from the host's tool context, whose agent object may be typed loosely.
         reference: The artifact reference, as it was shown to the model.
         line_range: ``{"start": int, "end": int}``, 1-indexed and inclusive, or ``None``.
         pattern: Regex or keyword to keep only matching lines, or ``None``.
-        cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
+        cycle: Current cycle counter, supplied by the host.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
 
     Returns:
@@ -341,19 +344,19 @@ def find_context(
     """Score every candidate Card's Description against ``need`` and answer with the best five.
 
     Scored over the index the Turn Choice already uses and no other (Requirement 12.8): one ``score`` call against the
-    matcher the plugin resolved, whose vectors come from the per-process cache keyed by ``(purpose, text)``. No index is
+    binding's matcher, whose vectors come from the per-process cache keyed by ``(purpose, text)``. No index is
     built here (Requirement 12.10). ``collapse_floor`` is the bar rather than ``expand_threshold``, being the Note below
     which the graph decided a Card was not worth a Description, so a candidate clearing it is one the graph did not
     dismiss.
 
     Args:
-        state: Graph state of the agent. ``reuse`` and ``retrieval_cycles`` are mutated; ``cards`` read only.
+        state: Graph state of the conversation. ``reuse`` and ``retrieval_cycles`` are mutated; ``cards`` read only.
         need: What the model is looking for, in its own words.
         tag: Restrict candidates to Cards carrying this Tag, compared in normalized form (Requirement 12.10). ``None``
             leaves every Card a candidate.
         matcher: The similarity matcher the Turn Choice uses.
         collapse_floor: Similarity below which a candidate is not returned at all.
-        cycle: Current cycle counter, ``agent.event_loop_metrics.cycle_count``.
+        cycle: Current cycle counter, supplied by the host.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
         max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
         neighbors_per_candidate: Most ``similar`` neighbours to list under each candidate. ``0`` lists
@@ -454,7 +457,7 @@ def _nothing_found(need: str, tag: str | None) -> str:
 def _similar_neighbors(state: _GraphState, title: str, exclude: Container[str], limit: int) -> list[tuple[str, float]]:
     """The ``similar`` neighbours of ``title``, strongest first, excluding anything in ``exclude``.
 
-    This is the only reader of the ``similar`` edge in the whole plugin. The edge is measured on the
+    This is the only reader of the ``similar`` edge in the whole graph. The edge is measured on the
     write path and stored with its similarity as the weight, but ``_STRUCTURAL_WEIGHTS`` omits it, so it
     propagates no Note, and until now nothing traversed it either: it was paid for and read by nothing.
     ``scoring``'s own docstring describes it as "an edge a manual search traverses" -- this is that

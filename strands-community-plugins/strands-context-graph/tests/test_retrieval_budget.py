@@ -13,13 +13,12 @@ covered here:
 from __future__ import annotations
 
 import pytest
-
-from strands_context_graph.compaction import guidance
-from strands_context_graph.plugin import ContextGraph
-from strands_context_graph.state import _GraphState
-from strands_context_graph.tools import expand_card, find_context
-
+from context_core.graph.compaction import guidance
+from context_core.graph.state import _GraphState
+from context_core.graph.tools import expand_card, find_context
 from test_tools import card, graph
+
+from strands_context_graph.plugin import ContextGraph
 
 CYCLE = 3
 """Cycle the calls are made on. Any value: none of these assertions reads the cycle."""
