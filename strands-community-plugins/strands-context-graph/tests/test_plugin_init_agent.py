@@ -91,16 +91,18 @@ def test_exactly_the_three_retrieval_tools_are_registered():
 
 
 def test_exactly_one_handler_of_each_hook_type():
-    """Requirement 1.1: one ``BeforeInvocationEvent``, one ``MessageAddedEvent``, one ``AfterToolCallEvent``."""
+    """Requirement 1.1 under D-1: one ``AfterToolCallEvent`` hook, and no per-turn hook at all.
+
+    The write half and the Turn Choice run inside the ``InvokeModelStage`` handler on every model call, so
+    ``BeforeInvocationEvent`` and ``MessageAddedEvent`` get nothing from this plugin.
+    """
     graph = ContextGraph()
     agent = build(plugin=graph)
+    baseline = build()
 
-    for event_type, handler in (
-        (BeforeInvocationEvent, graph._on_before_invocation),
-        (MessageAddedEvent, graph._on_message_added),
-        (AfterToolCallEvent, graph._on_after_tool_call),
-    ):
-        assert callbacks_for(agent, event_type).count(handler) == 1
+    assert callbacks_for(agent, AfterToolCallEvent).count(graph._on_after_tool_call) == 1
+    for event_type in (BeforeInvocationEvent, MessageAddedEvent):
+        assert len(callbacks_for(agent, event_type)) == len(callbacks_for(baseline, event_type))
 
 
 def test_exactly_one_input_middleware_handler_is_added():
@@ -115,7 +117,7 @@ def test_exactly_one_input_middleware_handler_is_added():
 
 
 def test_no_other_hook_type_gains_a_handler():
-    """Requirement 1.1 read from the other side: four engagement points, not five."""
+    """Requirement 1.1 read from the other side: two engagement points (D-1), the hook and the stage handler."""
     wired = build(plugin=ContextGraph()).hooks._registered_callbacks
     baseline = build().hooks._registered_callbacks
 
@@ -124,7 +126,7 @@ def test_no_other_hook_type_gains_a_handler():
         for event_type, callbacks in wired.items()
         if len(callbacks) != len(baseline.get(event_type, []))
     }
-    assert grew == {"BeforeInvocationEvent", "MessageAddedEvent", "AfterToolCallEvent"}
+    assert grew == {"AfterToolCallEvent"}
 
 
 def test_the_system_prompt_is_untouched():
@@ -200,9 +202,7 @@ def test_the_warned_agent_is_wired_exactly_like_any_other():
         agent = build(plugin=graph, manager=SlidingWindowConversationManager(window_size=2))
 
     assert set(agent.tool_registry.registry) >= {"expand_card", "expand_artifact", "find_context"}
-    assert callbacks_for(agent, MessageAddedEvent).count(graph._on_message_added) == 1
     assert callbacks_for(agent, AfterToolCallEvent).count(graph._on_after_tool_call) == 1
-    assert callbacks_for(agent, BeforeInvocationEvent).count(graph._on_before_invocation) == 1
     assert input_handlers(agent)[0].phase == "input"
 
 
@@ -236,9 +236,7 @@ def test_one_instance_on_two_agents_registers_one_handler_of_each_type_per_agent
     agents = [build(plugin=graph), build(plugin=graph)]
 
     for agent in agents:
-        assert callbacks_for(agent, MessageAddedEvent).count(graph._on_message_added) == 1
         assert callbacks_for(agent, AfterToolCallEvent).count(graph._on_after_tool_call) == 1
-        assert callbacks_for(agent, BeforeInvocationEvent).count(graph._on_before_invocation) == 1
         assert len(input_handlers(agent)) - len(input_handlers(build())) == 1
 
 

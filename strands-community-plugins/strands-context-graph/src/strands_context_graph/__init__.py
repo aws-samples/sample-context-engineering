@@ -15,10 +15,11 @@ it sees a manager that is not ``NullConversationManager``, and still registers e
 protection you get.
 
 The matcher is the :class:`SimilarityMatcher` protocol. The default :class:`EmbeddingSimilarityMatcher` is the graph's
-only remote call: one embedding round per turn, cached by ``(purpose, text)``. A custom implementation needs only a
-callable ``score`` member returning exactly ``len(descriptions)`` values in ``[0.0, 1.0]``, which is why the protocol is
-exported alongside the construct. ``expand_threshold``, ``collapse_floor`` and ``link_threshold`` are calibrated against
-the default matcher's score distribution and are not portable; another matcher needs its own calibration.
+only remote call: one embedding round per model call, cached by ``(purpose, text)``. A custom implementation needs
+only a callable ``score`` member returning exactly ``len(descriptions)`` values in ``[0.0, 1.0]``, which is why the
+protocol is exported alongside the construct. ``expand_threshold``, ``collapse_floor`` and ``link_threshold`` are
+calibrated against the default matcher's score distribution and are not portable; another matcher needs its own
+calibration.
 
 ``expand_threshold=0.0, collapse_floor=0.0`` projects every Card at Full Content, producing a call identical field for
 field to the one produced without the plugin, which tells a graph problem apart from a pre-existing one.

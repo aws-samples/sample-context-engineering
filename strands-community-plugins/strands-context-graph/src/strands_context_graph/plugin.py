@@ -35,26 +35,24 @@ import logging
 import math
 import warnings
 import weakref
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from numbers import Real
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import context_core.graph.tools as tools
-from context_core.graph.cards import derive_and_register_artifacts, is_turn_boundary
+from context_core.graph.cards import derive_and_register_artifacts
 from context_core.graph.matcher import EmbeddingSimilarityMatcher as _CoreEmbeddingSimilarityMatcher
 from context_core.graph.matcher import SimilarityMatcher
-from context_core.graph.projection import Thresholds, choose, close_turns, deliver
-from context_core.graph.scoring import expire_reuse
+from context_core.graph.projection import Thresholds, project
 from context_core.graph.state import _GraphState, _GraphStates
 from context_core.graph.store import InMemoryReferenceStore, record_references
+from context_core.message import NeutralMessage
 
-from ._adapter import message_to_neutral, messages_from_neutral, messages_to_neutral, result_to_neutral
+from ._adapter import messages_from_neutral, messages_to_neutral, result_to_neutral
 from ._compat import (
     AfterToolCallEvent,
-    BeforeInvocationEvent,
     InvokeModelStage,
-    MessageAddedEvent,
     NullConversationManager,
     Plugin,
     ToolContext,
@@ -113,34 +111,38 @@ class _LazyMatcher:
 
 
 class _Delivery:
-    """The ``InvokeModelStage.Input`` handler: removal plus final block, through :func:`context_core.graph.deliver`.
+    """The ``InvokeModelStage.Input`` handler: one :func:`context_core.graph.project` per model call, like LangGraph.
+
+    Each call closes the last turn into a Card, computes the choice and applies removal plus final block, in the order
+    ``project`` keeps; the returned state replaces the agent's. So the choice, the reuse clock and ``retrieval_cycles``
+    advance per model call, not per user turn -- the D-1 wiring, chosen over keeping the three Strands hooks.
 
     Built once per plugin instance and shared by every agent the instance is wired to: it holds no per-agent state of
-    its own, reading the graph out of the weakly keyed map it is handed, so two agents never see each other's Cards.
+    its own, reading and writing the graph in the weakly keyed map it is handed, so two agents never see each other's
+    Cards.
 
-    The fold used to go through the SDK's ``_create_injection_middleware``; the core's fold is a framework-free copy of
-    the same primitive (pinned by ``tests/test_sdk_parity.py``), and like the SDK's it reports how many trailing blocks
-    of the last message are per-call content. That count is *added* to the context's ``dynamic_trailing_blocks``, as the
-    SDK primitive did, so a provider keeps the final block out of its cached prefix.
+    ``project`` returns no trailing-block count, so it is read off the result: the open turn is never removed, so the
+    last message of the projection is the last message received, and it is a new object only when the final block was
+    folded into it -- the case the core's fold counts as 1. That count is *added* to ``dynamic_trailing_blocks``, as the
+    SDK's injection primitive did, so a provider keeps the final block out of its cached prefix.
 
     Args:
-        states: The plugin's per-agent state map. Read only, never written to from here.
-        description_tokens: Token ceiling of one Card's entry in the final block.
-        retrieval_tools: Callable returning the names of the retrieval tools currently registered, read on every call
-            because the plugin's tool list can be edited after construction.
+        states: The plugin's per-agent state map. The new state of every projection is written back into it.
+        project_state: ``(prior_state, neutral_messages) -> (projected, new_state)``, the plugin's call into
+            ``project`` with its own matcher, body budget and thresholds.
     """
 
     def __init__(
         self,
         states: _GraphStates,
         *,
-        description_tokens: int,
-        retrieval_tools: Callable[[], Collection[str]],
+        project_state: Callable[
+            [_GraphState | None, Sequence[NeutralMessage]], tuple[Sequence[NeutralMessage], _GraphState]
+        ],
     ) -> None:
         """Keep what every delivery needs. Nothing is built."""
         self._states = states
-        self._description_tokens = description_tokens
-        self._retrieval_tools = retrieval_tools
+        self._project_state = project_state
 
     def register(self, agent: Agent) -> bool:
         """Add :meth:`deliver` as the *first* input handler of ``InvokeModelStage``.
@@ -174,7 +176,7 @@ class _Delivery:
         return True
 
     async def deliver(self, context: InvokeModelContext) -> InvokeModelContext:
-        """Apply the removal and the compaction, as one step that either happens or does not.
+        """Project this call's messages through the graph, store the new state, and hand back the projected context.
 
         Args:
             context: The per-call invocation context. Read only, never modified in place.
@@ -184,25 +186,18 @@ class _Delivery:
             identity on a full pass, on an empty request, and on any failure (Requirements 9.8, 16.2, 16.3).
         """
         try:
-            state = self._states.get(context.agent)
-            # A state that does not exist yet is a fresh state, and a fresh state is a full pass.
-            if state is None or state.choice.full_pass:
-                return context
-
             neutral = messages_to_neutral(context.messages)
-            thresholds = Thresholds(
-                description_tokens=self._description_tokens,
-                retrieval_tools=tuple(self._retrieval_tools()),
-            )
-            projected, appended = deliver(state, neutral, thresholds)
+            projected, new_state = self._project_state(self._states.get(context.agent), neutral)
+            self._states[context.agent] = new_state
             if projected is neutral:
-                # Nothing removed, or the core degraded: the same context object.
+                # Full pass, nothing removed, or the core degraded: the same context object.
                 return context
 
+            folded_last = bool(projected) and projected[-1] is not neutral[-1]
             return replace(
                 context,
                 messages=messages_from_neutral(projected),
-                dynamic_trailing_blocks=context.dynamic_trailing_blocks + appended,
+                dynamic_trailing_blocks=context.dynamic_trailing_blocks + (1 if folded_last else 0),
             )
         except Exception:
             logger.warning("delivery failed | passing the received context through unchanged", exc_info=True)
@@ -305,24 +300,6 @@ and both should point at the wiring site rather than at this module."""
 _RARITY_WEIGHT = 0.70
 """Weight of rarity against repetition when ranking textual Tag candidates. Fixed rather than configurable: it balances
 two terms of one internal ranking, and the construct exposes no parameter for it."""
-
-
-def _cycle_of(agent: object) -> int:
-    """Return the model cycle counter of ``agent``, which is the clock the fed-back Note is aged by.
-
-    ``agent.event_loop_metrics.cycle_count`` and nothing else (Requirement 13.3), so a slow provider call or a burst of
-    messages inside one cycle never ages a Note. Read defensively: the retrieval tools reach here from a
-    ``ToolContext``, whose ``agent`` is typed loosely for backwards compatibility.
-
-    Args:
-        agent: The agent of the call. Read only.
-
-    Returns:
-        The counter, or ``0`` when the agent exposes none, granting a Note the full TTL rather than none, the direction
-        every other fail-safe here takes.
-    """
-    count = getattr(getattr(agent, "event_loop_metrics", None), "cycle_count", 0)
-    return count if isinstance(count, int) and not isinstance(count, bool) else 0
 
 
 def _wired_plugins(agent: object) -> tuple[object, ...]:
@@ -533,9 +510,10 @@ class ContextGraph(Plugin):
     Content. Nothing about the derivation reaches a language model — the only remote call in any configuration is the
     matcher's embedding.
 
-    Wired at four engagement points: three hooks, plus the delivery handler on ``InvokeModelStage.Input``, which is the
-    one place the set of messages sent to the provider changes. Three retrieval tools let the model reach back into a
-    Card the choice collapsed.
+    Wired at two engagement points: the ``InvokeModelStage.Input`` handler, which runs ``context_core.graph.project``
+    on every model call (D-1: write half, Turn Choice and delivery, the one place the messages sent to the provider
+    change), and the ``AfterToolCallEvent`` hook for artifact Cards. Three retrieval tools let the model reach back
+    into a Card the choice collapsed.
 
     Pair it with ``NullConversationManager``: this is a precondition, not a suggestion. Another conversation manager
     edits the live message list before the call is assembled, so it can physically drop what the graph only meant to
@@ -681,14 +659,7 @@ class ContextGraph(Plugin):
 
         # The delivery handler, built once: it holds no per-agent state, reading the graph out of the map above, so one
         # instance serves every agent ``init_agent`` registers it on (see ``_Delivery.register``).
-        self._projection = _Delivery(
-            self._states,
-            description_tokens=self._description_tokens,
-            # Read late, on every render: ``_tools`` is a plain list and a caller may de-register a retrieval tool
-            # after construction -- which the relevance filter's two-store collision requires -- so a snapshot taken
-            # here would advertise a tool the agent no longer has.
-            retrieval_tools=lambda: {tool.tool_name for tool in self._tools},
-        )
+        self._projection = _Delivery(self._states, project_state=self._project_state)
 
         # Always empty: the plugin registers what it needs in ``init_agent`` via ``agent.add_hook``, so the per-agent
         # handler count is verifiable by inspection rather than through discovery. Set before ``super().__init__()``,
@@ -697,14 +668,14 @@ class ContextGraph(Plugin):
         super().__init__()
 
     def init_agent(self, agent: Agent) -> None:
-        """Register the four engagement points on ``agent`` and settle the two wiring-time questions.
+        """Register the two engagement points on ``agent`` and settle the two wiring-time questions.
 
-        Exactly one handler of each type, per agent: one ``InvokeModelStage.Input`` middleware handler and one hook each
-        for ``MessageAddedEvent``, ``AfterToolCallEvent`` and ``BeforeInvocationEvent`` (Requirement 1.1). The three
-        retrieval tools arrive through the plugin registry's own discovery, which finds the three ``@tool`` members and
-        nothing else, so the tool registry gains exactly those (Requirement 1.2). Registering this same instance on a
-        second agent adds one of each there and leaves the first agent's graph untouched, every piece of state being
-        keyed by the agent (Requirement 1.5).
+        Exactly one handler of each type, per agent: one ``InvokeModelStage.Input`` middleware handler, which runs the
+        whole projection -- write half, choice and delivery -- on every model call, and one ``AfterToolCallEvent`` hook
+        for the artifact side of a tool call (Requirement 1.1). The three retrieval tools arrive through the plugin
+        registry's own discovery, which finds the three ``@tool`` members and nothing else, so the tool registry gains
+        exactly those (Requirement 1.2). Registering this same instance on a second agent adds one of each there and
+        leaves the first agent's graph untouched, every piece of state being keyed by the agent (Requirement 1.5).
 
         Nothing about the agent is reconfigured: ``system_prompt``, ``messages`` and the tool registry come out as they
         went in, the retrieval tools aside (Requirement 1.3), and nothing is written to message metadata here or
@@ -727,8 +698,6 @@ class ContextGraph(Plugin):
         self._warn_on_destructive_manager(agent)
         self._drop_artifact_tool_if_excluded()
         self._state_for(agent)
-        agent.add_hook(self._on_before_invocation, BeforeInvocationEvent)
-        agent.add_hook(self._on_message_added, MessageAddedEvent)
         agent.add_hook(self._on_after_tool_call, AfterToolCallEvent)
         delivery_is_first = self._projection.register(agent)
         self._warn_on_memory_fold_ordering(agent, delivery_is_first=delivery_is_first)
@@ -861,44 +830,6 @@ class ContextGraph(Plugin):
             self._stores[agent] = store
         return store
 
-    # ---- the write half: the turn boundary ----------------------------------------------------
-
-    def _on_message_added(self, event: MessageAddedEvent) -> None:
-        """Close the Card of the turn that just ended, or derive the whole graph by scan.
-
-        A turn is closed by what comes after it, so the boundary message this hook sees is what closes the turn before
-        it: the Card of that turn is derived here, Title, Description, Tags and Links together, off the messages
-        themselves. No language model, no disk, no network — the derivation reads text and tool names and nothing else
-        (Requirement 3.10). Mid-turn messages close nothing and derive nothing.
-
-        This is also the only place the rebuild scan may run (Requirement 14.6). A state holding no Card in front of a
-        conversation that has at least one closed boundary is a process that inherited the history — a restore
-        populates ``agent.messages`` directly and fires no event the incremental step could have seen — and one scan
-        derives the whole graph from the messages, the same Cards, Links and Tags the incremental path would have built,
-        with no serialized format to read and nothing remote to reach (Requirements 14.5, 14.8). Cards reference only
-        messages present in ``agent.messages``, so a message that vanished is referenced by nothing and therefore takes
-        part in no Resolution decision, without a raise (Requirement 14.7). The vector cache is per process and is left
-        alone by the scan: a miss costs one embedding on the next turn the read half runs, never a Card.
-
-        A late write half is a turn with no Card yet, which projects Full Content — the behavior without the plugin —
-        and per-Card failures are absorbed by :func:`context_core.graph.cards.derive_and_register`, which logs one
-        ``warning`` carrying ``exc_info`` and registers nothing (Requirements 16.4, 16.5).
-
-        Args:
-            event: The message event, for the agent and the message just added.
-        """
-        agent = event.agent
-        state = self._state_for(agent)
-
-        if state.cards and not is_turn_boundary(message_to_neutral(event.message)):
-            # Mid-turn: nothing closed, so nothing to derive. An empty graph goes on to the scan whatever the message,
-            # which is the restore case.
-            return
-
-        # ``close_turns`` returns early when nothing has closed, scans the whole conversation when the graph is empty,
-        # and otherwise derives the Card of the last closed turn; its own failures are logged and absorbed.
-        close_turns(state, messages_to_neutral(agent.messages), self._thresholds())
-
     # ---- the write half: the artifact side of one tool call -----------------------------------
 
     def _on_after_tool_call(self, event: AfterToolCallEvent) -> None:
@@ -951,45 +882,30 @@ class ContextGraph(Plugin):
         except Exception:
             logger.warning("artifact card derivation failed | the graph keeps none", exc_info=True)
 
-    # ---- the read half: one hook, on the critical path ----------------------------------------
+    # ---- the projection: one ``project`` per model call --------------------------------------
 
-    def _on_before_invocation(self, event: BeforeInvocationEvent) -> None:
-        """Compute the Turn Choice, freeze it, and advance the turn ordinal.
+    def _project_state(
+        self, prior: _GraphState | None, messages: Sequence[NeutralMessage]
+    ) -> tuple[Sequence[NeutralMessage], _GraphState]:
+        """Run :func:`context_core.graph.project` with this instance's matcher, body budget and thresholds.
 
-        No language model call, no disk access, and ``agent.messages`` is not touched. The one remote call is the
-        matcher's single embedding round, and the warm-up short circuit skips even that whenever the size of the graph
-        already settles the answer (Requirements 10.4, 11.3).
-
-        The choice is stored once here and read by every model call of the turn, the autonomous tool loop's included, so
-        the context cannot shift mid-reasoning (Requirements 8.5, 8.6). It is frozen by type: ``TurnChoice.by_title`` is
-        a ``MappingProxyType``, never a live dict.
+        The matcher goes in behind :class:`_LazyMatcher`, so the default one is still built only when a choice is
+        actually scored (nothing below ``min_cards``).
 
         Args:
-            event: The invocation event, for the agent and the turn's input messages.
+            prior: The agent's graph state, or ``None`` before the first projection.
+            messages: The call's messages, neutral. Read only.
+
+        Returns:
+            The projected messages and the new state.
         """
-        state = self._state_for(event.agent)
-        # Aged immediately before the choice reads it, and nowhere else: the choice is the only place the fed-back Note
-        # is ever summed (Requirements 13.2, 13.4). Recomputing the choice here is also what ends a tool's Resolution
-        # raise with the turn that asked for it (Requirement 12.14).
-        expire_reuse(state, _cycle_of(event.agent))
-        # ``BeforeInvocationEvent`` fires before the turn's message is appended, so the question is read off the
-        # invocation's input messages rather than the history. ``choose`` scores, fills the vector index from the
-        # vectors that round paid for, hands out the body budget, and degrades to the full pass on any failure
-        # (Requirements 10.4, 11.3, 16.1).
-        question_messages = event.messages if event.messages is not None else event.agent.messages
-        state.choice = choose(
-            state,
-            messages_to_neutral(question_messages),
+        return project(
+            messages,
+            prior,
             _LazyMatcher(self._matcher_for),
             self._body_budget,
             self._thresholds(),
         )
-        # After the increment the ordinal names the turn now opening, whose boundary the write half is about to see. The
-        # Card of the turn just before it does not exist yet — a turn is closed by what comes after it — so that turn
-        # has no Card and its messages travel at Full Content (Requirement 16.5).
-        state.turn += 1
-        # Counted per turn, so it starts each turn at zero.
-        state.retrieval_cycles = 0
 
     def _thresholds(self) -> Thresholds:
         """Return what the core decides under, built from this instance's fixed configuration.
@@ -1058,7 +974,7 @@ class ContextGraph(Plugin):
         return tools.expand_card(
             self._state_for(agent),
             titles,
-            cycle=_cycle_of(agent),
+            cycle=self._state_for(agent).turn,
             reuse_ttl_cycles=self._reuse_ttl_cycles,
             max_retrieval_cycles=self._max_retrieval_cycles,
         )
@@ -1101,7 +1017,7 @@ class ContextGraph(Plugin):
             reference,
             line_range,
             pattern,
-            cycle=_cycle_of(agent),
+            cycle=self._state_for(agent).turn,
             reuse_ttl_cycles=self._reuse_ttl_cycles,
             max_retrieval_cycles=self._max_retrieval_cycles,
         )
@@ -1129,7 +1045,7 @@ class ContextGraph(Plugin):
             tag,
             matcher=self._matcher_for(),
             collapse_floor=self._collapse_floor,
-            cycle=_cycle_of(agent),
+            cycle=self._state_for(agent).turn,
             reuse_ttl_cycles=self._reuse_ttl_cycles,
             max_retrieval_cycles=self._max_retrieval_cycles,
             neighbors_per_candidate=self._neighbors_per_candidate,

@@ -27,13 +27,13 @@ from collections.abc import Sequence
 from types import MappingProxyType
 from typing import Any
 
+from _frozen_choice import apply_frozen_choice
 from context_core.graph.cards import rebuild
 from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from strands._middleware.registry import MiddlewareRegistry
 from strands._middleware.stages import InvokeModelContext
-from strands.hooks.events import BeforeInvocationEvent
 
 from strands_context_graph import ContextGraph
 from strands_context_graph.plugin import _Delivery as Projection
@@ -208,33 +208,31 @@ def delivery_of(state: _GraphState | None, messages: list[dict[str, Any]]) -> tu
     """A ``Projection`` wired to one agent holding ``state``, plus that agent's per-call context."""
     agent = _Agent(messages)
     states: dict[_Agent, _GraphState] = {} if state is None else {agent: state}
-    return Projection(states, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")), context_over(list(messages), agent)
+    handler = Projection(states, project_state=apply_frozen_choice(DESCRIPTION_TOKENS))
+    return handler, context_over(list(messages), agent)
 
 
 @given(messages=histories())
 @PROPERTY_SETTINGS
 def test_expand_threshold_zero_delivers_the_received_context_by_identity(messages):
-    """Requirement 2.20: the regression switch, read through the plugin's own ``BeforeInvocationEvent`` half.
+    """Requirement 2.20: the regression switch, read through the plugin's own projection.
 
     The choice comes from the plugin rather than being handed in, so the property covers the configuration seam too: at
-    ``expand_threshold=0.0`` the read half answers a full pass off the size of the graph and the switch alone, paying no
-    embedding, and the delivery that reads that choice returns the context it was given.
+    ``expand_threshold=0.0`` the projection answers a full pass off the switch alone, paying no embedding, and returns
+    the context it was given.
     """
     matcher = UnusedMatcher()
     plugin = ContextGraph(expand_threshold=0.0, collapse_floor=0.0, matcher=matcher)
     agent = _Agent(messages)
     plugin._states[agent] = graph_over(messages)
 
-    plugin._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=messages))
-
-    assert plugin._states[agent].choice.full_pass
-    assert matcher.calls == 0
-
     context = context_over(list(messages), agent)
     before = snapshot(context)
     deep_messages = copy.deepcopy(context.messages)
 
     assert_identity_delivery(deliver(plugin._projection, context), context, before, deep_messages)
+    assert plugin._states[agent].choice.full_pass
+    assert matcher.calls == 0
 
 
 @given(messages=histories())

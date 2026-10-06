@@ -26,16 +26,17 @@ from types import MappingProxyType
 from typing import Any
 
 import pytest
+from _frozen_choice import apply_frozen_choice
 from context_core.graph.cards import rebuild_into
 from context_core.graph.projection import _card_config
 from context_core.graph.state import CardChoice, TurnChoice
 from strands import Agent
 from strands._middleware.stages import InvokeModelContext
 from strands.agent.conversation_manager import NullConversationManager, SlidingWindowConversationManager
-from strands.hooks.events import MessageAddedEvent
 from strands.models.model import Model
 
 from strands_context_graph import ContextGraph
+from strands_context_graph.plugin import _Delivery
 
 WINDOW_SIZE = 2
 """Small enough that the trim reaches the folded turn, which is the whole point of the fixture."""
@@ -118,10 +119,15 @@ class _quiet:
 
 
 def derive(graph: ContextGraph, agent: Agent, messages: list[dict[str, Any]]) -> None:
-    """Replay ``messages`` through the write half, building the graph the way a live conversation does."""
+    """Replay ``messages``, building the graph the way a live conversation does.
+
+    D-1: the write half runs inside the projection of every model call, and a model call follows each user message.
+    """
     for message in messages:
         agent.messages.append(message)
-        graph._on_message_added(MessageAddedEvent(agent=agent, message=message))  # type: ignore[arg-type]
+        if message["role"] == "user":
+            # What the delivery does to the state, synchronously, so async tests can build their graph too.
+            _, graph._states[agent] = graph._project_state(graph._states.get(agent), list(agent.messages))
 
 
 def fold_the_middle_turn(graph: ContextGraph, agent: Agent) -> None:
@@ -162,8 +168,13 @@ def context_over(agent: Agent) -> InvokeModelContext:
 
 
 async def delivered_text(graph: ContextGraph, agent: Agent) -> str:
-    """Every piece of text the delivery would send for one call, folded block included, as one string."""
-    context = await graph._projection.deliver(context_over(agent))
+    """Every piece of text the delivery would send for one call, folded block included, as one string.
+
+    The choice under test is the hand-built one this file freezes, so the call goes through a delivery that applies it
+    (``_frozen_choice``) instead of the plugin's own, which under D-1 would recompute the choice on this very call.
+    """
+    frozen = _Delivery(graph._states, project_state=apply_frozen_choice(graph._description_tokens))
+    context = await frozen.deliver(context_over(agent))
     return "\n".join(
         block["text"]
         for message in context.messages

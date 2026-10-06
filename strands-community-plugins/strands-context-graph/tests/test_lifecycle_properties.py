@@ -10,15 +10,16 @@ out the same object, holding the same dicts, carrying the same keys and values i
 
 One example drives, in order:
 
-- ``_on_message_added`` once per message, the incremental construction of the graph;
+- the messages one at a time, with a projection (``project`` inside the ``InvokeModelStage.Input`` delivery, D-1)
+  after every user message, which is where a model call follows -- the incremental construction of the graph;
 - ``_on_after_tool_call`` for every tool result an offloader replaced, which is where artifact Cards and the plugin's
   own store are written;
-- ``_on_before_invocation``, which scores the graph and freezes the turn's choice;
-- the ``InvokeModelStage.Input`` delivery, handed the live list itself — the strongest form of the claim, since a
-  removal that filtered in place would be visible in the history rather than only in the call;
+- the turn's delivery, which scores the graph and applies its choice, handed the live list itself — the strongest
+  form of the claim, since a removal that filtered in place would be visible in the history rather than only in the
+  call;
 - a retrieval tool, at least one per example and all three whenever the conversation offers something to ask for, since
   a tool that raised a Card's Resolution back up must still not write anything back;
-- the delivery a second time, the autonomous tool loop's next model call reading the same frozen choice.
+- the delivery a second time, the autonomous tool loop's next model call, which recomputes the choice.
 
 The matcher is a stub scoring by Description length, so roughly half the Cards collapse and the delivery does real work
 on most examples; ``min_cards=1`` keeps the warm-up short circuit out of the way and a small ``body_budget`` forces the
@@ -34,7 +35,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from strands._middleware.registry import MiddlewareRegistry
 from strands._middleware.stages import InvokeModelContext
-from strands.hooks.events import AfterToolCallEvent, BeforeInvocationEvent, MessageAddedEvent
+from strands.hooks.events import AfterToolCallEvent
 from strands.types.tools import ToolContext
 
 from strands_context_graph import ContextGraph
@@ -263,17 +264,17 @@ def deliver(graph: ContextGraph, context: InvokeModelContext) -> InvokeModelCont
 
 
 def run_lifecycle(graph: ContextGraph, agent: _Agent, incoming: list[dict[str, Any]]) -> None:
-    """Walk ``incoming`` into ``agent`` message by message, then run the read half, the delivery and the tools."""
+    """Walk ``incoming`` into ``agent`` message by message, projecting per call, then the delivery and the tools."""
     for message in incoming:
         agent.messages.append(message)
-        graph._on_message_added(MessageAddedEvent(agent=agent, message=message))  # type: ignore[arg-type]
+        if message["role"] == "user":
+            deliver(graph, context_over(graph, agent))
 
     fire_artifact_halves(graph, agent)
-    graph._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=agent.messages))  # type: ignore[arg-type]
 
     deliver(graph, context_over(graph, agent))
     call_retrieval_tools(graph, agent)
-    # The autonomous tool loop's next model call: the same frozen choice, a second delivery over the same history.
+    # The autonomous tool loop's next model call: a second projection over the same history.
     deliver(graph, context_over(graph, agent))
 
 
@@ -323,10 +324,9 @@ def test_the_lifecycle_over_a_restored_history_leaves_it_byte_identical(incoming
     identities = [id(message) for message in incoming]
     before = copy.deepcopy(incoming)
 
-    # A restore populates ``agent.messages`` directly; the next message added is what the fresh process sees first.
-    graph._on_message_added(MessageAddedEvent(agent=agent, message=incoming[-1]))  # type: ignore[arg-type]
+    # A restore populates ``agent.messages`` directly; the first model call's projection scans it.
+    deliver(graph, context_over(graph, agent))
     fire_artifact_halves(graph, agent)
-    graph._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=agent.messages))  # type: ignore[arg-type]
     deliver(graph, context_over(graph, agent))
     call_retrieval_tools(graph, agent)
     deliver(graph, context_over(graph, agent))
@@ -350,9 +350,9 @@ def test_a_collapsing_delivery_builds_its_own_list_rather_than_filtering_the_his
 
     for message in incoming:
         agent.messages.append(message)
-        graph._on_message_added(MessageAddedEvent(agent=agent, message=message))  # type: ignore[arg-type]
+        if message["role"] == "user":
+            deliver(graph, context_over(graph, agent))
     fire_artifact_halves(graph, agent)
-    graph._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=agent.messages))  # type: ignore[arg-type]
 
     delivered = deliver(graph, context_over(graph, agent))
 

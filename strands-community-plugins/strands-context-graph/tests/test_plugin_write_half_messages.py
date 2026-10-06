@@ -1,4 +1,8 @@
-"""Unit tests for the write half of the turn boundary: the ``MessageAddedEvent`` hook.
+"""Unit tests for the write half of the turn boundary, run by the projection on every model call (D-1).
+
+Under D-1 there is no ``MessageAddedEvent`` hook: ``project`` closes turns into Cards at the start of every model
+call. A model call follows every user message (an ask or a tool result) and never an assistant answer, so the
+replay below projects after each user message, which is exactly when a live agent would.
 
 The derivation itself belongs to ``cards`` and is asserted there. What is worth asserting here is the composition: that
 a boundary closes the turn before it and nothing else, that a mid-turn message closes nothing, that an absent state in
@@ -9,13 +13,14 @@ The agent is a plain class carrying only ``messages``, so it is weak-referenceab
 requires.
 """
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any
 
 from context_core.graph.cards import rebuild_into
 from context_core.graph.projection import _card_config
-from strands.hooks.events import MessageAddedEvent
+from strands._middleware.stages import InvokeModelContext
 
 from strands_context_graph import ContextGraph
 
@@ -56,15 +61,27 @@ def assistant(text: str, tracking_id: str | None = None) -> dict[str, Any]:
     return message
 
 
-def event(agent: _Agent, message: dict[str, Any]) -> MessageAddedEvent:
-    """One ``MessageAddedEvent`` for ``message``, with the two fields the hook reads."""
-    return MessageAddedEvent(agent=agent, message=message)  # type: ignore[arg-type]
+def project_call(plugin: ContextGraph, agent: _Agent) -> None:
+    """Run the projection of one model call over the agent's current history."""
+    context = InvokeModelContext(
+        agent=agent,
+        messages=list(agent.messages),
+        system_prompt=None,
+        tool_specs=[],
+        tool_choice=None,
+        invocation_state={},
+        model=object(),
+        projected_input_tokens=None,
+        dynamic_trailing_blocks=0,
+    )
+    asyncio.run(plugin._projection.deliver(context))
 
 
 def add(plugin: ContextGraph, agent: _Agent, message: dict[str, Any]) -> None:
-    """Append ``message`` to the live history the way the framework does, then fire the hook."""
+    """Append ``message`` the way the framework does; a user message is followed by a model call, so project."""
     agent.messages.append(message)
-    plugin._on_message_added(event(agent, message))
+    if message["role"] == "user":
+        project_call(plugin, agent)
 
 
 def conversation() -> list[dict[str, Any]]:
@@ -79,7 +96,7 @@ def conversation() -> list[dict[str, Any]]:
 
 
 def drive(plugin: ContextGraph, agent: _Agent, messages: list[dict[str, Any]]) -> None:
-    """Replay ``messages`` one at a time through the hook, the incremental construction."""
+    """Replay ``messages`` one at a time, projecting where a model call would happen: the incremental build."""
     for message in messages:
         add(plugin, agent, message)
 
@@ -145,12 +162,12 @@ def test_an_absent_state_is_rebuilt_by_scan_from_the_restored_history() -> None:
 
     # A restore populates ``agent.messages`` directly and fires no event the incremental step could have seen; the next
     # message added is what the fresh process sees first.
-    plugin._on_message_added(event(agent, restored[-1]))
+    project_call(plugin, agent)
 
     state = plugin._states[agent]
     assert sorted(card.turn for card in state.cards.values()) == [0, 1]
-    # The ordinal comes from the count of closed boundaries, so the two paths stay aligned from here on.
-    assert state.turn == 2
+    # The scan sets the ordinal to the count of closed boundaries (2), and the call that ran it advances it by one.
+    assert state.turn == 3
 
 
 def test_a_rebuild_by_scan_equals_the_incremental_graph() -> None:
@@ -159,13 +176,13 @@ def test_a_rebuild_by_scan_equals_the_incremental_graph() -> None:
     walked, restored = _Agent(), _Agent(conversation())
 
     drive(incremental, walked, conversation())
-    scanned._on_message_added(event(restored, restored.messages[-1]))
+    project_call(scanned, restored)
 
     left, right = incremental._states[walked], scanned._states[restored]
     assert left.cards == right.cards
     assert left.links == right.links
-    # ``turn`` is the read half's counter, advanced once per invocation, and this replay runs none of those; what the
-    # two routes have to agree on is the graph, and the ordinal carried by each Card is part of it.
+    # ``turn`` advances once per model call, and the two routes made different numbers of calls; what they have to
+    # agree on is the graph, and the ordinal carried by each Card is part of it.
 
 
 def test_the_rebuild_is_idempotent() -> None:
@@ -173,7 +190,7 @@ def test_the_rebuild_is_idempotent() -> None:
     plugin = graph()
     agent = _Agent(conversation())
 
-    plugin._on_message_added(event(agent, agent.messages[-1]))
+    project_call(plugin, agent)
     first = dict(plugin._states[agent].cards)
     rebuild_into(plugin._states[agent], agent.messages, **_card_config(plugin._thresholds()))
 
@@ -189,7 +206,8 @@ def test_an_empty_conversation_derives_nothing_and_does_not_raise() -> None:
 
     state = plugin._states[agent]
     assert state.cards == {}
-    assert state.turn == 0
+    # One model call ran, so the ordinal moved once; nothing was closed, so nothing was derived.
+    assert state.turn == 1
 
 
 def test_a_turn_without_durable_identities_yields_no_card() -> None:
@@ -210,7 +228,7 @@ def test_a_card_references_only_messages_present_in_the_history() -> None:
     del restored[1]
     agent = _Agent(list(restored))
 
-    plugin._on_message_added(event(agent, restored[-1]))
+    project_call(plugin, agent)
 
     present = {message["tracking_id"] for message in restored if message.get("tracking_id")}
     for card in plugin._states[agent].cards.values():
@@ -225,14 +243,15 @@ def test_the_scan_leaves_the_vector_cache_alone() -> None:
     state = plugin._state_for(agent)
     state.vectors["carried over"] = ("some description", (0.1, 0.2))
 
-    plugin._on_message_added(event(agent, agent.messages[-1]))
+    project_call(plugin, agent)
 
-    assert state.vectors["carried over"] == ("some description", (0.1, 0.2))
-    assert state.cards
+    after = plugin._states[agent]
+    assert after.vectors["carried over"] == ("some description", (0.1, 0.2))
+    assert after.cards
 
 
 def test_a_failed_card_derivation_registers_nothing_and_does_not_propagate(monkeypatch, caplog) -> None:
-    """Requirements 16.4, 16.5: the hook completes, that turn keeps no Card, the failure stays in the log."""
+    """Requirements 16.4, 16.5: the call completes, that turn keeps no Card, the failure stays in the log."""
     from context_core.graph import cards as cards_module
 
     plugin = graph()
@@ -271,7 +290,7 @@ def test_a_failed_rebuild_keeps_no_card_and_does_not_propagate(monkeypatch, capl
     agent = _Agent(conversation())
 
     with caplog.at_level(logging.WARNING, logger="context_core.graph.projection"):
-        plugin._on_message_added(event(agent, agent.messages[-1]))
+        project_call(plugin, agent)
 
     assert plugin._states[agent].cards == {}
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]

@@ -15,6 +15,7 @@ import logging
 from types import MappingProxyType
 
 import pytest
+from _frozen_choice import apply_frozen_choice
 from context_core.graph.projection import current_turn_ids
 from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
 from strands._middleware.registry import MiddlewareRegistry
@@ -133,7 +134,7 @@ def projection(state=None, messages=None, *, description_tokens=DESCRIPTION_TOKE
     states = {}
     if state is not None:
         states[agent] = state
-    return Projection(states, description_tokens=description_tokens, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")), context_over(messages, agent)
+    return Projection(states, project_state=apply_frozen_choice(description_tokens)), context_over(messages, agent)
 
 
 def warnings_of(caplog):
@@ -369,7 +370,7 @@ def test_register_puts_the_delivery_first_on_the_input_phase():
         return context
 
     agent._middleware_registry.add_middleware(InvokeModelStage.Input, other)
-    handler = Projection({}, description_tokens=DESCRIPTION_TOKENS, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context"))
+    handler = Projection({}, project_state=apply_frozen_choice(DESCRIPTION_TOKENS))
 
     handler.register(agent)
 

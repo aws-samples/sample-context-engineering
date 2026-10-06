@@ -19,6 +19,7 @@ import warnings
 import weakref
 
 import pytest
+from _frozen_choice import apply_frozen_choice
 from context_core.graph import store as store_module
 from strands._middleware.registry import MiddlewareRegistry
 from strands._middleware.stages import InvokeModelStage
@@ -239,7 +240,7 @@ def test_registration_survives_an_unreadable_handler_map():
     """The public ``add_middleware`` did the registering; only the move to index zero reads the private map."""
     agent = _WiringAgent(registry=_RenamedMapRegistry())
 
-    assert Projection(weakref.WeakKeyDictionary(), description_tokens=100, retrieval_tools=lambda: ("expand_card", "expand_artifact", "find_context")).register(agent) is False
+    assert Projection(weakref.WeakKeyDictionary(), project_state=apply_frozen_choice(100)).register(agent) is False
     assert agent._middleware_registry._middleware_handlers[InvokeModelStage]
 
 
@@ -264,7 +265,8 @@ def test_an_unreadable_handler_map_stays_silent_with_nothing_to_order_against():
         ContextGraph().init_agent(agent)
 
     assert caught == []
-    assert len(agent.hooks) == 3
+    # D-1 wiring: the projection runs in the InvokeModelStage handler, so AfterToolCallEvent is the one hook.
+    assert len(agent.hooks) == 1
 
 
 def test_a_memory_fold_behind_an_unmovable_delivery_is_not_claimed_as_ordered():

@@ -321,14 +321,6 @@ class SpyGraph(ContextGraph):
 
         self._projection.deliver = recording_deliver  # type: ignore[method-assign]
 
-    def _on_before_invocation(self, event: Any) -> None:
-        self.fired.append("before_invocation")
-        super()._on_before_invocation(event)
-
-    def _on_message_added(self, event: Any) -> None:
-        self.fired.append("message_added")
-        super()._on_message_added(event)
-
     def _on_after_tool_call(self, event: Any) -> None:
         self.fired.append("after_tool_call")
         super()._on_after_tool_call(event)
@@ -404,19 +396,22 @@ def collapse_run() -> tuple[SpyGraph, Agent, ScriptedModel, TableMatcher]:
 # ---- all four engagement points, on one conversation ---------------------------------------------
 
 
-def test_all_four_engagement_points_fire_on_one_conversation(collapse_run):
-    """Requirement 1.1, observed rather than inspected: each of the four ran while a real agent ran."""
+def test_both_engagement_points_fire_on_one_conversation(collapse_run):
+    """Requirement 1.1, observed rather than inspected: under D-1 the stage handler and the tool hook both ran."""
     graph, _agent, _model, _matcher = collapse_run
 
-    assert {"before_invocation", "message_added", "after_tool_call", "delivery"} == set(graph.fired)
+    assert {"after_tool_call", "delivery"} == set(graph.fired)
 
 
-def test_the_read_half_precedes_every_delivery_of_its_turn(collapse_run):
-    """The ordering the frozen choice depends on: a delivery never runs before the turn's choice exists."""
-    graph, _agent, _model, _matcher = collapse_run
-    ordered = [step for step in graph.fired if step in {"before_invocation", "delivery"}]
+def test_every_model_call_is_projected_exactly_once(collapse_run):
+    """D-1: the choice is computed inside the delivery, so each provider call is preceded by exactly one projection.
 
-    assert ordered[0] == "before_invocation"
+    Was "the read half precedes every delivery of its turn": with no separate read half, the ordering it guarded holds
+    by construction, and what is left to check is one projection per call -- none skipped, none doubled.
+    """
+    graph, _agent, model, _matcher = collapse_run
+
+    assert graph.fired.count("delivery") == len(model.calls)
 
 
 def test_the_write_halves_built_the_graph_the_choice_was_computed_from(collapse_run):
@@ -439,14 +434,16 @@ def test_the_live_history_still_holds_every_turn(collapse_run):
     assert all(ask in history for ask in ASKS)
 
 
-def test_the_matcher_is_consulted_once_for_the_turn_that_reaches_the_scoring_path(collapse_run):
-    """Requirement 11.3: one scoring round per turn, and none at all for a turn the graph's size settles."""
+def test_the_matcher_is_consulted_once_per_model_call_that_reaches_the_scoring_path(collapse_run):
+    """Requirement 11.3 under D-1: one scoring round per MODEL CALL, none for a call the graph's size settles.
+
+    Was one round per turn. Turns one and two are below ``min_cards`` on every call; turns three and four reach the
+    scoring path on both of their tool-loop calls, so the matcher is asked four times, each against that call's ask.
+    """
     _graph, _agent, _model, matcher = collapse_run
 
-    # Turns one to three are below ``min_cards`` at the instant their choice is computed, so only turn four scores.
-    assert matcher.calls == 1
-    assert matcher.questions == [RECALL_ASK]
-    assert any(MIGRATION_ASK in document for document in matcher.documents[0])
+    assert matcher.questions == [LEDGER_ASK, LEDGER_ASK, RECALL_ASK, RECALL_ASK]
+    assert all(any(MIGRATION_ASK in document for document in documents) for documents in matcher.documents)
 
 
 # ---- the collapsed block reaches the provider ----------------------------------------------------
@@ -504,9 +501,11 @@ def test_a_retrieval_tool_round_trips_within_the_turn(collapse_run):
 
     assert MIGRATION_ANSWER not in first_call.text
     assert MIGRATION_ANSWER in second_call.text
-    # Nothing left to collapse, so the delivery returns the received context and folds no block at all.
-    assert COLLAPSED_HEADER not in second_call.text
-    assert second_call.dynamic_trailing_blocks is None
+    # D-1: the second call recomputes the choice, so other turns may still collapse -- the ledger turn does here -- but
+    # the turn the tool asked for is no longer among them, and a block folded into the last message is still counted.
+    collapsed = second_call.text.split(COLLAPSED_HEADER, 1)[-1]
+    assert f"- {MIGRATION_ASK}" not in collapsed
+    assert second_call.dynamic_trailing_blocks == 1
 
 
 def test_the_tool_answered_rather_than_raised(collapse_run):

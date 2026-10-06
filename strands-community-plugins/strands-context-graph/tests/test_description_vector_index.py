@@ -13,10 +13,11 @@ three paths which must NOT fill it still do not.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 
 from context_core.graph.state import Card, _GraphState
-from strands.hooks.events import BeforeInvocationEvent
+from strands._middleware.stages import InvokeModelContext
 
 from strands_context_graph import ContextGraph
 
@@ -150,17 +151,33 @@ def three() -> tuple[Card, ...]:
     return (card("First", turn=0), card("Second", turn=1), card("Third", turn=2))
 
 
-def turn(plugin: ContextGraph, agent: _Agent, question: str = "what now?") -> None:
-    """Fire one read-half turn against the plugin.
+def turn(plugin: ContextGraph, agent: _Agent, question: str = "what now?") -> _GraphState:
+    """Run one model call's projection against the plugin and return the state it stored.
+
+    D-1: the choice -- and with it the vector index -- is computed by ``project`` inside the ``InvokeModelStage``
+    handler, which stores a NEW state per call, so callers re-bind ``state`` to what this returns.
 
     Args:
         plugin: The plugin under test.
-        agent: The agent the turn belongs to.
-        question: The turn's question.
+        agent: The agent the call belongs to.
+        question: The call's question.
+
+    Returns:
+        The agent's state after the call.
     """
-    plugin._on_before_invocation(
-        BeforeInvocationEvent(agent=agent, messages=[{"role": "user", "content": [{"text": question}]}])
+    context = InvokeModelContext(
+        agent=agent,
+        messages=[{"role": "user", "content": [{"text": question}]}],
+        system_prompt=None,
+        tool_specs=[],
+        tool_choice=None,
+        invocation_state={},
+        model=object(),
+        projected_input_tokens=None,
+        dynamic_trailing_blocks=0,
     )
+    asyncio.run(plugin._projection.deliver(context))
+    return plugin._states[agent]
 
 
 # --- the index is filled ---------------------------------------------------------------------------
@@ -173,7 +190,7 @@ def test_scoring_fills_the_index() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert set(state.vectors) == {"First", "Second", "Third"}
     assert matcher.vector_calls == 1
@@ -186,7 +203,7 @@ def test_the_index_stores_the_description_the_vector_was_computed_from() -> None
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert state.vectors["First"] == ("description of First", (1.0, 0.0, 0.0, 0.0))
 
@@ -199,7 +216,7 @@ def test_a_stale_title_does_not_survive_a_later_turn() -> None:
     state = wired(plugin, agent, *three())
     state.vectors["Gone"] = ("description of Gone", (0.0,) * DIMENSIONS)
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert "Gone" not in state.vectors
 
@@ -226,7 +243,7 @@ def test_the_similar_link_forms_once_the_index_is_filled() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     linked = {link.target for link in state.links.get("First", []) if link.kind == "similar"}
     assert linked == {"Second"}
@@ -254,12 +271,12 @@ def test_a_card_registered_after_the_choice_is_linked_on_the_next_one() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
     register_card(state, card("Fourth", turn=3), [], link_threshold=0.5, tags_per_card=4, rarity_weight=1.0)
 
     assert not [link for link in state.links.get("Fourth", []) if link.kind == "similar"]
 
-    turn(plugin, agent, "and now?")
+    state = turn(plugin, agent, "and now?")
 
     linked = {link.target for link in state.links["Fourth"] if link.kind == "similar"}
     assert linked == {"First", "Second", "Third"}
@@ -278,7 +295,7 @@ def test_a_pair_below_the_threshold_gets_no_edge() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert not [link for links in state.links.values() for link in links if link.kind == "similar"]
 
@@ -293,7 +310,7 @@ def test_the_warm_up_short_circuit_asks_for_no_vectors() -> None:
     agent = _Agent()
     state = wired(plugin, agent, card("Only", turn=0))
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert matcher.score_calls == 0
     assert matcher.vector_calls == 0
@@ -306,7 +323,7 @@ def test_a_matcher_without_vectors_leaves_the_index_alone() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert state.vectors == {}
     assert not state.choice.full_pass
@@ -319,7 +336,7 @@ def test_an_unavailable_embedding_leaves_the_index_alone() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert matcher.vector_calls == 1
     assert state.vectors == {}
@@ -347,7 +364,7 @@ def test_a_raising_vectors_method_does_not_cost_the_turn() -> None:
     agent = _Agent()
     state = wired(plugin, agent, *three())
 
-    turn(plugin, agent)
+    state = turn(plugin, agent)
 
     assert state.vectors == {}
     assert not state.choice.full_pass

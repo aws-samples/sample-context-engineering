@@ -34,7 +34,7 @@ import pytest
 from strands import Agent
 from strands._middleware.stages import InvokeModelContext
 from strands.agent.conversation_manager import NullConversationManager
-from strands.hooks.events import AfterToolCallEvent, BeforeInvocationEvent, MessageAddedEvent
+from strands.hooks.events import AfterToolCallEvent
 from strands.models.model import Model
 from strands.types.tools import ToolContext
 
@@ -289,15 +289,16 @@ def first_question(messages: list[dict[str, Any]]) -> str:
 
 
 def drive_lifecycle(graph: ContextGraph, agent: Agent, incoming: list[dict[str, Any]]) -> None:
-    """Run every engagement point the plugin owns, in the order a real turn runs them.
+    """Run every engagement point the plugin owns, in the order a real turn runs them (D-1 wiring).
 
-    Card derivation first, message by message; then the artifact half for each offloaded result; then the read half that
-    scores the graph and freezes the turn's choice; then the delivery, the three retrieval tools, and the delivery again
-    as the autonomous tool loop's next model call would.
+    The history arrives, with a model call (one projection: Card derivation, choice and delivery) after every user
+    message; then the artifact half for each offloaded result; then the projection of the turn's call, the three
+    retrieval tools, and the projection again as the autonomous tool loop's next model call would.
     """
     for message in incoming:
         agent.messages.append(message)
-        graph._on_message_added(MessageAddedEvent(agent=agent, message=message))
+        if message["role"] == "user":
+            asyncio.run(graph._projection.deliver(context_over(agent)))
 
     for tool_use_id, name, text in offloaded_results(agent.messages):
         graph._on_after_tool_call(
@@ -310,7 +311,6 @@ def drive_lifecycle(graph: ContextGraph, agent: Agent, incoming: list[dict[str, 
             )
         )
 
-    graph._on_before_invocation(BeforeInvocationEvent(agent=agent, messages=agent.messages))
     asyncio.run(graph._projection.deliver(context_over(agent)))
 
     state = graph._states[agent]
@@ -328,7 +328,7 @@ def drive_lifecycle(graph: ContextGraph, agent: Agent, incoming: list[dict[str, 
 
 @pytest.mark.parametrize("history", list(HISTORIES), ids=list(HISTORIES))
 def test_the_whole_graph_operation_runs_without_a_language_model_call(aws_trap, history):
-    """Requirement 2.19: four handlers, two deliveries and three tools later, no model and no client were reached."""
+    """Requirement 2.19: every projection, the artifact hook and three tools later, no model or client was reached."""
     matcher = _CountingMatcher()
     graph = ContextGraph(matcher=matcher, min_cards=1, body_budget=BODY_BUDGET)
     agent, model = build(graph)
@@ -355,13 +355,14 @@ def test_card_derivation_alone_runs_without_a_language_model_call(aws_trap, hist
     agent, model = build(incremental)
     for message in incoming:
         agent.messages.append(message)
-        incremental._on_message_added(MessageAddedEvent(agent=agent, message=message))
+        if message["role"] == "user":
+            asyncio.run(incremental._projection.deliver(context_over(agent)))
 
     # The other route: a process that inherited the conversation and derives the whole graph by one scan.
     restored = ContextGraph(matcher=_CountingMatcher(), min_cards=1)
     inheritor, inheritor_model = build(restored)
     inheritor.messages.extend(incoming)
-    restored._on_message_added(MessageAddedEvent(agent=inheritor, message=incoming[-1]))
+    asyncio.run(restored._projection.deliver(context_over(inheritor)))
 
     assert model.calls == []
     assert inheritor_model.calls == []
