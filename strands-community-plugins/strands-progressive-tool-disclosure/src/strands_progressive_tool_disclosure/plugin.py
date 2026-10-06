@@ -47,6 +47,7 @@ from context_core.disclosure import (
     clamp_summary,
     estimate_tokens,
     fold_closed_exchanges,
+    requires_parameters,
     truncate_description,
 )
 
@@ -229,34 +230,6 @@ def _append_to_system_prompt(system_prompt: SystemPrompt, block: str) -> SystemP
     if isinstance(system_prompt, str):
         return f"{system_prompt}\n\n{block}"
     return [*system_prompt, {"text": block}]
-
-
-def _requires_parameters(spec: ToolSpec) -> bool:
-    """Report whether ``spec`` declares at least one required parameter.
-
-    Only the ``required`` list decides. A tool whose parameters are all optional is callable with no
-    arguments, so an empty call to it is a legitimate call and not the symptom of a missing schema.
-
-    Args:
-        spec: Full specification as registered in the ``ToolRegistry``. Left unmodified — only read.
-
-    Returns:
-        ``True`` when the schema lists at least one required parameter; ``False`` when it lists none,
-        and for any schema shape this cannot read.
-    """
-    # Typed as object so the runtime guard against malformed data is not read as unreachable:
-    # ToolSpec declares inputSchema as a dict, but this reads specs that may arrive malformed.
-    input_schema: object = spec.get("inputSchema")
-    if not isinstance(input_schema, dict):
-        return False
-
-    # inputSchema arrives wrapped as {"json": {...}}; tolerate an unwrapped schema as well.
-    root = input_schema.get("json", input_schema)
-    if not isinstance(root, dict):
-        return False
-
-    required = root.get("required")
-    return isinstance(required, list) and len(required) > 0
 
 
 def _validate_positive_int(value: object, parameter: str) -> None:
@@ -1027,7 +1000,7 @@ class ProgressiveToolDisclosure(Plugin):
         # Arguments or not, the model could not have known the parameters, so either way the call is a
         # guess: invented arguments against a permissive tool are the worse outcome, a confidently wrong
         # answer nothing in the run marks as suspect.
-        if _requires_parameters(registry[name].tool_spec):
+        if requires_parameters(registry[name].tool_spec):
             event.cancel_tool = _PREMATURE_CALL_MESSAGE.format(name=name)
             _instrument(lambda: _record_premature_cancellation(state, name))
 

@@ -51,27 +51,19 @@ import warnings
 from collections.abc import Coroutine, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from numbers import Real
-from types import MappingProxyType
 from typing import Annotated, Any, TypeVar
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool, tool
 from typing_extensions import NotRequired
 
-from context_core.graph import CardChoice, GraphState, SimilarityMatcher, Thresholds, TurnChoice, project
+from context_core.graph import GraphState, SimilarityMatcher, Thresholds, TurnChoice, project
 from context_core.graph import store as core_store
+from context_core.graph import tools as core_tools
 from context_core.graph.cards import derive_and_register_artifacts
-from context_core.graph.describe import normalize
-from context_core.graph.scoring import record_reuse, titles_in_turn_order
 from context_core.graph.store import (
     InMemoryReferenceStore,
-    absent_message,
-    estimate_tokens,
-    non_textual_message,
-    read_artifact,
     record_references,
-    resolve_artifact,
-    unknown_message,
 )
 
 from ._adapter import to_langchain_list, to_neutral_list, tool_message_to_result_block
@@ -129,10 +121,6 @@ _DEFAULT_REUSE_TTL_CYCLES = 5
 _DEFAULT_MAX_RETRIEVAL_CYCLES = 8
 _DEFAULT_RARITY_WEIGHT = 0.70
 
-_MAX_CANDIDATES = 5
-"""Candidates ``find_context`` returns at most: a search that answers with the whole graph has re-injected
-the very thing the graph collapsed."""
-
 _PRUNING_MARKERS = ("summariz", "summaris", "prun", "trim", "compact")
 """Substrings of a middleware name that mark it as one that rewrites the persisted message list.
 
@@ -152,16 +140,6 @@ Developer-facing, so it goes out through ``warnings.warn`` rather than the logge
 middleware is being wired, not about something that went wrong while it ran. It degrades and never blocks
 -- the warned agent is wired exactly like an unwarned one -- and the other middleware is left alone: not
 removed, not reordered, not reconfigured."""
-
-_EXHAUSTED = (
-    "{tool} | this turn has already spent its {spent} retrieval calls | no further recovery is available on this turn: "
-    "answer from what the summary and the messages already give you, and state plainly which part you could not verify"
-)
-"""Refusal once a turn hits ``max_retrieval_cycles``.
-
-Worded as an instruction rather than an error because the failure mode it exists to stop is a model that
-keeps asking: every retrieval miss on these tools answers with text, so "not found" reads as "try
-differently"."""
 
 _EXPAND_ARTIFACT_DESCRIPTION = """\
 Read a stored artifact that an earlier turn of THIS conversation referred to by address.
@@ -917,54 +895,13 @@ class ContextGraphMiddleware(AgentMiddleware):
             Confirmation naming the turns that will arrive whole, an error naming the titles that matched
             nothing, or the refusal when the turn's retrieval budget is spent.
         """
-        refusal = self._exhausted("expand_card", state)
-        if refusal is not None:
-            return refusal
-
-        state.retrieval_cycles += 1
-
-        wanted = [titles] if isinstance(titles, str) else list(titles)
-        if not wanted:
-            return "expand_card | no title given | pass the titles you need, copied exactly as they were shown to you"
-
-        found: list[str] = []
-        missing: list[str] = []
-        for title in wanted:
-            card = state.cards.get(title)
-            if card is None or card.kind != "subject":
-                missing.append(title)
-            else:
-                found.append(title)
-
-        if found and not state.choice.full_pass:
-            state.choice = TurnChoice(
-                by_title=MappingProxyType(
-                    {
-                        **state.choice.by_title,
-                        **{title: CardChoice(dialogue="full", evidence="full") for title in found},
-                    }
-                ),
-                full_pass=False,
-                selected=state.choice.selected,
-            )
-
-        for title in found:
-            record_reuse(state, title, state.turn, reuse_ttl_cycles=self._reuse_ttl_cycles)
-
-        if not found:
-            return (
-                f"expand_card | no earlier turn of this conversation is titled {_quoted(missing)} | "
-                "copy a title exactly as it was shown to you, or use find_context to describe what you need"
-            )
-
-        confirmation = (
-            f"expand_card | {_quoted(found)} arrives in full for the rest of this turn, its messages and its tool "
-            "results together"
+        return core_tools.expand_card(
+            state,
+            titles,
+            cycle=state.turn,
+            reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
         )
-        if missing:
-            confirmation += f" | no turn is titled {_quoted(missing)}, so nothing was raised for it"
-
-        return confirmation
 
     async def expand_artifact(
         self,
@@ -998,42 +935,21 @@ class ContextGraphMiddleware(AgentMiddleware):
             unknown reference, non-textual content, or a line range outside the content -- with nothing
             recorded and no Resolution changed.
         """
-        refusal = self._exhausted("expand_artifact", state)
-        if refusal is not None:
-            return refusal
-
-        state.retrieval_cycles += 1
-
         # ``agent=None``: the core's own second-layer discovery is the Strands ``ContextManager`` Stash, which
         # LangGraph has no equivalent of. The second layer is therefore the explicit ``stash`` -- typically the
         # relevance filter's store -- and with none a reference the own store does not hold is ``"absent"``.
-        resolved = await resolve_artifact(store, None, reference, stash=self._stash)
-        if resolved.outcome == "absent":
-            return absent_message(reference)
-        if resolved.outcome == "unknown":
-            return unknown_message(reference)
-        if resolved.outcome != "text" or resolved.text is None:
-            return non_textual_message(reference)
-
-        if line_range is None and pattern is None:
-            answer = _whole_artifact(reference, resolved.text)
-        else:
-            span = _span_of(line_range)
-            if line_range is not None and span is None:
-                return (
-                    f"expand_artifact | line_range=<{line_range!r}> is not a pair of integers | pass "
-                    '{"start": <int>, "end": <int>}, 1-indexed and inclusive'
-                )
-            try:
-                answer = read_artifact(resolved.text, line_range=span, pattern=pattern)
-            except ValueError as error:
-                return f"expand_artifact | reference '{reference}' | {error}"
-
-        title = _artifact_title(state, reference)
-        if title is not None:
-            record_reuse(state, title, state.turn, reuse_ttl_cycles=self._reuse_ttl_cycles)
-
-        return answer
+        return await core_tools.expand_artifact(
+            state,
+            store,
+            None,
+            reference,
+            line_range,
+            pattern,
+            cycle=state.turn,
+            reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
+            stash=self._stash,
+        )
 
     def find_context(self, state: GraphState, need: str, tag: str | None = None) -> str:
         """Score every candidate Card's Description against ``need`` and answer with the best five.
@@ -1053,70 +969,17 @@ class ContextGraphMiddleware(AgentMiddleware):
             At most five candidates with their title, tags and description, or an empty result naming the
             ``need`` received, in which case no fed-back note was recorded and no Resolution changed.
         """
-        refusal = self._exhausted("find_context", state)
-        if refusal is not None:
-            return refusal
-
-        state.retrieval_cycles += 1
-
-        if not need.strip():
-            # An empty need scores every Description against nothing: a ranking of noise, not an answer.
-            return _nothing_found(need, tag)
-
-        titles = titles_in_turn_order(state)
-        if tag is not None:
-            wanted = normalize(tag)
-            titles = tuple(title for title in titles if wanted and wanted in state.cards[title].tags)
-
-        similarities = self._similarities(state, titles, need)
-        if similarities is None:
-            return _nothing_found(need, tag)
-
-        passing = [title for title in titles if similarities[title] >= self._collapse_floor]
-        passing.sort(key=lambda title: (-similarities[title], state.cards[title].turn, title))
-        chosen = passing[:_MAX_CANDIDATES]
-
-        if not chosen:
-            return _nothing_found(need, tag)
-
-        for title in chosen:
-            record_reuse(state, title, state.turn, reuse_ttl_cycles=self._reuse_ttl_cycles)
-
-        return _render_candidates(state, need, chosen, self._neighbors_per_candidate)
-
-    def _exhausted(self, name: str, state: GraphState) -> str | None:
-        """Return the refusal when this turn has no retrieval budget left, or ``None`` while it has.
-
-        Checked *before* the call's own counter increment, so a ceiling of ``n`` admits exactly ``n`` calls.
-        """
-        if self._max_retrieval_cycles is None or state.retrieval_cycles < self._max_retrieval_cycles:
-            return None
-        return _EXHAUSTED.format(tool=name, spent=state.retrieval_cycles)
-
-    def _similarities(self, state: GraphState, titles: tuple[str, ...], need: str) -> dict[str, float] | None:
-        """One similarity per candidate, or ``None`` when the matcher was unusable.
-
-        The matcher is contractually non-raising, so anything it does raise reads here as "no candidate",
-        never as an exception the model has to interpret.
-        """
-        if not titles:
-            return None
-
-        descriptions = tuple(state.cards[title].description for title in titles)
-        try:
-            scores = self._matcher_for().score(need, descriptions)
-            if len(scores) != len(descriptions):
-                # Covers the empty answer too: with at least one candidate, empty is a length mismatch.
-                raise ValueError(f"similarity count=<{len(scores)}> | expected=<{len(descriptions)}>")
-            return {title: float(scores[index]) for index, title in enumerate(titles)}
-        except Exception:
-            logger.debug("find_context similarity unavailable for %d candidate(s)", len(descriptions), exc_info=True)
-            return None
-
-
-def _quoted(titles: Sequence[str]) -> str:
-    """Render titles for a message, quoted and comma separated."""
-    return ", ".join(f"'{title}'" for title in titles)
+        return core_tools.find_context(
+            state,
+            need,
+            tag,
+            matcher=self._matcher_for(),
+            collapse_floor=self._collapse_floor,
+            cycle=state.turn,
+            reuse_ttl_cycles=self._reuse_ttl_cycles,
+            max_retrieval_cycles=self._max_retrieval_cycles,
+            neighbors_per_candidate=self._neighbors_per_candidate,
+        )
 
 
 # ---- the artifact path: what a tool return is stored as, and how it is read back -------------------
@@ -1189,108 +1052,3 @@ def _driven(coroutine: Coroutine[Any, Any, _T]) -> _T:
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coroutine).result()
-
-
-def _whole_artifact(reference: str, text: str) -> str:
-    """The whole artifact, verbatim, with the cost of having asked for it whole stated in the answer.
-
-    The notice is part of the contract: without it the cheapest request to write is also the most expensive
-    to serve, and the model has no way to know. The text itself is untouched -- no truncation, no
-    reformatting -- so the answer contains it character for character.
-    """
-    notice = (
-        f"expand_artifact | whole artifact '{reference}' | this call re-injects the artifact's entire "
-        f"token count, about {estimate_tokens(text)} tokens, and it stays in the conversation for the rest of the "
-        "turn | next time pass line_range or pattern to read only the part you need"
-    )
-    return f"{notice}\n\n{text}"
-
-
-def _span_of(line_range: dict[str, int] | None) -> tuple[int, int] | None:
-    """The line range as the pair ``read_artifact`` reads, or ``None`` when it is unusable.
-
-    The caller tells an absent range from a malformed one, since it already knows whether one was supplied.
-    """
-    if line_range is None:
-        return None
-    try:
-        return (int(line_range["start"]), int(line_range["end"]))
-    except (KeyError, TypeError, ValueError, IndexError):
-        return None
-
-
-def _artifact_title(state: GraphState, reference: str) -> str | None:
-    """Title of the artifact Card addressing ``reference``, or ``None`` when the graph holds none.
-
-    A reference the graph never carded is still a reference the store can read -- the return may have named
-    none, the store holding it under the key minted from the call -- so the read succeeds with no Card for
-    the note to land on.
-    """
-    for title in titles_in_turn_order(state):
-        card = state.cards[title]
-        if card.kind == "artifact" and card.reference == reference:
-            return title
-    return None
-
-
-def _nothing_found(need: str, tag: str | None) -> str:
-    """The empty result, naming the ``need`` received and the tag it was narrowed by.
-
-    Naming both lets the model tell "nothing in this conversation is about that" from "nothing carrying that
-    tag is about that", and only the second has an obvious next move.
-    """
-    narrowed = f", among the turns tagged '{tag}'" if tag is not None else ""
-    return (
-        f"find_context | nothing in this conversation matches '{need}'{narrowed} | "
-        "the titles already in front of you are the whole conversation, so what you need was "
-        "either never discussed or is in a turn you can name directly with expand_card"
-    )
-
-
-def _similar_neighbors(state: GraphState, title: str, exclude: frozenset[str], limit: int) -> list[tuple[str, float]]:
-    """The ``similar`` neighbours of ``title``, strongest first, excluding anything in ``exclude``.
-
-    The only reader of the ``similar`` edge: it is measured on the write path and stored with its similarity
-    as the weight, propagates no note by design, and without this traversal is paid for and read by nothing.
-
-    Ordered by weight and then by title, never by turn: a neighbour is offered because it is *related* to a
-    candidate, and recency is already what the candidate ordering carries.
-    """
-    if limit <= 0:
-        return []
-
-    neighbors = [
-        (link.target, link.weight)
-        for link in state.links.get(title, ())
-        if link.kind == "similar" and link.target not in exclude and link.target in state.cards
-    ]
-    neighbors.sort(key=lambda pair: (-pair[1], pair[0]))
-    return neighbors[:limit]
-
-
-def _render_candidates(state: GraphState, need: str, chosen: list[str], neighbors_per_candidate: int) -> str:
-    """Render the chosen candidates: title, tags and description each.
-
-    The Description goes in full rather than trimmed, being already bounded by ``description_tokens`` at
-    derivation. Neighbours are not extra candidates and are not scored against the need: they are the
-    graph's own statement that two turns discuss related things, which the ranking cannot see, since it
-    compares each Description to the QUESTION and never to another Description.
-    """
-    lines = [f"find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
-    # Every chosen title is excluded from every neighbourhood: a candidate is already being rendered in
-    # full, so offering it again as somebody's neighbour would spend tokens to say nothing.
-    already = frozenset(chosen)
-    for title in chosen:
-        card = state.cards[title]
-        lines.append(f"- title: {title}")
-        if card.tags:
-            lines.append(f"  tags: {', '.join(card.tags)}")
-        for fragment in card.description.splitlines():
-            if fragment.strip():
-                lines.append(f"  {fragment}")
-        neighbors = _similar_neighbors(state, title, already, neighbors_per_candidate)
-        if neighbors:
-            rendered = ", ".join(f"{neighbor} ({weight:.2f})" for neighbor, weight in neighbors)
-            lines.append(f"  related turns: {rendered}")
-    lines.append("call expand_card with one of these titles to bring that turn back in full")
-    return "\n".join(lines)

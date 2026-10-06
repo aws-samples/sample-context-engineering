@@ -203,6 +203,7 @@ async def expand_artifact(
     cycle: int,
     reuse_ttl_cycles: int,
     max_retrieval_cycles: int | None = None,
+    stash: object | None = None,
 ) -> str:
     """Read the artifact behind ``reference``, whole or in part, through the store resolution order.
 
@@ -224,6 +225,9 @@ async def expand_artifact(
         pattern: Regex or keyword to keep only matching lines, or ``None``.
         cycle: Current cycle counter, supplied by the host.
         reuse_ttl_cycles: Cycles the fed-back Note survives.
+        max_retrieval_cycles: Retrieval calls this turn may spend, or ``None`` for unbounded.
+        stash: Explicit second layer, consulted for what ``store`` does not hold, for a host with no ``ContextManager``
+            Stash to discover from ``agent``. ``None`` leaves the discovery to :func:`~.store.resolve_artifact`.
 
     Returns:
         The requested part of the artifact, or an error naming what was missing — no storage at all, an unknown
@@ -236,7 +240,7 @@ async def expand_artifact(
 
     state.retrieval_cycles += 1
 
-    resolved = await resolve_artifact(store, agent, reference)
+    resolved = await resolve_artifact(store, agent, reference, stash=stash)
     if resolved.outcome == "absent":
         return absent_message(reference)
     if resolved.outcome == "unknown":

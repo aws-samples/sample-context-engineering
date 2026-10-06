@@ -13,14 +13,14 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from context_core.message import NeutralMessage, latest_user_text
 from context_core.relevance import BedrockReranker as _CoreBedrockReranker
-from context_core.relevance import InMemoryStore, PreviewStats, RelevancePreview, Reranker, RerankerError, Store
+from context_core.relevance import InMemoryStore, RelevancePreview, Reranker, RerankerError, Store
 from context_core.relevance import S3Store as _CoreS3Store
-from context_core.relevance.preview import _assemble_preview, _chunk_text
+from context_core.relevance.preview import excerpt_disclaimer, read_chunks
 from context_core.relevance.search import _is_searchable_content, _search_content
 
 from ._adapter import messages_from_neutral, messages_to_neutral
@@ -112,44 +112,6 @@ _CHARS_PER_TOKEN = 4
 _MAX_QUERY_CHARS = 2_000
 """Cap on the scoring query. Rerankers charge per query length, and a query longer than this adds
 context without sharpening the ranking."""
-
-
-def _disclaimer(token_count: int, stats: PreviewStats, references: Sequence[str], retrieval_tool: str) -> str:
-    """Tell the model that it sees an excerpt, how much of the result it covers, and what to do about it.
-
-    A relevance excerpt answers "where does the result mention X" and cannot answer anything that needs
-    every row: a maximum, a total, a count. Without being told, a model computes the aggregate over the
-    excerpt and is confidently wrong, or distrusts the sample and refuses. So the processing metadata
-    travels with the excerpt, and with the retrieval tool registered the text names the call and the
-    budgets that reach the rest -- a pattern for the rows to aggregate, or chunks and tokens enough for
-    all of it.
-
-    Args:
-        token_count: Estimated tokens of the original result.
-        stats: What the selection did.
-        references: References issued for the stored content; empty when the retrieval tool is off.
-        retrieval_tool: Registered name of the retrieval tool.
-
-    Returns:
-        The disclaimer, a few lines of plain text.
-    """
-    spans = ", ".join(f"{start}-{end}" if start != end else f"{start}" for start, end in stats.shown_spans)
-    head = (
-        f"[Filtered: this is an EXCERPT, not the whole result | original: {stats.total_lines:,} lines, "
-        f"{stats.total_chunks} chunks | shown: {len(stats.shown)} chunk(s), lines {spans or 'none'}]\n"
-        "An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any "
-        "comparison across the whole result -- cannot be computed from this excerpt."
-    )
-    if not references:
-        return f"{head} Say that the result was filtered instead of computing it from the excerpt."
-
-    named = f'reference "{references[0]}"' if len(references) == 1 else f"references {', '.join(references)}"
-    return (
-        f"{head} For such an answer, call `{retrieval_tool}` with {named} and either a `pattern` (regex) "
-        f"that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole "
-        f"result ({stats.total_chunks} chunks, ~{token_count:,} tokens). What you retrieve is removed from "
-        "the conversation once you have answered, so state the figures you relied on in the answer."
-    )
 
 
 def _drop_tool_exchanges(messages: list[NeutralMessage], tool_name: str) -> list[NeutralMessage]:
@@ -523,7 +485,13 @@ class RelevanceFilter(Plugin):
 
         if line_range is None and pattern is None:
             if max_chunks is not None:
-                return self._read_chunks(reference, text, max_chunks, max_chars)
+                return read_chunks(
+                    text,
+                    chunk_tokens=self._config.get("chunk_tokens", _DEFAULT_CHUNK_TOKENS),
+                    ranking=self._rankings.get(reference),
+                    max_chunks=max_chunks,
+                    max_chars=max_chars,
+                )
             if context_lines is None:
                 # max_tokens alone: the whole content, cut to that budget.
                 return _search_content(text, line_range=(1, max(1, text.count("\n") + 1)), max_chars=max_chars)
@@ -539,41 +507,6 @@ class RelevanceFilter(Plugin):
             span = (1, max(1, ctx_lines))
 
         return _search_content(text, pattern=pattern, line_range=span, context_lines=ctx_lines, max_chars=max_chars)
-
-    def _read_chunks(self, reference: str, text: str, max_chunks: int, max_chars: int) -> str:
-        """Render the ``max_chunks`` most relevant chunks of ``text`` in document order.
-
-        The ranking is the one the filter computed when it built the excerpt, so no second scoring call
-        is made. A reference with no recorded ranking -- several sub-blocks scored together, or a store
-        that outlived this process -- is read in document order instead.
-
-        Args:
-            reference: The reference the text came from, the key of its ranking.
-            text: The stored text.
-            max_chunks: How many chunks to render.
-            max_chars: Size limit of the rendering, gap markers included.
-
-        Returns:
-            A header naming what was returned, then the chunks with a marker for every omitted span.
-        """
-        chunks = _chunk_text(text, self._config.get("chunk_tokens", _DEFAULT_CHUNK_TOKENS))
-        if not chunks:
-            return "Content is empty (0 lines)."
-
-        ranking = self._rankings.get(reference)
-        if ranking is None or len(ranking) != len(chunks):
-            ranking = tuple(range(len(chunks)))
-            order = "document order"
-        else:
-            order = "most relevant first"
-
-        chosen = sorted((chunks[i] for i in ranking[:max_chunks]), key=lambda chunk: chunk.index)
-        body = _assemble_preview(chunks, chosen, max_chars)
-        header = (
-            f"[{len(chosen)} of {len(chunks)} chunks ({order}), lines 1-{chunks[-1].end_line} in total, "
-            f"limit ~{max_chars // _CHARS_PER_TOKEN:,} tokens]"
-        )
-        return f"{header}\n{body}"
 
     @staticmethod
     def _decode_full_content(content_bytes: bytes, content_type: str, reference: str) -> dict | str:
@@ -771,7 +704,7 @@ class RelevanceFilter(Plugin):
         if len(references) == 1 and len(scorable) == 1:
             self._rankings[references[0]] = stats.ranking
 
-        disclaimer = _disclaimer(token_count, stats, references, self.retrieve_all_context.tool_name)
+        disclaimer = excerpt_disclaimer(token_count, stats, references, self.retrieve_all_context.tool_name)
         marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n{disclaimer}\n\n{preview}"
         if references:
             token = f"[ref: {references[0]}]" if len(references) == 1 else f"[refs: {', '.join(references)}]"

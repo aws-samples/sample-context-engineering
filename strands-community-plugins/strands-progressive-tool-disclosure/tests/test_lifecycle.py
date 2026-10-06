@@ -36,6 +36,7 @@ from collections.abc import Coroutine
 from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
+from context_core.disclosure import requires_parameters
 from context_core.disclosure.catalog import PLUGIN_TOOL_NAMES as _PLUGIN_TOOL_NAMES
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -53,7 +54,6 @@ from strands_progressive_tool_disclosure.plugin import (
     GET_TOOL_DETAILS_NAME,
     _DisclosureState,
     _expire,
-    _requires_parameters,
 )
 
 PROPERTY_SETTINGS = settings(
@@ -558,7 +558,7 @@ def test_a_premature_call_is_cancelled_exactly_under_the_conjunction(
         and not was_exposed
         and name not in always_available
         and name not in _PLUGIN_TOOL_NAMES
-        and _requires_parameters(registry[name].tool_spec if is_registered else {})
+        and requires_parameters(registry[name].tool_spec if is_registered else {})
     )
     assert bool(event.cancel_tool) is exp_cancelled
     if exp_cancelled:

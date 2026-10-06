@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .reranker import Reranker, RerankerError
 
 # ``RerankerError`` is re-exported here because it is the failure type of this module's score
 # validation: a caller catching a scoring failure imports it from either module.
-__all__ = ["Chunk", "PreviewStats", "RelevancePreview", "RerankerError"]
+__all__ = ["Chunk", "PreviewStats", "RelevancePreview", "RerankerError", "excerpt_disclaimer", "read_chunks"]
 
 _CHARS_PER_TOKEN = 4
 """Approximate characters per token, the conversion used for every budget in this module."""
@@ -541,3 +542,78 @@ class RelevancePreview:
         ranking = tuple(sorted(range(len(chunks)), key=lambda i: (-scores[i], i)))
         stats = PreviewStats(total_chunks=len(chunks), total_lines=total_lines, shown=tuple(selected), ranking=ranking)
         return _assemble_preview(chunks, selected, budget_chars), stats
+
+
+def excerpt_disclaimer(token_count: int, stats: PreviewStats, references: Sequence[str], retrieval_tool: str) -> str:
+    """Tell the model that it sees an excerpt, how much of the result it covers, and what to do about it.
+
+    A relevance excerpt answers "where does the result mention X" and cannot answer anything that needs every row: a
+    maximum, a total, a count. Without being told, a model computes the aggregate over the excerpt and is confidently
+    wrong, or distrusts the sample and refuses. So the processing metadata travels with the excerpt, and with the
+    retrieval tool registered the text names the call and the budgets that reach the rest -- a pattern for the rows to
+    aggregate, or chunks and tokens enough for all of it.
+
+    Args:
+        token_count: Estimated tokens of the original result.
+        stats: What the selection did.
+        references: References issued for the stored content; empty when the retrieval tool is off.
+        retrieval_tool: Registered name of the retrieval tool.
+
+    Returns:
+        The disclaimer, a few lines of plain text.
+    """
+    spans = ", ".join(f"{start}-{end}" if start != end else f"{start}" for start, end in stats.shown_spans)
+    head = (
+        f"[Filtered: this is an EXCERPT, not the whole result | original: {stats.total_lines:,} lines, "
+        f"{stats.total_chunks} chunks | shown: {len(stats.shown)} chunk(s), lines {spans or 'none'}]\n"
+        "An answer that needs every row -- a maximum, minimum, total, count, average, ranking or any "
+        "comparison across the whole result -- cannot be computed from this excerpt."
+    )
+    if not references:
+        return f"{head} Say that the result was filtered instead of computing it from the excerpt."
+
+    named = f'reference "{references[0]}"' if len(references) == 1 else f"references {', '.join(references)}"
+    return (
+        f"{head} For such an answer, call `{retrieval_tool}` with {named} and either a `pattern` (regex) "
+        f"that matches only the rows you need, or `max_chunks`/`max_tokens` large enough for the whole "
+        f"result ({stats.total_chunks} chunks, ~{token_count:,} tokens). What you retrieve is removed from "
+        "the conversation once you have answered, so state the figures you relied on in the answer."
+    )
+
+
+def read_chunks(
+    text: str, *, chunk_tokens: int, ranking: Sequence[int] | None, max_chunks: int, max_chars: int
+) -> str:
+    """Render the ``max_chunks`` most relevant chunks of ``text`` in document order.
+
+    The ranking is the one the filter computed when it built the excerpt, so no second scoring call is made. A text with
+    no recorded ranking -- several sub-blocks scored together, or a store that outlived the process -- or with a ranking
+    of a different length is read in document order instead.
+
+    Args:
+        text: The stored text.
+        chunk_tokens: Chunk size the excerpt was scored with, so the indices of ``ranking`` name the same chunks.
+        ranking: Chunk indices best first, as :attr:`PreviewStats.ranking` recorded them, or ``None``.
+        max_chunks: How many chunks to render.
+        max_chars: Size limit of the rendering, gap markers included.
+
+    Returns:
+        A header naming what was returned, then the chunks with a marker for every omitted span.
+    """
+    chunks = _chunk_text(text, chunk_tokens)
+    if not chunks:
+        return "Content is empty (0 lines)."
+
+    if ranking is None or len(ranking) != len(chunks):
+        ranking = tuple(range(len(chunks)))
+        order = "document order"
+    else:
+        order = "most relevant first"
+
+    chosen = sorted((chunks[i] for i in ranking[:max_chunks]), key=lambda chunk: chunk.index)
+    body = _assemble_preview(chunks, chosen, max_chars)
+    header = (
+        f"[{len(chosen)} of {len(chunks)} chunks ({order}), lines 1-{chunks[-1].end_line} in total, "
+        f"limit ~{max_chars // _CHARS_PER_TOKEN:,} tokens]"
+    )
+    return f"{header}\n{body}"

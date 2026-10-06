@@ -43,7 +43,7 @@ from context_core.relevance import (
     RerankerError,
     Store,
 )
-from context_core.relevance.preview import _assemble_preview, _chunk_text
+from context_core.relevance.preview import read_chunks
 from context_core.relevance.search import _is_searchable_content, _search_content
 
 from ._adapter import hermes_to_neutral_list
@@ -299,7 +299,14 @@ class RelevanceFilterEngine(BaseEngine):
 
         if line_range is None and pattern is None:
             if max_chunks is not None:
-                return json.dumps({"content": self._read_chunks(reference, text, max_chunks, max_chars)})
+                chunks = read_chunks(
+                    text,
+                    chunk_tokens=self._config.get("chunk_tokens", _DEFAULT_CHUNK_TOKENS),
+                    ranking=self._rankings.get(reference),
+                    max_chunks=max_chunks,
+                    max_chars=max_chars,
+                )
+                return json.dumps({"content": chunks})
             if context_lines is None:
                 whole = _search_content(text, line_range=(1, max(1, text.count("\n") + 1)), max_chars=max_chars)
                 return json.dumps({"content": whole})
@@ -312,24 +319,6 @@ class RelevanceFilterEngine(BaseEngine):
             span = (1, max(1, ctx_lines))
         rendered = _search_content(text, pattern=pattern, line_range=span, context_lines=ctx_lines, max_chars=max_chars)
         return json.dumps({"content": rendered})
-
-    def _read_chunks(self, reference: str, text: str, max_chunks: int, max_chars: int) -> str:
-        chunks = _chunk_text(text, self._config.get("chunk_tokens", _DEFAULT_CHUNK_TOKENS))
-        if not chunks:
-            return "Content is empty (0 lines)."
-        ranking = self._rankings.get(reference)
-        if ranking is None or len(ranking) != len(chunks):
-            ranking = tuple(range(len(chunks)))
-            order = "document order"
-        else:
-            order = "most relevant first"
-        chosen = sorted((chunks[i] for i in ranking[:max_chunks]), key=lambda c: c.index)
-        body = _assemble_preview(chunks, chosen, max_chars)
-        header = (
-            f"[{len(chosen)} of {len(chunks)} chunks ({order}), lines 1-{chunks[-1].end_line} in total, "
-            f"limit ~{max_chars // _CHARS_PER_TOKEN:,} tokens]"
-        )
-        return f"{header}\n{body}"
 
     def on_session_reset(self) -> None:
         super().on_session_reset()
