@@ -1,7 +1,7 @@
 # Sequence B — Progressive Tool Disclosure
 
 All `file.py:LINE` references are into
-`community-plugins/strands-progressive-tool-disclosure/src/strands_progressive_tool_disclosure/`
+`strands-community-plugins/strands-progressive-tool-disclosure/src/strands_progressive_tool_disclosure/`
 (`plugin.py`, `index.py`, `_compat.py`) unless the prose names another package. Harness references are
 into `validation/community-plugin-A-B-D/src/` (`runner.py`, `config.py`); the ordering section
 additionally cites the context-graph package (`projection.py`) and the installed Strands SDK, whose
@@ -474,7 +474,7 @@ the catalog is no longer optional, this guarantee is load-bearing on every proje
 one mode. It is **structural**, and it rests on three facts, each verified by reading source:
 
 1. **The graph forces itself to index 0.** In
-   `community-plugins/strands-context-graph/src/strands_context_graph/projection.py`, `register`
+   `strands-community-plugins/strands-context-graph/src/strands_context_graph/projection.py`, `register`
    (`projection.py:150`) adds its handler (`projection.py:172`) and then immediately moves it to the
    front (`projection.py:175`):
 

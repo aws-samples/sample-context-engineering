@@ -53,9 +53,9 @@ cell, and the agent picks its own tool path — four byte-identical arms moved b
 
 | | Practice | Package | What it does |
 |---|---|---|---|
-| **A** | Relevance filtering | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | Scores a tool result's chunks against the question, replacing the payload with a preview **before it enters the history** |
-| **B** | Progressive tool disclosure | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | Lean tool catalog, full spec on demand, then forgotten — attacks the ~63k schema floor |
-| **D** | Context graph | [`strands-context-graph`](community-plugins/strands-context-graph/) | History as a graph with remove/recover, folding each turn to full content, Description or Title |
+| **A** | Relevance filtering | [`strands-relevance-filter`](strands-community-plugins/strands-relevance-filter/) | Scores a tool result's chunks against the question, replacing the payload with a preview **before it enters the history** |
+| **B** | Progressive tool disclosure | [`strands-progressive-tool-disclosure`](strands-community-plugins/strands-progressive-tool-disclosure/) | Lean tool catalog, full spec on demand, then forgotten — attacks the ~63k schema floor |
+| **D** | Context graph | [`strands-context-graph`](strands-community-plugins/strands-context-graph/) | History as a graph with remove/recover, folding each turn to full content, Description or Title |
 
 They compose because they act at different moments: **the filter on a tool result before it enters the
 history, the graph on a history that already exists.**

@@ -36,6 +36,6 @@ message type to this shape at the boundary and calls into the core. The contract
 ## Provenance
 
 The logic here is **recreated from the Strands community plugins**
-([`community-plugins/strands-*`](https://github.com/aws-samples/sample-context-engineering/tree/main/community-plugins))
+([`strands-community-plugins/strands-*`](https://github.com/aws-samples/sample-context-engineering/tree/main/strands-community-plugins))
 used as **read-only reference**. This package never modifies those packages; it is an independent
 implementation that the LangGraph bindings depend on.

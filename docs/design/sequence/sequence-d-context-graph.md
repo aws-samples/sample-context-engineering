@@ -1,6 +1,6 @@
 # Sequence Design — Practice D: `strands-context-graph`
 
-Authority: `community-plugins/strands-context-graph/src/strands_context_graph/`. Every claim below carries a `file.py:LINE`. Literal strings are quoted from source. Where a thing does not exist, it is stated as not existing rather than invented.
+Authority: `strands-community-plugins/strands-context-graph/src/strands_context_graph/`. Every claim below carries a `file.py:LINE`. Literal strings are quoted from source. Where a thing does not exist, it is stated as not existing rather than invented.
 
 ---
 

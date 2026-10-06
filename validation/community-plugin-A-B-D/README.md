@@ -102,9 +102,9 @@ and warns when a run will not be verifiable afterwards.
 measures the code a reader can read, plus the public SDK:
 
 ```
--e ../../community-plugins/strands-context-graph
--e ../../community-plugins/strands-progressive-tool-disclosure
--e ../../community-plugins/strands-relevance-filter
+-e ../../strands-community-plugins/strands-context-graph
+-e ../../strands-community-plugins/strands-progressive-tool-disclosure
+-e ../../strands-community-plugins/strands-relevance-filter
 strands-agents>=1.44.0,<2.0.0
 ```
 

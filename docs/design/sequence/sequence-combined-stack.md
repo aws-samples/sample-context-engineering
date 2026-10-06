@@ -8,7 +8,7 @@ ordering contract.
 
 > **Reading the references.** The three packages each ship a file named `plugin.py`. A bare
 > `plugin.py:LINE` in this document resolves to the **relevance filter's**
-> (`community-plugins/strands-relevance-filter/src/strands_relevance_filter/plugin.py`). References
+> (`strands-community-plugins/strands-relevance-filter/src/strands_relevance_filter/plugin.py`). References
 > into the graph's and the disclosure plugin's `plugin.py` are spelled out with their package path and
 > a prose line number, never as `plugin.py:LINE`, so nothing here can be read against the wrong file.
 
@@ -112,7 +112,7 @@ copy handed to `InvokeModelStage`. Any non-null manager (a sliding window, a sum
 **live** message list before the call is assembled, so it can physically drop a message the graph only
 meant to fold — and raising that Card's resolution back up then recovers nothing. The plugin enforces
 this by warning: `_warn_on_destructive_manager`
-(`community-plugins/strands-context-graph/src/strands_context_graph/plugin.py`, defined at line 705,
+(`strands-community-plugins/strands-context-graph/src/strands_context_graph/plugin.py`, defined at line 705,
 called from `init_agent` at line 644) emits `_MANAGER_WARNING` (line 161) unless the manager is a
 `NullConversationManager`. The runner's module docstring states the same at `runner.py:26`. It is also a
 comparison-hygiene reason: it keeps history handling from being a confounding variable across
@@ -128,7 +128,7 @@ in the stage and observes the projection the plugins produced rather than the pr
 Two facts, read together, fix the delivery order regardless of what the `plugins=[...]` list says.
 
 **The graph forces itself to index 0.** `Projection.register`
-(`community-plugins/strands-context-graph/src/strands_context_graph/projection.py`, defined at line 150)
+(`strands-community-plugins/strands-context-graph/src/strands_context_graph/projection.py`, defined at line 150)
 calls the public `registry.add_middleware(InvokeModelStage.Input, self.deliver)` at line 172, then moves
 its own handler to the front of the stage's list with `handlers.insert(0, handlers.pop())` —
 `InvokeModelStage` (`projection.py:175`). That one line is the only private read in the registration and

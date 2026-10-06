@@ -1,7 +1,7 @@
 # Practice A — `strands-relevance-filter`: Sequence & Integration Design
 
 All line references are into
-`community-plugins/strands-relevance-filter/src/strands_relevance_filter/`
+`strands-community-plugins/strands-relevance-filter/src/strands_relevance_filter/`
 (`plugin.py`, `preview.py`, `reranker.py`, `store.py`, `search.py`), except §8, which is into
 `validation/community-plugin-A-B-D/src/` (`runner.py`, `config.py`).
 
