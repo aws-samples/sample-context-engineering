@@ -11,8 +11,7 @@ from __future__ import annotations
 import pytest
 from strands.types.tools import ToolContext, ToolResult, ToolUse
 
-from strands_relevance_filter import InMemoryStore, RelevanceFilter
-from strands_relevance_filter.reranker import RerankerError
+from strands_relevance_filter import InMemoryStore, RelevanceFilter, RerankerError
 
 from conftest import FakeAgent, FakeReranker, make_after_tool_call_event
 

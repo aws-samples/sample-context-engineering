@@ -30,6 +30,7 @@ classifiers = [
 # major line. boto3/botocore are runtime dependencies because the default reranker (BedrockReranker) and the S3Store
 # talk to AWS; both are built lazily, so an install that supplies its own Reranker and Store never constructs a client.
 dependencies = [
+    "agent-context-core>=0.1.0,<0.2",
     "strands-agents>=1.44.0,<2.0.0",
     "boto3>=1.26.0,<2.0.0",
     "botocore>=1.29.0,<2.0.0",

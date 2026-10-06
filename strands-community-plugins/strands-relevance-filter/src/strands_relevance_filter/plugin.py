@@ -16,37 +16,80 @@ import logging
 from collections.abc import Awaitable, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
-# Imported at runtime, not under TYPE_CHECKING: @hook resolves the handler's type hints at decoration
-# time to infer which event it subscribes to.
-from strands import tool
-from strands.hooks.events import AfterInvocationEvent, AfterToolCallEvent
-from strands.plugins import Plugin, hook
-from strands.types.tools import ToolContext, ToolResult, ToolResultContent
+from context_core.message import NeutralMessage, latest_user_text
+from context_core.relevance import BedrockReranker as _CoreBedrockReranker
+from context_core.relevance import InMemoryStore, PreviewStats, RelevancePreview, Reranker, RerankerError, Store
+from context_core.relevance import S3Store as _CoreS3Store
+from context_core.relevance.preview import _assemble_preview, _chunk_text
+from context_core.relevance.search import _is_searchable_content, _search_content
 
-from .preview import PreviewStats, RelevancePreview, _assemble_preview, _chunk_text
-from .reranker import BedrockReranker, Reranker, RerankerError
-from .search import _is_searchable_content, _search_content
-from .store import InMemoryStore, Store
+from ._adapter import messages_from_neutral, messages_to_neutral
+from ._compat import (
+    AfterInvocationEvent,
+    AfterToolCallEvent,
+    Plugin,
+    ToolContext,
+    ToolResult,
+    ToolResultContent,
+    _AgentAsTool,
+    hook,
+    tool,
+)
 
 if TYPE_CHECKING:
-    from strands.agent.agent import Agent
-    from strands.types.content import Message
-
-try:
-    from strands.agent._agent_as_tool import _AgentAsTool
-except ImportError:  # pragma: no cover - the SDK may rename or move this private class.
-    # Without the class there is no way to recognize a delegation tool, so that guard degrades to
-    # the caller's own ``should_filter`` (or is documented as their responsibility).
-    _AgentAsTool = None  # type: ignore[assignment,misc]
+    from ._compat import Agent, Message
 
 __all__ = [
+    "BedrockReranker",
     "LineRange",
     "RelevanceConfig",
     "RelevanceFilter",
+    "S3Store",
     "ShouldFilter",
 ]
 
 logger = logging.getLogger(__name__)
+
+_USER_AGENT_EXTRA = "strands-agents"
+"""AWS user-agent tag of this package, so calls from a Strands agent stay attributed to Strands."""
+
+
+class BedrockReranker(_CoreBedrockReranker):
+    """:class:`context_core.relevance.BedrockReranker`, tagged ``strands-agents`` in the AWS user agent.
+
+    Every argument is the core class's; only the ``user_agent_extra`` default differs.
+    """
+
+    def __init__(self, *args: Any, user_agent_extra: str = _USER_AGENT_EXTRA, **kwargs: Any) -> None:
+        """Build the core reranker with this package's user-agent tag."""
+        super().__init__(*args, user_agent_extra=user_agent_extra, **kwargs)
+
+
+class S3Store(_CoreS3Store):
+    """:class:`context_core.relevance.S3Store`, tagged ``strands-agents`` in the AWS user agent.
+
+    Every argument is the core class's; only the ``user_agent_extra`` default differs.
+    """
+
+    def __init__(
+        self,
+        bucket: str,
+        prefix: str = "",
+        boto_session: Any = None,
+        boto_client_config: Any = None,
+        region_name: str | None = None,
+        user_agent_extra: str = _USER_AGENT_EXTRA,
+    ) -> None:
+        """Build the core store with this package's user-agent tag."""
+        super().__init__(
+            bucket,
+            prefix,
+            boto_session=boto_session,
+            boto_client_config=boto_client_config,
+            region_name=region_name,
+            user_agent_extra=user_agent_extra,
+        )
+
 
 _DEFAULT_MAX_RESULT_TOKENS = 8_000
 """Default token threshold above which a textual tool result is relevance-filtered."""
@@ -69,27 +112,6 @@ _CHARS_PER_TOKEN = 4
 _MAX_QUERY_CHARS = 2_000
 """Cap on the scoring query. Rerankers charge per query length, and a query longer than this adds
 context without sharpening the ranking."""
-
-
-def _latest_question(messages: Sequence[Message]) -> str:
-    """Return the newest user message's text, or ``""`` when the history holds none.
-
-    A turn carrying only a tool result is not a question, so only ``user`` messages with at least one
-    ``text`` block count. Multiple text blocks in that message are joined by a line break.
-
-    Args:
-        messages: The conversation history, oldest first.
-
-    Returns:
-        The newest user question, or ``""``.
-    """
-    for message in reversed(messages):
-        if message.get("role") != "user":
-            continue
-        texts = [block["text"] for block in message.get("content", []) if block.get("text")]
-        if texts:
-            return "\n".join(texts)
-    return ""
 
 
 def _disclaimer(token_count: int, stats: PreviewStats, references: Sequence[str], retrieval_tool: str) -> str:
@@ -129,7 +151,8 @@ def _disclaimer(token_count: int, stats: PreviewStats, references: Sequence[str]
         "the conversation once you have answered, so state the figures you relied on in the answer."
     )
 
-def _drop_tool_exchanges(messages: list[Message], tool_name: str) -> list[Message]:
+
+def _drop_tool_exchanges(messages: list[NeutralMessage], tool_name: str) -> list[NeutralMessage]:
     """Return ``messages`` without the closed exchanges of ``tool_name``.
 
     An exchange is a ``toolUse`` block in an assistant message and its ``toolResult`` in the message
@@ -166,7 +189,7 @@ def _drop_tool_exchanges(messages: list[Message], tool_name: str) -> list[Messag
     if not dropped_ids:
         return messages
 
-    kept: list[Message] = []
+    kept: list[NeutralMessage] = []
     for position, message in enumerate(messages):
         if position in dropped_messages:
             continue
@@ -343,7 +366,7 @@ class RelevanceFilter(Plugin):
         """Return the preview builder, constructing it on the first call.
 
         Deferring construction is what keeps ``__init__`` inert: the default
-        :class:`~strands_relevance_filter.reranker.BedrockReranker` opens an AWS client, so a filter
+        :class:`BedrockReranker` opens an AWS client, so a filter
         that never fires never needs credentials or a region. The builder is created once and reused,
         which also makes its ``search_units`` counter a session total.
 
@@ -386,7 +409,7 @@ class RelevanceFilter(Plugin):
         Returns:
             The scoring query, between 1 and ``_MAX_QUERY_CHARS`` characters.
         """
-        user_text = _latest_question(event.agent.messages)
+        user_text = latest_user_text(messages_to_neutral(event.agent.messages))
 
         try:
             serialized = json.dumps(event.tool_use.get("input", {}))
@@ -602,10 +625,11 @@ class RelevanceFilter(Plugin):
         if not self._include_retrieval_tool:
             return
         messages = event.agent.messages
-        kept = _drop_tool_exchanges(messages, self.retrieve_all_context.tool_name)
-        if kept is not messages:
+        neutral = messages_to_neutral(messages)
+        kept = _drop_tool_exchanges(neutral, self.retrieve_all_context.tool_name)
+        if kept is not neutral:
             logger.debug("messages=<%d->%d> | retrieval exchanges removed from the history", len(messages), len(kept))
-            messages[:] = kept
+            messages[:] = messages_from_neutral(kept)
 
     @hook  # type: ignore[call-overload]  # bound method; the @hook overloads describe a one-arg callback
     async def _on_after_tool_call(self, event: AfterToolCallEvent) -> None:

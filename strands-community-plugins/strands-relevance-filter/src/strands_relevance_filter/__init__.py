@@ -11,6 +11,10 @@ tabular content exact.
 Scoring sits behind the ``Reranker`` protocol, whose default ``BedrockReranker`` is the only remote
 dependency and is constructed lazily — supply a ``Reranker`` and the plugin never builds an AWS client.
 
+The decision logic -- chunking, scoring, selection, preview assembly, the stores, the retrieval search --
+lives in ``agent-context-core`` (:mod:`context_core.relevance`); this package is the Strands binding over it.
+``BedrockReranker`` and ``S3Store`` are the core classes tagged ``strands-agents`` in the AWS user agent.
+
 Example Usage:
     ```python
     from strands import Agent
@@ -20,9 +24,9 @@ Example Usage:
     ```
 """
 
-from .plugin import RelevanceConfig, RelevanceFilter, ShouldFilter
-from .reranker import BedrockReranker, Reranker, RerankerError
-from .store import FileStore, InMemoryStore, S3Store, Store
+from context_core.relevance import FileStore, InMemoryStore, Reranker, RerankerError, Store
+
+from .plugin import BedrockReranker, RelevanceConfig, RelevanceFilter, S3Store, ShouldFilter
 
 __all__ = [
     "BedrockReranker",
