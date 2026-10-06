@@ -419,6 +419,7 @@ class S3Store:
         boto_session: boto3.Session | None = None,
         boto_client_config: BotocoreConfig | None = None,
         region_name: str | None = None,
+        user_agent_extra: str = _USER_AGENT_EXTRA,
     ) -> None:
         """Initialize S3-based storage.
 
@@ -429,6 +430,8 @@ class S3Store:
                 omitted.
             boto_client_config: Optional botocore client configuration.
             region_name: AWS region. Used only when ``boto_session`` is not given.
+            user_agent_extra: Tag appended to the AWS user agent, so the calls are attributed to the caller. Defaults
+                to ``context-core``; a binding passes its own (the Strands plugins pass ``strands-agents``).
         """
         self._bucket = bucket
         self._prefix = prefix.strip("/")
@@ -440,11 +443,11 @@ class S3Store:
         if boto_client_config:
             existing_user_agent = getattr(boto_client_config, "user_agent_extra", None)
             new_user_agent = (
-                f"{existing_user_agent} {_USER_AGENT_EXTRA}" if existing_user_agent else _USER_AGENT_EXTRA
+                f"{existing_user_agent} {user_agent_extra}" if existing_user_agent else user_agent_extra
             )
             client_config = boto_client_config.merge(BotocoreConfig(user_agent_extra=new_user_agent))
         else:
-            client_config = BotocoreConfig(user_agent_extra=_USER_AGENT_EXTRA)
+            client_config = BotocoreConfig(user_agent_extra=user_agent_extra)
 
         self._client: Any = session.client(service_name="s3", config=client_config)
         self._counter: int = 0
