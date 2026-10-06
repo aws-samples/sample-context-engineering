@@ -96,21 +96,25 @@ The last line above is optional but recommended. Bedrock's model invocation log 
 check on the token numbers this harness reports; `src/run.py` reads its configuration during preflight
 and warns when a run will not be verifiable afterwards.
 
-## The dependency: three packages, unmodified SDK
+## The dependency: the core, three bindings, unmodified SDK
 
-`requirements.txt` installs the three community packages **editable from this repository**, so a run
-measures the code a reader can read, plus the public SDK:
+`requirements.txt` installs `agent-context-core` and the three Strands packages **editable from this
+repository**, so a run measures the code a reader can read, plus the public SDK. The core holds the
+decision logic of all three practices; each Strands package is the binding that attaches it to the
+SDK's hooks. The core is listed first so this checkout's copy is the one installed:
 
 ```
+-e ../../context-core
 -e ../../strands-community-plugins/strands-context-graph
 -e ../../strands-community-plugins/strands-progressive-tool-disclosure
 -e ../../strands-community-plugins/strands-relevance-filter
 strands-agents>=1.44.0,<2.0.0
 ```
 
-Verified: all three import and run against **unmodified `strands-agents` 1.56.0** from PyPI. The
-private middleware seam they couple to (`strands._middleware.stages.InvokeModelStage`,
-`strands.injection._message_injection`) is present there.
+The one private seam the bindings still couple to is `strands._middleware.stages.InvokeModelStage`
+(progressive disclosure and the context graph). The context graph no longer imports
+`strands.injection._message_injection`: the core carries its own copy of that fold, pinned to the SDK
+original by `strands-context-graph/tests/test_sdk_parity.py`.
 
 ---
 
@@ -119,7 +123,7 @@ private middleware seam they couple to (`strands._middleware.stages.InvokeModelS
 ```
 run.sh              create the venv on first use, then run the benchmark
 report.sh           re-render an existing run's report — no Bedrock call
-requirements.txt    the three community packages plus the public SDK
+requirements.txt    the core, the three Strands bindings and the public SDK
 src/                the harness itself (a Python package, invoked by the two scripts)
 results/            generated: one JSON, one Markdown report and one HTML page per run
 ```
