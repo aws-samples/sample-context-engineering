@@ -61,6 +61,7 @@ import dataclasses
 from collections.abc import Coroutine, Sequence
 from typing import Any, TypeVar, cast
 
+from context_core.disclosure.catalog import PLUGIN_TOOL_NAMES as _PLUGIN_TOOL_NAMES
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from strands import Agent, tool
@@ -74,7 +75,6 @@ from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
     _DETAILS_LOADED_HEADER,
     _MATCHES_HEADER,
-    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
     _DisclosureState,

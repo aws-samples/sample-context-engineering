@@ -24,6 +24,10 @@ from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
 import pytest
+from context_core.disclosure.catalog import CATALOG_PROMPT_HEADER as _CATALOG_PROMPT_HEADER
+from context_core.disclosure.catalog import fold_closed_exchanges as _fold_tool_exchanges
+from context_core.disclosure.catalog import pairs_intact as _pairs_intact
+from context_core.disclosure.catalog import truncate_description as _truncate_description
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
 from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
@@ -34,17 +38,13 @@ from strands.types.tools import ToolContext, ToolSpec
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
-    _CATALOG_PROMPT_HEADER,
     _DETAILS_EMPTY_GUIDANCE,
     _DETAILS_LOADED_HEADER,
     _DETAILS_UNKNOWN,
     _SUMMARY_SYSTEM_PROMPT,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
-    _fold_tool_exchanges,
     _model_summarizer,
-    _pairs_intact,
-    _truncate_description,
 )
 
 _Resolved = TypeVar("_Resolved")

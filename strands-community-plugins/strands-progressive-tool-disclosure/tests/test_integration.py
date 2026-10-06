@@ -41,6 +41,7 @@ from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
 import pytest
+from context_core.disclosure.catalog import PLUGIN_TOOL_NAMES as _PLUGIN_TOOL_NAMES
 from strands import Agent
 from strands.agent.agent import Agent as AgentType
 from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
@@ -54,7 +55,6 @@ from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
     _DETAILS_LOADED_HEADER,
     _MATCHES_HEADER,
-    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
 )

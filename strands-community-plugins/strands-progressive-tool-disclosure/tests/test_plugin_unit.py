@@ -33,6 +33,8 @@ from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
 import pytest
+from context_core.disclosure.catalog import DEFAULT_CATALOG_CHARS as _DEFAULT_CATALOG_CHARS
+from context_core.disclosure.catalog import PLUGIN_TOOL_NAMES as _PLUGIN_TOOL_NAMES
 from strands import Agent
 from strands.models.model import Model
 from strands.tools.decorator import tool
@@ -41,13 +43,11 @@ from strands.types.tools import ToolContext, ToolSpec
 from strands_progressive_tool_disclosure import LexicalToolIndex, ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext, InvokeModelStage
 from strands_progressive_tool_disclosure.plugin import (
-    _DEFAULT_CATALOG_CHARS,
     _DEFAULT_TOP_K,
     _DEFAULT_TTL_CYCLES,
     _EMPTY_NEED_GUIDANCE,
     _MATCHES_HEADER,
     _NO_MATCH_GUIDANCE,
-    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
 )

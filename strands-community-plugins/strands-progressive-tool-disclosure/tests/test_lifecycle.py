@@ -36,6 +36,7 @@ from collections.abc import Coroutine
 from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
+from context_core.disclosure.catalog import PLUGIN_TOOL_NAMES as _PLUGIN_TOOL_NAMES
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from strands import Agent
@@ -48,7 +49,6 @@ from strands.types.tools import ToolContext, ToolSpec
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure, ToolMatch
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
 from strands_progressive_tool_disclosure.plugin import (
-    _PLUGIN_TOOL_NAMES,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
     _DisclosureState,

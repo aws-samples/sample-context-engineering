@@ -42,6 +42,8 @@ from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
 
+from context_core.disclosure.catalog import truncate_description
+from context_core.disclosure.tool_index import ToolMatch
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from strands import Agent, tool
@@ -51,7 +53,6 @@ from strands.types.tools import ToolContext
 import strands_progressive_tool_disclosure.plugin as plugin_module
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 from strands_progressive_tool_disclosure._compat import InvokeModelContext
-from strands_progressive_tool_disclosure.index import ToolMatch
 from strands_progressive_tool_disclosure.plugin import FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME
 
 PROPERTY_SETTINGS = settings(
@@ -558,7 +559,7 @@ def test_a_failing_summarizer_falls_back_to_truncation_and_the_projection_still_
     assert len(lines) == len(names), "a tool was left out of the catalog"
     for name in names:
         description = _registered_description(agent, name)
-        expected = plugin_module._truncate_description(description, catalog_chars)
+        expected = truncate_description(description, catalog_chars)
         assert f"- {name}: {expected}" in lines, f"{name} was not catalogued by truncation"
         assert len(expected) <= catalog_chars, "the truncation fallback overran the limit"
 

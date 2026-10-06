@@ -44,6 +44,7 @@ import asyncio
 from collections.abc import Coroutine, Sequence
 from typing import Any, TypeVar
 
+from context_core.disclosure.tool_index import ToolMatch
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from strands import Agent, tool
@@ -52,7 +53,6 @@ from strands.types.tools import ToolContext, ToolSpec
 
 import strands_progressive_tool_disclosure.plugin as plugin_module
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
-from strands_progressive_tool_disclosure.index import ToolMatch
 from strands_progressive_tool_disclosure.plugin import FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME
 
 PROPERTY_SETTINGS = settings(

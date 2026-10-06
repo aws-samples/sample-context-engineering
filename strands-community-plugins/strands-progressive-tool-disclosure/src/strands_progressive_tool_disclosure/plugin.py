@@ -30,44 +30,47 @@ import asyncio
 import inspect
 import json
 import logging
-import math
 import weakref
 from collections.abc import Awaitable, Callable, Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias
 
-from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
-from strands.plugins import Plugin, hook
-from strands.tools.decorator import tool
-from strands.types.content import Message, Messages, SystemPrompt
-from strands.types.tools import ToolContext, ToolSpec
+from context_core.disclosure import (
+    DEFAULT_CATALOG_CHARS,
+    FIND_TOOLS_NAME,
+    GET_TOOL_DETAILS_NAME,
+    PLUGIN_TOOL_NAMES,
+    LexicalToolIndex,
+    ToolIndex,
+    ToolMatch,
+    catalog_prompt_block,
+    clamp_summary,
+    estimate_tokens,
+    fold_closed_exchanges,
+    truncate_description,
+)
 
-from ._compat import InvokeModelStage
-from .index import LexicalToolIndex, ToolIndex, ToolMatch
+from ._adapter import messages_from_neutral, messages_to_neutral, specs_to_neutral
+from ._compat import (
+    AfterToolCallEvent,
+    BeforeToolCallEvent,
+    InvokeModelStage,
+    Messages,
+    Plugin,
+    SystemPrompt,
+    ToolContext,
+    ToolSpec,
+    hook,
+    tool,
+)
 
 if TYPE_CHECKING:
-    from strands.agent.agent import Agent
-    from strands.models.model import Model
+    from ._compat import Agent, InvokeModelContext, Model
 
-    from ._compat import InvokeModelContext
+__all__ = ["FIND_TOOLS_NAME", "GET_TOOL_DETAILS_NAME", "ProgressiveToolDisclosure", "ToolSummarizer"]
 
 logger = logging.getLogger(__name__)
 
-FIND_TOOLS_NAME = "find_tools"
-"""Name of the search tool. Also the name the projection looks for to decide it can project at all."""
-
-GET_TOOL_DETAILS_NAME = "get_tool_details"
-"""Name of the loading tool: the one call that puts full specifications into the next projection.
-
-Not ``get_details``: a bare verb-noun that generic is a name a domain tool can already hold, and a
-collision would silently shadow one of the two in the registry."""
-
-_PLUGIN_TOOL_NAMES = frozenset({FIND_TOOLS_NAME, GET_TOOL_DETAILS_NAME})
-"""Both plugin tools. Carried in full on every projected call and never cancelled by the guard."""
-
-_DEFAULT_CATALOG_CHARS = 80
-"""Summary limit per catalog line, in characters. About twenty tokens, the budget that measured ~96% of
-the resident saving at a low risk."""
 
 _SUMMARY_CONCURRENCY = 8
 """Summaries requested at once when an index build meets many new tools. Bounds the burst, not the total."""
@@ -134,110 +137,6 @@ _PREMATURE_CALL_MESSAGE = (
 does NOT load the tool on the model's behalf: a recovery that loads it would teach the model that calling
 a catalog name directly works, which is the very shortcut the catalog rule forbids."""
 
-_CHARS_PER_TOKEN = 4
-"""Approximate characters per token — same heuristic ContextOffloader uses for preview slicing."""
-
-_ELLIPSIS = "..."
-"""Marks a description as cut. Counts against the budget like any other character."""
-
-_SENTENCE_ENDINGS = ".!?"
-"""Characters that end a sentence when followed by whitespace or by the end of the text."""
-
-
-def _estimate_tokens(text: str) -> int:
-    """Estimate the token count of ``text`` from its character count.
-
-    Rounds up, matching ``_heuristic_estimate_text`` in ``models/model.py``: a non-empty text never
-    estimates as zero tokens.
-
-    Args:
-        text: Text to estimate.
-
-    Returns:
-        Estimated token count.
-    """
-    return math.ceil(len(text) / _CHARS_PER_TOKEN)
-
-
-_CATALOG_PROMPT_HEADER = """\
-# Tools available on request
-
-The tools listed below are NOT in your tool list, and you MUST NOT call them directly: their parameters
-are not loaded, and a direct call is rejected without running.
-
-To use any of them, always follow these steps:
-1. Call `{get_tool_details}` with the names you need, as a list, in one call.
-2. On your next call they are in your tool list with their full parameters. Call them from there.
-3. A tool left unused for a few calls is unloaded again. If a call to it is rejected, repeat step 1.
-
-If no name below fits what you need, call `{find_tools}` with the need in your own words, then go to
-step 1 with the names it returns.
-
-The tools that ARE in your tool list for this call you call directly.
-
-"""
-"""Preamble of the system-prompt catalog: the rule, stated where the model reads the names.
-
-The names are not in ``tool_specs`` at all, so nothing asserts they are callable, and the rule that
-governs them arrives in the same block. The common path is catalog -> ``get_tool_details`` -> call;
-``find_tools`` is the fallback for a need the model cannot map to a listed name.
-"""
-
-
-def _catalog_prompt_block(
-    incoming: Sequence[ToolSpec],
-    full_spec_names: Container[str],
-    summaries: Mapping[str, str],
-) -> str:
-    """Render the catalog as one system-prompt block: the rule, then ``- name: summary``.
-
-    Every tool that is not getting a full specification on this call is listed, and NOTHING else --
-    the projection and this block partition the registry between them, so no name appears in both and
-    no name is missing from both.
-
-    Args:
-        incoming: Specifications received in ``context.tool_specs``, in arrival order. Read only.
-        full_spec_names: Names that ARE carrying a full specification on this call, and so must not be
-            listed here.
-        summaries: Catalog line of each tool, by name. A name without one is listed by name only.
-
-    Returns:
-        The block, or ``""`` when every incoming tool is already carrying a full specification -- an
-        empty catalog must add nothing to the prompt rather than a header promising a list.
-    """
-    lines = []
-    for spec in incoming:
-        name = spec["name"]
-        if name in full_spec_names:
-            continue
-        summary = summaries.get(name, "")
-        lines.append(f"- {name}: {summary}" if summary else f"- {name}")
-    if not lines:
-        return ""
-
-    header = _CATALOG_PROMPT_HEADER.format(find_tools=FIND_TOOLS_NAME, get_tool_details=GET_TOOL_DETAILS_NAME)
-    return header + "\n".join(lines)
-
-
-def _clamp_summary(text: object, max_chars: int) -> str:
-    """Normalize a summarizer's answer to one line of at most ``max_chars`` characters.
-
-    Whitespace is collapsed and wrapping quotes are dropped, because a model asked for a bare line still
-    answers with one sometimes. An answer over the limit is cut at a boundary rather than rejected: it is
-    still a summary, and the cut is the same one the fallback would make.
-
-    Args:
-        text: What the summarizer returned. Anything that is not a string is treated as empty.
-        max_chars: Character limit.
-
-    Returns:
-        The clamped line, or ``""`` when there was nothing usable.
-    """
-    if not isinstance(text, str):
-        return ""
-    line = " ".join(text.split()).strip("\"'`")
-    return _truncate_description(line, max_chars) if line else ""
-
 
 async def _summarize(spec: ToolSpec, max_chars: int, summarizer: ToolSummarizer) -> tuple[str, bool]:
     """Produce the catalog line of ``spec``: verbatim, summarized, or truncated, in that order of preference.
@@ -262,12 +161,12 @@ async def _summarize(spec: ToolSpec, max_chars: int, summarizer: ToolSummarizer)
         answered = summarizer(spec, max_chars)
         if inspect.isawaitable(answered):
             answered = await answered
-        line = _clamp_summary(answered, max_chars)
+        line = clamp_summary(answered, max_chars)
     except Exception:
         logger.warning("tool summary failed | tool=<%s> | falling back to truncation", spec["name"], exc_info=True)
         line = ""
 
-    return (line or _truncate_description(description, max_chars)), True
+    return (line or truncate_description(description, max_chars)), True
 
 
 def _model_summarizer(model: Model, usage: dict[str, int]) -> ToolSummarizer:
@@ -358,81 +257,6 @@ def _requires_parameters(spec: ToolSpec) -> bool:
 
     required = root.get("required")
     return isinstance(required, list) and len(required) > 0
-
-
-def _truncate_description(text: str, max_chars: int) -> str:
-    """Cut ``text`` to at most ``max_chars`` characters, preferring a sentence/word boundary.
-
-    The FALLBACK of a catalog line, used only when a summary could not be produced, and the clamp applied
-    to a summary that overran. The cut is attempted at the last sentence boundary that fits, then at the
-    last word boundary, and only by character count when no word boundary fits — the case of a single
-    word longer than the whole limit, where any boundary-based cut would return nothing.
-
-    A cut at a sentence boundary reads as a whole and carries no ellipse; a cut mid-sentence gets
-    one, and the ellipse counts against the limit like any other character.
-
-    Args:
-        text: Text to cut.
-        max_chars: Character limit. Must be at least ``1``.
-
-    Returns:
-        A prefix of ``text``, possibly followed by an ellipse, at most ``max_chars`` characters long.
-        Returns ``text`` unchanged when it already fits, which covers the empty text.
-    """
-    if len(text) <= max_chars:
-        return text
-
-    # A sentence boundary needs no ellipse to read as a whole, so it gets the full budget.
-    cut = _last_sentence_end(text, max_chars)
-    if cut > 0:
-        return text[:cut]
-
-    budget = max_chars - len(_ELLIPSIS)
-    if budget > 0:
-        cut = _last_word_end(text, budget)
-        if cut > 0:
-            return text[:cut].rstrip() + _ELLIPSIS
-
-    # No sentence and no word boundary fits the budget; cut by character count at the limit.
-    return text[:max_chars]
-
-
-def _last_sentence_end(text: str, budget: int) -> int:
-    """Find the end of the last sentence of ``text`` that fits ``budget`` characters.
-
-    A sentence ends at a terminator followed by whitespace or by the end of ``text``, so that a
-    period inside ``v1.2`` or ``e.g.`` is not mistaken for one.
-
-    Args:
-        text: Text to scan.
-        budget: Maximum number of characters the result may span.
-
-    Returns:
-        Number of characters to keep, terminator included, or ``-1`` when no sentence ends within
-        the budget.
-    """
-    for i in range(min(budget, len(text)) - 1, -1, -1):
-        if text[i] in _SENTENCE_ENDINGS and (i + 1 >= len(text) or text[i + 1].isspace()):
-            return i + 1
-    return -1
-
-
-def _last_word_end(text: str, budget: int) -> int:
-    """Find the end of the last whole word of ``text`` that fits ``budget`` characters.
-
-    Args:
-        text: Text to scan.
-        budget: Maximum number of characters the result may span.
-
-    Returns:
-        Number of characters to keep, trailing whitespace excluded from the word itself, or ``-1``
-        when no word ends within the budget.
-    """
-    # A word may end exactly at the budget: the character just past it decides, not the budget.
-    for i in range(min(budget, len(text) - 1), -1, -1):
-        if text[i].isspace():
-            return i
-    return -1
 
 
 def _validate_positive_int(value: object, parameter: str) -> None:
@@ -677,7 +501,7 @@ def _log_projection(specs: Sequence[ToolSpec]) -> None:
     logger.debug(
         "projection produced | specs=<%d> | estimated_tokens=<%d>",
         len(specs),
-        _estimate_tokens(json.dumps(specs, default=str)),
+        estimate_tokens(json.dumps(specs, default=str)),
     )
 
 
@@ -720,181 +544,6 @@ def _record_premature_cancellation(state: _DisclosureState, name: str) -> None:
     )
 
 
-def _fold_note(name: str, result: Mapping[str, Any]) -> str:
-    """Render a tool result as the one sentence that replaces its call in the history.
-
-    Args:
-        name: Name of the tool that was called.
-        result: The ``toolResult`` block. Its text and JSON parts are rendered; other parts are kept apart.
-
-    Returns:
-        ``The tool X was called and the result was: Y``, or ``... and failed with: Y`` for an error.
-    """
-    parts: list[str] = []
-    for block in result.get("content") or ():
-        if "text" in block:
-            parts.append(str(block["text"]))
-        elif "json" in block:
-            parts.append(json.dumps(block["json"], ensure_ascii=False))
-    outcome = "failed with" if result.get("status") == "error" else "the result was"
-    return f"The tool {name} was called and {outcome}: {' '.join(parts)}"
-
-
-def _current_turn_start(messages: Messages) -> int:
-    """Return the index of the user message that opened the turn in flight.
-
-    That is the last user message carrying no ``toolResult``: everything from it on is the agent's
-    current work, including the tool loop and its latest assistant message. Providers that return
-    reasoning (``reasoningContent``) require the latest assistant message to arrive unmodified, so the
-    whole turn in flight is off limits to the fold.
-
-    Args:
-        messages: Messages of the call.
-
-    Returns:
-        The index, or ``0`` when there is none.
-    """
-    for position in range(len(messages) - 1, -1, -1):
-        message = messages[position]
-        if message.get("role") == "user" and not any("toolResult" in b for b in message.get("content") or ()):
-            return position
-    return 0
-
-
-def _without_reasoning(content: Sequence[Any]) -> list[Any]:
-    """Drop ``reasoningContent`` blocks: a rewritten message can no longer carry a valid signature.
-
-    Only ever applied to messages of CLOSED turns, whose reasoning providers accept being omitted.
-    """
-    return [block for block in content if "reasoningContent" not in block]
-
-
-def _results_first(content: Sequence[Any]) -> list[Any]:
-    """Move ``toolResult`` blocks to the front, keeping order otherwise.
-
-    Converse rejects a user message where text precedes the ``toolResult`` answering the previous
-    assistant message (``tool_use ids were found without tool_result blocks immediately after``), and a
-    fold sentence or a merge can put text there.
-    """
-    return [b for b in content if "toolResult" in b] + [b for b in content if "toolResult" not in b]
-
-
-def _tidy(message: Message, content: Sequence[Any]) -> Message:
-    """Return ``message`` with ``content`` fixed up for its role: no stale reasoning, results first."""
-    fixed = _without_reasoning(content) if message.get("role") == "assistant" else _results_first(content)
-    return cast("Message", {**message, "content": fixed})
-
-
-def _pairs_intact(messages: Messages) -> bool:
-    """Report whether every ``toolUse`` is answered by a ``toolResult`` in the very next message.
-
-    The fold's own invariant, checked on its output: a case it did not foresee then costs the saving on
-    that call, never the call itself.
-    """
-    for position, message in enumerate(messages[:-1]):
-        if message.get("role") != "assistant":
-            continue
-        use_ids = {b["toolUse"].get("toolUseId") for b in message.get("content") or () if "toolUse" in b}
-        if not use_ids:
-            continue
-        answers = messages[position + 1]
-        result_ids = {b["toolResult"].get("toolUseId") for b in answers.get("content") or () if "toolResult" in b}
-        if answers.get("role") != "user" or not use_ids <= result_ids:
-            return False
-    return True
-
-
-def _fold_tool_exchanges(messages: Messages, callable_names: Container[str]) -> Messages:
-    """Return the call's messages with every exchange the model cannot repeat folded out of tool form.
-
-    A ``toolUse`` with its arguments is a template: seen next to a success, the model repeats it, and if
-    the tool is no longer in ``tool_specs`` that repeat is a call to a tool it cannot see. So for every
-    exchange of a tool NOT callable on this call, the ``toolUse`` block goes and its ``toolResult``
-    becomes a plain sentence -- ``The tool X was called and the result was: Y`` -- which keeps the
-    evidence and drops the call shape. Image or document parts of the result are kept as they are.
-
-    The plugin's own ``find_tools`` and ``get_tool_details`` exchanges go entirely, with no sentence: they
-    matter on the call right after them and are dead weight past it.
-
-    Only closed turns are folded. The first message and the turn in flight (:func:`_current_turn_start`)
-    are returned as the very same objects, which is what keeps a reasoning model's latest assistant
-    message intact. Inside the folded span, emptied messages are dropped and same-role neighbours are
-    merged, so the roles keep alternating and every remaining ``toolResult`` still follows its
-    ``toolUse``; an assistant message that is rewritten or merged loses its ``reasoningContent``. The
-    agent's own history is never touched.
-
-    Args:
-        messages: Messages of the call, ``context.messages``. Read only.
-        callable_names: Names carried in full in this call's ``tool_specs``.
-
-    Returns:
-        ``messages`` itself when nothing is folded; otherwise a new list.
-    """
-    boundary = _current_turn_start(messages)
-    if boundary <= 1:
-        return messages
-
-    uses: dict[str, str] = {}
-    results: set[str] = set()
-    for message in messages[1:boundary]:
-        for block in message.get("content") or ():
-            if (use := block.get("toolUse")) and (use_id := use.get("toolUseId")):
-                name = use.get("name") or ""
-                if name in _PLUGIN_TOOL_NAMES or name not in callable_names:
-                    uses[use_id] = name
-            elif (result := block.get("toolResult")) and (result_id := result.get("toolUseId")):
-                results.add(result_id)
-    fold = {use_id: name for use_id, name in uses.items() if use_id in results}
-    if not fold:
-        return messages
-
-    rebuilt: Messages = [messages[0]]
-    for message in messages[1:boundary]:
-        content: list[Any] = []
-        changed = False
-        for block in message.get("content") or ():
-            use, result = block.get("toolUse"), block.get("toolResult")
-            if use and use.get("toolUseId") in fold:
-                changed = True
-                continue
-            if result and (folded_name := fold.get(result.get("toolUseId") or "")) is not None:
-                changed = True
-                if folded_name not in _PLUGIN_TOOL_NAMES:
-                    content.append({"text": _fold_note(folded_name, result)})
-                    content.extend(b for b in result.get("content") or () if "text" not in b and "json" not in b)
-                continue
-            content.append(block)
-        if not changed:
-            rebuilt.append(message)
-            continue
-        if message.get("role") == "assistant":
-            content = _without_reasoning(content)
-        if content:
-            rebuilt.append(_tidy(message, content))
-
-    merged: Messages = []
-    for message in rebuilt:
-        if merged and merged[-1].get("role") == message.get("role"):
-            previous = merged[-1]
-            merged[-1] = _tidy(previous, [*(previous.get("content") or ()), *(message.get("content") or ())])
-        else:
-            merged.append(message)
-
-    # The turn in flight opens with a user message. If the folded span now ends with one too, its
-    # content goes in front of the opening message instead, never into the turn's assistant messages.
-    current = messages[boundary:]
-    if merged[-1].get("role") == current[0].get("role"):
-        tail = merged.pop()
-        opening = _tidy(current[0], [*(tail.get("content") or ()), *(current[0].get("content") or ())])
-        current = [opening, *current[1:]]
-    folded = [*merged, *current]
-    # The last message may be an assistant toolUse still waiting for its result, so it is not checked.
-    if not _pairs_intact(folded[:-1]) and _pairs_intact(messages[:-1]):
-        logger.warning("fold broke a toolUse/toolResult pair | sending the messages unfolded")
-        return messages
-    return folded
-
-
 def _should_passthrough(
     incoming_names: Iterable[str],
     registry_names: Container[str],
@@ -925,10 +574,10 @@ def _should_passthrough(
     for name in incoming_names:
         if name not in registry_names:
             return True
-        if name in _PLUGIN_TOOL_NAMES:
+        if name in PLUGIN_TOOL_NAMES:
             found.add(name)
 
-    return found != _PLUGIN_TOOL_NAMES
+    return found != PLUGIN_TOOL_NAMES
 
 
 def _compose_projection(
@@ -964,7 +613,7 @@ def _compose_projection(
     projected: list[ToolSpec] = []
     seen: set[str] = set()
 
-    for block in (_PLUGIN_TOOL_NAMES, always_available, exposed):
+    for block in (PLUGIN_TOOL_NAMES, always_available, exposed):
         for spec in incoming:
             name = spec["name"]
             if name in block and name not in seen:
@@ -985,7 +634,7 @@ def _project(
     A new context object rather than a mutation of the received one. Three fields are written:
     ``tool_specs`` carries ONLY the tools that are callable on this call, ``system_prompt`` carries one
     line for every other tool, and ``messages`` folds every exchange of a tool this call does not carry
-    (:func:`_fold_tool_exchanges`). The agent's history, the ``ToolRegistry`` and every other field
+    (:func:`fold_closed_exchanges`). The agent's history, the ``ToolRegistry`` and every other field
     are left untouched — the projection changes what a call is told about, not what the agent has.
 
     Args:
@@ -1000,12 +649,15 @@ def _project(
         ``None`` or nothing is left to list.
     """
     projected = _compose_projection(context.tool_specs, exposed, always_available)
-    messages = _fold_tool_exchanges(context.messages, {spec["name"] for spec in projected})
+    neutral = messages_to_neutral(context.messages)
+    folded = fold_closed_exchanges(neutral, {spec["name"] for spec in projected})
+    # Nothing folded is the received list itself, not a copy, so the context keeps its own messages.
+    messages = context.messages if folded is neutral else messages_from_neutral(folded)
 
     if summaries is None:
         return replace(context, tool_specs=projected, messages=messages)
 
-    block = _catalog_prompt_block(context.tool_specs, {spec["name"] for spec in projected}, summaries)
+    block = catalog_prompt_block(specs_to_neutral(context.tool_specs), {spec["name"] for spec in projected}, summaries)
     return replace(
         context,
         tool_specs=projected,
@@ -1048,7 +700,7 @@ class ProgressiveToolDisclosure(Plugin):
     def __init__(
         self,
         *,
-        catalog_chars: int | None = _DEFAULT_CATALOG_CHARS,
+        catalog_chars: int | None = DEFAULT_CATALOG_CHARS,
         summarizer: ToolSummarizer | None = None,
         ttl_cycles: int = _DEFAULT_TTL_CYCLES,
         always_available: Sequence[str] = (),
@@ -1186,7 +838,7 @@ class ProgressiveToolDisclosure(Plugin):
             await self._summarize_missing(specs, self._catalog_chars, agent, state)
 
         # The index may be a network-backed implementation, so build is allowed to be awaitable.
-        built = self._index.build(list(specs))
+        built = self._index.build(specs_to_neutral(specs))
         if inspect.isawaitable(built):
             await built
 
@@ -1206,7 +858,7 @@ class ProgressiveToolDisclosure(Plugin):
         missing = [
             spec
             for spec in specs
-            if spec["name"] not in _PLUGIN_TOOL_NAMES
+            if spec["name"] not in PLUGIN_TOOL_NAMES
             and (spec["name"], spec.get("description") or "") not in self._summaries
         ]
         if not missing:
@@ -1284,7 +936,7 @@ class ProgressiveToolDisclosure(Plugin):
         for match in matches:
             registered = registry.get(match.name)
             # A match the registry does not have has nothing to load and no description to report.
-            if registered is None or match.name in _PLUGIN_TOOL_NAMES:
+            if registered is None or match.name in PLUGIN_TOOL_NAMES:
                 continue
             names.append(match.name)
             lines.append(f"- {match.name}: {self._short_description(registered.tool_spec)}")
@@ -1365,7 +1017,7 @@ class ProgressiveToolDisclosure(Plugin):
         agent = event.agent
         registry = agent.tool_registry.registry
 
-        if name not in registry or name in _PLUGIN_TOOL_NAMES or name in self._always_available:
+        if name not in registry or name in PLUGIN_TOOL_NAMES or name in self._always_available:
             return
 
         state = _state_for(self._states, agent)
@@ -1392,7 +1044,7 @@ class ProgressiveToolDisclosure(Plugin):
         if event.cancel_message is not None:
             return
         name = event.tool_use["name"]
-        if name in _PLUGIN_TOOL_NAMES or name in self._always_available:
+        if name in PLUGIN_TOOL_NAMES or name in self._always_available:
             return
         state = _state_for(self._states, event.agent)
         if name in state.exposed:
@@ -1413,5 +1065,5 @@ class ProgressiveToolDisclosure(Plugin):
         cached = self._summaries.get((spec["name"], spec.get("description") or ""))
         if cached is not None:
             return cached
-        limit = _DEFAULT_CATALOG_CHARS if self._catalog_chars is None else self._catalog_chars
-        return _truncate_description(" ".join((spec.get("description") or "").split()), limit)
+        limit = DEFAULT_CATALOG_CHARS if self._catalog_chars is None else self._catalog_chars
+        return truncate_description(" ".join((spec.get("description") or "").split()), limit)

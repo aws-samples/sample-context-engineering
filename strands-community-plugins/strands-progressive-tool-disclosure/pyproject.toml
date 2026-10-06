@@ -25,11 +25,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# The only runtime dependency. The default LexicalToolIndex is standard-library only, so the base install adds no
-# search or similarity library and performs no network call. The lower bound is the first SDK release exposing
-# InvokeModelStage.Input with a replaceable tool_specs (1.44.0); the upper bound excludes the next major release,
-# because the plugin couples to a private SDK seam (see the README's private-API caveat).
-dependencies = ["strands-agents>=1.44.0,<2.0.0"]
+# The catalog, the fold and the default LexicalToolIndex come from agent-context-core, which also brings boto3 for
+# the other practices' AWS backends; nothing here builds an AWS client, so the base install performs no network
+# call. The strands-agents lower bound is the first SDK release exposing InvokeModelStage.Input with a replaceable
+# tool_specs (1.44.0); the upper bound excludes the next major release, because the plugin couples to a private SDK
+# seam (see the README's private-API caveat).
+dependencies = ["agent-context-core>=0.1.0,<0.2", "strands-agents>=1.44.0,<2.0.0"]
 
 [project.optional-dependencies]
 # The embedding-index extension is opt-in: a user-supplied ToolIndex that scores specs by vector similarity needs

@@ -36,21 +36,21 @@ import socket
 from typing import Any, cast
 
 import pytest
+from context_core.disclosure.catalog import _ELLIPSIS
+from context_core.disclosure.catalog import CATALOG_PROMPT_HEADER as _CATALOG_PROMPT_HEADER
+from context_core.disclosure.catalog import DEFAULT_CATALOG_CHARS as _DEFAULT_CATALOG_CHARS
+from context_core.disclosure.catalog import catalog_prompt_block as _catalog_prompt_block
+from context_core.disclosure.catalog import clamp_summary as _clamp_summary
+from context_core.disclosure.catalog import estimate_tokens as _estimate_tokens
+from context_core.disclosure.catalog import truncate_description as _truncate_description
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from strands_progressive_tool_disclosure import ProgressiveToolDisclosure
 from strands_progressive_tool_disclosure.plugin import (
-    _CATALOG_PROMPT_HEADER,
-    _DEFAULT_CATALOG_CHARS,
-    _ELLIPSIS,
     FIND_TOOLS_NAME,
     GET_TOOL_DETAILS_NAME,
     _append_to_system_prompt,
-    _catalog_prompt_block,
-    _clamp_summary,
-    _estimate_tokens,
-    _truncate_description,
 )
 
 SENTENCE_ENDINGS = ".!?"
