@@ -1,0 +1,36 @@
+{
+  "model": "amazon-bedrock/anthropic.claude-haiku-5-5",
+  "bridge_transforms": [
+    {
+      "tool_class": "list_investment_transactions",
+      "operation": "previewed",
+      "input_bytes": 44960,
+      "output_bytes": 4002,
+      "rerank_result": "success"
+    },
+    {
+      "tool_class": "retrieve_context",
+      "operation": "skipped",
+      "input_bytes": 32077,
+      "output_bytes": 32077,
+      "rerank_result": "not_attempted"
+    }
+  ],
+  "persisted_tool_outputs": [
+    {
+      "tool": "ce60-fixture_list_investment_transactions",
+      "bytes": 4832,
+      "has_marker": true
+    },
+    {
+      "tool": "retrieve_context",
+      "bytes": 32077,
+      "has_marker": false
+    }
+  ],
+  "verdict": {
+    "bridge_previewed": true,
+    "persisted_is_smaller_than_original": true,
+    "persisted_has_preview_marker": true
+  }
+}

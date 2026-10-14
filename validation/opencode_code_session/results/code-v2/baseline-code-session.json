@@ -1,0 +1,1348 @@
+{
+  "schema": "code-session/v1",
+  "arm": "baseline",
+  "plugin_mode": null,
+  "run_id": "code-v2",
+  "model": "amazon-bedrock/anthropic.claude-sonnet-5-5",
+  "host": "opencode",
+  "host_version": "1.18.34",
+  "plugin_options": null,
+  "turns_sha256": "62bcf10d4d88e58f0fac999f8a86c80cd83bbd755d149f256d4216506d1df51d",
+  "prompt_timeout_ms": 900000,
+  "disabled_tools": [
+    "question",
+    "webfetch",
+    "task"
+  ],
+  "listener": [
+    "127.0.0.1:4096"
+  ],
+  "started_at": "2026-10-14T11:09:55.217Z",
+  "finished_at": "2026-10-14T11:18:32.960Z",
+  "turns_planned": 16,
+  "complete": true,
+  "turns": [
+    {
+      "turn_id": "T01-orient",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 13478,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 0,
+          "cache_write": 16342,
+          "output": 117,
+          "reasoning": 0,
+          "model_input": 16346,
+          "cost": 0.042033,
+          "ms": 6758,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 16342,
+          "cache_write": 2879,
+          "output": 70,
+          "reasoning": 0,
+          "model_input": 19223,
+          "cost": 0.0095357,
+          "ms": 1811,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 19221,
+          "cache_write": 815,
+          "output": 549,
+          "reasoning": 0,
+          "model_input": 20038,
+          "cost": 0.0094536,
+          "ms": 4583,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 2
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T02-hermes-layout",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 11096,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 20036,
+          "cache_write": 605,
+          "output": 277,
+          "reasoning": 0,
+          "model_input": 20645,
+          "cost": 0.0062941,
+          "ms": 2814,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 20641,
+          "cache_write": 2822,
+          "output": 154,
+          "reasoning": 0,
+          "model_input": 23465,
+          "cost": 0.0106631,
+          "ms": 2083,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 23463,
+          "cache_write": 2949,
+          "output": 848,
+          "reasoning": 0,
+          "model_input": 26414,
+          "cost": 0.0182028,
+          "ms": 6185,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 3
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T03-hermes-contract",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 7880,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 26412,
+          "cache_write": 909,
+          "output": 67,
+          "reasoning": 0,
+          "model_input": 27325,
+          "cost": 0.0055917,
+          "ms": 1712,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 27321,
+          "cache_write": 3332,
+          "output": 796,
+          "reasoning": 0,
+          "model_input": 30655,
+          "cost": 0.0190261,
+          "ms": 6154,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 1
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T04-opencode-plugin",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 11264,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 30653,
+          "cache_write": 856,
+          "output": 144,
+          "reasoning": 0,
+          "model_input": 31513,
+          "cost": 0.0066533,
+          "ms": 2046,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 31509,
+          "cache_write": 22490,
+          "output": 1142,
+          "reasoning": 0,
+          "model_input": 54001,
+          "cost": 0.0707999,
+          "ms": 9202,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 2
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T05-core-api",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 26566,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 53999,
+          "cache_write": 1199,
+          "output": 147,
+          "reasoning": 0,
+          "model_input": 55202,
+          "cost": 0.0098754,
+          "ms": 2224,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 55198,
+          "cache_write": 12579,
+          "output": 417,
+          "reasoning": 0,
+          "model_input": 67779,
+          "cost": 0.0411413,
+          "ms": 4285,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 67777,
+          "cache_write": 2391,
+          "output": 214,
+          "reasoning": 0,
+          "model_input": 70170,
+          "cost": 0.0148992,
+          "ms": 2523,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 70168,
+          "cache_write": 1499,
+          "output": 231,
+          "reasoning": 0,
+          "model_input": 71669,
+          "cost": 0.0130783,
+          "ms": 2866,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 71667,
+          "cache_write": 1204,
+          "output": 289,
+          "reasoning": 0,
+          "model_input": 72873,
+          "cost": 0.0130707,
+          "ms": 3230,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 72871,
+          "cache_write": 1915,
+          "output": 1613,
+          "reasoning": 0,
+          "model_input": 74788,
+          "cost": 0.0282086,
+          "ms": 11411,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 6
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T06-design-docs",
+      "kind": "explore",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 20719,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 74786,
+          "cache_write": 1680,
+          "output": 87,
+          "reasoning": 0,
+          "model_input": 76470,
+          "cost": 0.0125566,
+          "ms": 2026,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 76466,
+          "cache_write": 519,
+          "output": 362,
+          "reasoning": 0,
+          "model_input": 76987,
+          "cost": 0.0125681,
+          "ms": 3003,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "bash",
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 76985,
+          "cache_write": 7526,
+          "output": 269,
+          "reasoning": 0,
+          "model_input": 84513,
+          "cost": 0.0292075,
+          "ms": 3205,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 84511,
+          "cache_write": 2030,
+          "output": 198,
+          "reasoning": 0,
+          "model_input": 86543,
+          "cost": 0.0155101,
+          "ms": 2553,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 86541,
+          "cache_write": 2942,
+          "output": 143,
+          "reasoning": 0,
+          "model_input": 89485,
+          "cost": 0.0174431,
+          "ms": 2336,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 89483,
+          "cache_write": 2237,
+          "output": 902,
+          "reasoning": 0,
+          "model_input": 91722,
+          "cost": 0.0235648,
+          "ms": 7561,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 8
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T07-plan",
+      "kind": "plan",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 48358,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 91720,
+          "cache_write": 1100,
+          "output": 1472,
+          "reasoning": 0,
+          "model_input": 92824,
+          "cost": 0.02665,
+          "ms": 11849,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 92820,
+          "cache_write": 3900,
+          "output": 5053,
+          "reasoning": 0,
+          "model_input": 96722,
+          "cost": 0.069566,
+          "ms": 36492,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 1
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T08-build-relevance",
+      "kind": "build",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 76057,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 96720,
+          "cache_write": 5248,
+          "output": 435,
+          "reasoning": 0,
+          "model_input": 101972,
+          "cost": 0.02715,
+          "ms": 4179,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "todowrite",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 101968,
+          "cache_write": 3077,
+          "output": 286,
+          "reasoning": 0,
+          "model_input": 105047,
+          "cost": 0.0207533,
+          "ms": 3128,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 105045,
+          "cache_write": 1574,
+          "output": 429,
+          "reasoning": 0,
+          "model_input": 106621,
+          "cost": 0.0187335,
+          "ms": 4549,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 106619,
+          "cache_write": 817,
+          "output": 2125,
+          "reasoning": 0,
+          "model_input": 107438,
+          "cost": 0.0339584,
+          "ms": 17633,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 107436,
+          "cache_write": 2155,
+          "output": 1807,
+          "reasoning": 0,
+          "model_input": 109593,
+          "cost": 0.0342051,
+          "ms": 10967,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "write",
+            "write",
+            "write"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 109591,
+          "cache_write": 1909,
+          "output": 2191,
+          "reasoning": 0,
+          "model_input": 111502,
+          "cost": 0.0376456,
+          "ms": 13575,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "write",
+            "write",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 111500,
+          "cache_write": 3195,
+          "output": 1557,
+          "reasoning": 0,
+          "model_input": 114697,
+          "cost": 0.0347115,
+          "ms": 10537,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "edit",
+            "edit",
+            "edit",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 114695,
+          "cache_write": 1621,
+          "output": 380,
+          "reasoning": 0,
+          "model_input": 116318,
+          "cost": 0.019326,
+          "ms": 3976,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 116316,
+          "cache_write": 401,
+          "output": 936,
+          "reasoning": 0,
+          "model_input": 116719,
+          "cost": 0.0219981,
+          "ms": 7446,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "todowrite": 1,
+        "bash": 7,
+        "write": 5,
+        "edit": 3
+      },
+      "tool_errors": {
+        "bash": 1
+      },
+      "denied": 1,
+      "files_written": 8,
+      "test_runs": [
+        {
+          "passed": 1,
+          "failed": 2,
+          "errors": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "turn_id": "T09-build-disclosure",
+      "kind": "build",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 61687,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 116717,
+          "cache_write": 1063,
+          "output": 1563,
+          "reasoning": 0,
+          "model_input": 117784,
+          "cost": 0.0299672,
+          "ms": 13096,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 117780,
+          "cache_write": 3247,
+          "output": 177,
+          "reasoning": 0,
+          "model_input": 121029,
+          "cost": 0.0216695,
+          "ms": 2358,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 121027,
+          "cache_write": 2271,
+          "output": 5857,
+          "reasoning": 0,
+          "model_input": 123300,
+          "cost": 0.0763542,
+          "ms": 33861,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "write",
+            "write",
+            "write",
+            "write",
+            "write",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 123298,
+          "cache_write": 6097,
+          "output": 375,
+          "reasoning": 0,
+          "model_input": 129397,
+          "cost": 0.0313263,
+          "ms": 4879,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 129395,
+          "cache_write": 499,
+          "output": 952,
+          "reasoning": 0,
+          "model_input": 129896,
+          "cost": 0.023711,
+          "ms": 7460,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 5,
+        "write": 5
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 5,
+      "test_runs": [
+        {
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 6,
+          "failed": 0,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "turn_id": "T10-build-graph",
+      "kind": "build",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 97584,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 129894,
+          "cache_write": 1128,
+          "output": 205,
+          "reasoning": 0,
+          "model_input": 131026,
+          "cost": 0.0178674,
+          "ms": 2792,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 131022,
+          "cache_write": 3312,
+          "output": 311,
+          "reasoning": 0,
+          "model_input": 134336,
+          "cost": 0.0244962,
+          "ms": 3285,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 134334,
+          "cache_write": 3250,
+          "output": 6329,
+          "reasoning": 0,
+          "model_input": 137586,
+          "cost": 0.0848524,
+          "ms": 40788,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "write",
+            "write",
+            "write"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 137584,
+          "cache_write": 6459,
+          "output": 2663,
+          "reasoning": 0,
+          "model_input": 144045,
+          "cost": 0.0565399,
+          "ms": 16502,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "write",
+            "write",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 144043,
+          "cache_write": 2779,
+          "output": 327,
+          "reasoning": 0,
+          "model_input": 146824,
+          "cost": 0.0246258,
+          "ms": 3607,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 146822,
+          "cache_write": 1615,
+          "output": 350,
+          "reasoning": 0,
+          "model_input": 148439,
+          "cost": 0.0222237,
+          "ms": 4092,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 148437,
+          "cache_write": 559,
+          "output": 2403,
+          "reasoning": 0,
+          "model_input": 148998,
+          "cost": 0.0402752,
+          "ms": 14715,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "write",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 148996,
+          "cache_write": 2520,
+          "output": 445,
+          "reasoning": 0,
+          "model_input": 151518,
+          "cost": 0.0256536,
+          "ms": 4820,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "edit",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 151516,
+          "cache_write": 530,
+          "output": 985,
+          "reasoning": 0,
+          "model_input": 152048,
+          "cost": 0.0263306,
+          "ms": 6918,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 8,
+        "write": 6,
+        "edit": 1
+      },
+      "tool_errors": {
+        "bash": 1
+      },
+      "denied": 1,
+      "files_written": 7,
+      "test_runs": [
+        {
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "turn_id": "T11-all-three",
+      "kind": "build",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 78995,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 152046,
+          "cache_write": 1087,
+          "output": 3135,
+          "reasoning": 0,
+          "model_input": 153137,
+          "cost": 0.0492801,
+          "ms": 20618,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "write",
+            "write",
+            "write"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 153133,
+          "cache_write": 3307,
+          "output": 2306,
+          "reasoning": 0,
+          "model_input": 156442,
+          "cost": 0.0466448,
+          "ms": 15113,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "write",
+            "write",
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 156440,
+          "cache_write": 2824,
+          "output": 227,
+          "reasoning": 0,
+          "model_input": 159266,
+          "cost": 0.024978,
+          "ms": 8672,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 159264,
+          "cache_write": 2212,
+          "output": 2029,
+          "reasoning": 0,
+          "model_input": 161478,
+          "cost": 0.0417504,
+          "ms": 13145,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "edit",
+            "edit",
+            "edit"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 161476,
+          "cache_write": 1665,
+          "output": 362,
+          "reasoning": 0,
+          "model_input": 163143,
+          "cost": 0.0239341,
+          "ms": 10790,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 163141,
+          "cache_write": 1722,
+          "output": 216,
+          "reasoning": 0,
+          "model_input": 164865,
+          "cost": 0.0227831,
+          "ms": 3113,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 164863,
+          "cache_write": 551,
+          "output": 991,
+          "reasoning": 0,
+          "model_input": 165416,
+          "cost": 0.0277778,
+          "ms": 7468,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 7,
+        "write": 5,
+        "edit": 3
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 8,
+      "test_runs": [
+        {
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "turn_id": "T12-validate",
+      "kind": "verify",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 20103,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 165414,
+          "cache_write": 1078,
+          "output": 519,
+          "reasoning": 0,
+          "model_input": 166496,
+          "cost": 0.0244344,
+          "ms": 5475,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 166492,
+          "cache_write": 2086,
+          "output": 595,
+          "reasoning": 0,
+          "model_input": 168580,
+          "cost": 0.0278182,
+          "ms": 6930,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 168578,
+          "cache_write": 1220,
+          "output": 161,
+          "reasoning": 0,
+          "model_input": 169800,
+          "cost": 0.0215218,
+          "ms": 2296,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 169798,
+          "cache_write": 181,
+          "output": 530,
+          "reasoning": 0,
+          "model_input": 169981,
+          "cost": 0.0227363,
+          "ms": 5356,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 4
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": [
+        {
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "turn_id": "T13-probe-hermes",
+      "kind": "probe",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 4495,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 169979,
+          "cache_write": 591,
+          "output": 440,
+          "reasoning": 0,
+          "model_input": 170574,
+          "cost": 0.0228834,
+          "ms": 4472,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {},
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": [],
+      "answer_text": "**Package:** `hermes-all-three`, in `hermes-plugins/`. It is one composed `ContextEngine` that applies A, B and D together through a single `select_context`, `get_tool_schemas` and `on_turn_complete`. You select it with `context.engine: all-three` in `config.yaml`. I did not read its engine code. I only saw its file list and its `pyproject.toml` dependencies on the three practice packages.\n\n**What stops three separate plugins from being active:** the Hermes plugin registry allows only one context engine.\n- `PluginRegistration.register_context_engine` (`hermes_cli/plugins.py:717`) refuses a second one. The code is `if self._manager._context_engine is not None: logger.warning(...); return`. It logs a warning and silently ignores the second registration.\n- This comes from `hermes-plugins/CONTRACT.md` (line 89 onward), which says \"all three\" must be one composed engine, not three co-active plugins.\n- The host also uses a single selected engine instance, `agent.context_compressor` (`agent/agent_init.py:2138`), and `context.engine` takes one name.\n\nThe `hermes-plugins/README.md` explains this under \"Why four packages — Hermes is single-select\". The LangGraph packages can stack three middlewares instead, because LangChain has no such limit."
+    },
+    {
+      "turn_id": "T14-probe-opencode",
+      "kind": "probe",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 4420,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 170570,
+          "cache_write": 490,
+          "output": 378,
+          "reasoning": 0,
+          "model_input": 171064,
+          "cost": 0.02207,
+          "ms": 4385,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {},
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": [],
+      "answer_text": "**Interval:** 120,000 ms (120 s). The constant is `HEARTBEAT_INTERVAL_MS = 120_000` at `.opencode/plugins/context-engineering.ts:138`, and `setInterval` at line 185 uses it.\n\n**Why it's needed:**\n- The bridge keeps each session's retention lease in memory only. The lease lapses after 300 s without a sign of life, and the stored reference expires after another 300 s (`.opencode/README.md:107-109`).\n- A filtered result's `reference_id` has to stay readable by `retrieve_context` many turns, and minutes, later. A long silence would otherwise expire the original.\n- Every bridge request for a session already renews its lease. The heartbeat covers quiet periods with no requests. It sends `{type: \"heartbeat\", session_id}` for each session in `liveSessions`.\n- 120 s is well inside the 300 s window, so a missed beat or a slow response doesn't lose the lease. The timer is `unref`'d so it doesn't keep the process alive.\n- When a session is deleted, the plugin removes it from the set, so beats stop for it."
+    },
+    {
+      "turn_id": "T15-readme",
+      "kind": "edit",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 17947,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 171060,
+          "cache_write": 422,
+          "output": 144,
+          "reasoning": 0,
+          "model_input": 171486,
+          "cost": 0.019609,
+          "ms": 2625,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 171482,
+          "cache_write": 1530,
+          "output": 112,
+          "reasoning": 0,
+          "model_input": 173014,
+          "cost": 0.0220972,
+          "ms": 2027,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 173012,
+          "cache_write": 1305,
+          "output": 1164,
+          "reasoning": 0,
+          "model_input": 174319,
+          "cost": 0.0322077,
+          "ms": 9217,
+          "finish": "tool-calls",
+          "error": null,
+          "tools": [
+            "edit",
+            "bash"
+          ]
+        },
+        {
+          "input": 2,
+          "cache_read": 174317,
+          "cache_write": 1981,
+          "output": 332,
+          "reasoning": 0,
+          "model_input": 176300,
+          "cost": 0.0257082,
+          "ms": 4036,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {
+        "bash": 3,
+        "edit": 1
+      },
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 1,
+      "test_runs": []
+    },
+    {
+      "turn_id": "T16-summary",
+      "kind": "summary",
+      "host_signal": "success",
+      "error_code": null,
+      "wall_ms": 15942,
+      "calls": [
+        {
+          "input": 4,
+          "cache_read": 176298,
+          "cache_write": 367,
+          "output": 2215,
+          "reasoning": 0,
+          "model_input": 176669,
+          "cost": 0.0407053,
+          "ms": 15909,
+          "finish": "stop",
+          "error": null,
+          "tools": []
+        }
+      ],
+      "tool_counts": {},
+      "tool_errors": {},
+      "denied": 0,
+      "files_written": 0,
+      "test_runs": []
+    }
+  ],
+  "totals": {
+    "model_calls": 65,
+    "input": 162,
+    "cache_read": 7118708,
+    "cache_write": 176665,
+    "output": 64505,
+    "reasoning": 0,
+    "model_input": 7295535,
+    "cost": 1.7989072999999998
+  },
+  "graph_durability": null
+}

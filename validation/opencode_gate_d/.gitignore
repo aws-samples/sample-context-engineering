@@ -1,0 +1,3 @@
+# Live request evidence of the A+D campaigns (about 7 MB), regenerated from a campaign run directory.
+results/live-*.json
+results/replay/*.err

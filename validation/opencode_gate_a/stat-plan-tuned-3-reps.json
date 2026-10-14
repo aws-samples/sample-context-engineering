@@ -1,0 +1,10 @@
+{
+  "confidence_level": 0.95,
+  "paired_unit": "per_turn",
+  "method": "paired-descriptive-v1-tuned-a-4000-600-1000",
+  "decision_rule": "gate-a-thresholds-v1",
+  "minimum_paired_repetitions": 3,
+  "approval_id": "user-approved-ce60-tuned-2026",
+  "approval_actor": "owner",
+  "digest": "sha256:611a641d202fdc26c0f6b0723667e8d96d13eceb5f9b434d9f86ec0d8a14d5c4"
+}

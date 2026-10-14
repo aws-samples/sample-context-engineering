@@ -1,0 +1,10 @@
+{
+  "confidence_level": 0.95,
+  "paired_unit": "per_turn",
+  "method": "paired-descriptive-v1-mcp-ce60-5.5-v2-question-webfetch-off",
+  "decision_rule": "gate-a-thresholds-v1",
+  "minimum_paired_repetitions": 3,
+  "approval_id": "user-approved-ce60-v2-5-5-2026",
+  "approval_actor": "owner",
+  "digest": "sha256:cb06d13f45ccab142d43c5a530e15c23d443832dfff26d111a4a1a91f275487b"
+}

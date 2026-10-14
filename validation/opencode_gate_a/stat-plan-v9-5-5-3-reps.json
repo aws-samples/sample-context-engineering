@@ -1,0 +1,10 @@
+{
+  "confidence_level": 0.95,
+  "paired_unit": "per_turn",
+  "method": "paired-descriptive-v1-mcp-ce60-5.5-v9-plugin-rev2-graph-inplace-cache-aligned-d-slice-owner-waiver",
+  "decision_rule": "gate-a-thresholds-v1",
+  "minimum_paired_repetitions": 3,
+  "approval_id": "user-approved-ce60-v8-5-5-2026",
+  "approval_actor": "owner",
+  "digest": "sha256:54d296879e8c6cb0cafc424fbc92dfb219b4ddb0de2ae1db1945351a60e18025"
+}

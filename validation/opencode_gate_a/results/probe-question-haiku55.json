@@ -1,0 +1,43 @@
+{
+  "probe": "probe-question",
+  "script": ".opencode/runner/probe-question.ts",
+  "host": "opencode",
+  "host_version": "1.18.34",
+  "server_mode": "serve --pure (project MCP fixture loaded)",
+  "model": "amazon-bedrock/anthropic.claude-haiku-5-5",
+  "timeout_ms": 120000,
+  "payload_policy": "tool names, statuses, booleans and classifications only; no prompt or answer persisted",
+  "control": {
+    "tools_map": null,
+    "timed_out": true,
+    "elapsed_ms": 120011,
+    "tool_names": ["question"],
+    "last_tool": { "name": "question", "status": "running" },
+    "assistant_completed": false,
+    "classification": "blocked_question",
+    "abort_status": "ok",
+    "idle_status": "idle"
+  },
+  "variant": {
+    "tools_map": { "question": false },
+    "timed_out": false,
+    "elapsed_ms": 2091,
+    "tool_names": [],
+    "assistant_completed": true,
+    "status_after": "idle"
+  },
+  "mcp": {
+    "tools_map": { "question": false, "webfetch": false },
+    "timed_out": false,
+    "elapsed_ms": 3767,
+    "tool_names": ["ce60-fixture_list_accounts"],
+    "assistant_completed": true,
+    "status_after": "idle"
+  },
+  "cleanup": { "residual_process_count": 0, "sigkill_needed": false },
+  "verdict": {
+    "question_blocks_headless_session": true,
+    "tools_map_removes_question": true,
+    "mcp_tools_work_with_tools_map": true
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "created_files": 22,
+  "created_lines": 969,
+  "created_bytes": 35824,
+  "created_under_plugins_dir": 22,
+  "modified_tracked": [
+    "README.md"
+  ],
+  "deleted_tracked": [],
+  "touched_existing_packages": [],
+  "expected_files": 19,
+  "expected_present": 19,
+  "expected_missing": [],
+  "json_files": 9,
+  "json_ok": 9,
+  "json_bad": [],
+  "python_files": 9,
+  "python_compile_ok": 9,
+  "python_bad": [],
+  "marketplace_lists": 4,
+  "marketplace_expected": 4,
+  "readme_section_present": true,
+  "files": [
+    {
+      "path": "claude-code-plugins/.claude-plugin/marketplace.json",
+      "bytes": 1153,
+      "lines": 31
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/.claude-plugin/plugin.json",
+      "bytes": 228,
+      "lines": 6
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/README.md",
+      "bytes": 1646,
+      "lines": 25
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/hooks/context_graph.py",
+      "bytes": 3996,
+      "lines": 106
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/hooks/hooks.json",
+      "bytes": 1328,
+      "lines": 59
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/hooks/relevance_filter.py",
+      "bytes": 3000,
+      "lines": 87
+    },
+    {
+      "path": "claude-code-plugins/claude-code-all-three/hooks/tool_disclosure.py",
+      "bytes": 2837,
+      "lines": 78
+    },
+    {
+      "path": "claude-code-plugins/claude-code-context-graph/.claude-plugin/plugin.json",
+      "bytes": 248,
+      "lines": 6
+    },
+    {
+      "path": "claude-code-plugins/claude-code-context-graph/README.md",
+      "bytes": 1408,
+      "lines": 22
+    },
+    {
+      "path": "claude-code-plugins/claude-code-context-graph/hooks/context_graph.py",
+      "bytes": 3996,
+      "lines": 106
+    },
+    {
+      "path": "claude-code-plugins/claude-code-context-graph/hooks/hooks.json",
+      "bytes": 729,
+      "lines": 37
+    },
+    {
+      "path": "claude-code-plugins/claude-code-context-graph/tests/test_context_graph.py",
+      "bytes": 2629,
+      "lines": 57
+    },
+    {
+      "path": "claude-code-plugins/claude-code-progressive-tool-disclosure/.claude-plugin/plugin.json",
+      "bytes": 235,
+      "lines": 6
+    },
+    {
+      "path": "claude-code-plugins/claude-code-progressive-tool-disclosure/README.md",
+      "bytes": 946,
+      "lines": 15
+    },
+    {
+      "path": "claude-code-plugins/claude-code-progressive-tool-disclosure/hooks/hooks.json",
+      "bytes": 504,
+      "lines": 26
+    },
+    {
+      "path": "claude-code-plugins/claude-code-progressive-tool-disclosure/hooks/tool_disclosure.py",
+      "bytes": 2837,
+      "lines": 78
+    },
+    {
+      "path": "claude-code-plugins/claude-code-progressive-tool-disclosure/tests/test_tool_disclosure.py",
+      "bytes": 2145,
+      "lines": 62
+    },
+    {
+      "path": "claude-code-plugins/claude-code-relevance-filter/.claude-plugin/plugin.json",
+      "bytes": 209,
+      "lines": 6
+    },
+    {
+      "path": "claude-code-plugins/claude-code-relevance-filter/README.md",
+      "bytes": 794,
+      "lines": 13
+    },
+    {
+      "path": "claude-code-plugins/claude-code-relevance-filter/hooks/hooks.json",
+      "bytes": 284,
+      "lines": 16
+    },
+    {
+      "path": "claude-code-plugins/claude-code-relevance-filter/hooks/relevance_filter.py",
+      "bytes": 3000,
+      "lines": 87
+    },
+    {
+      "path": "claude-code-plugins/claude-code-relevance-filter/tests/test_relevance_filter.py",
+      "bytes": 1672,
+      "lines": 40
+    }
+  ]
+}

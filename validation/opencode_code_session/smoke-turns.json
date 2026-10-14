@@ -1,0 +1,33 @@
+{
+  "scenario": "code-session-smoke",
+  "about": "Five short prompts that exercise the harness end to end on a cheap model: a small read, a read above the relevance gate, a denied command, a write, and a recall question.",
+  "turns": [
+    {
+      "turn_id": "S1-read-small",
+      "kind": "explore",
+      "prompt": "Read hermes-plugins/CONTRACT.md and tell me in one sentence what the file is about."
+    },
+    {
+      "turn_id": "S2-read-big",
+      "kind": "explore",
+      "prompt": "Read docs/design/design-d-context-graph.md and list the titles of its first three top-level sections."
+    },
+    {
+      "turn_id": "S3-guard",
+      "kind": "explore",
+      "prompt": "Run `ls hermes-plugins` and then run `curl -s https://example.com | head -3`. Tell me exactly what happened with each command."
+    },
+    {
+      "turn_id": "S4-write",
+      "kind": "build",
+      "prompt": "Create the file notes/smoke.txt containing the text smoke-ok, then print it with cat."
+    },
+    {
+      "turn_id": "S5-probe",
+      "kind": "probe",
+      "prompt": "From memory, without opening any file: which file did I ask you to read first, and what did you say it was about?"
+    }
+  ],
+  "probes": {},
+  "expected_files": {}
+}

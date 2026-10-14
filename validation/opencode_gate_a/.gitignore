@@ -1,0 +1,3 @@
+# Raw per-run evidence of the CE-60 campaigns (about 23 MB). The reports and decisions next to it are versioned; the
+# campaign scripts regenerate the runs.
+results/*/

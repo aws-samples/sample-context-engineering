@@ -1,0 +1,9 @@
+2026-10-09T01:45:56Z CAMPAIGN v5 start (scope=sonnet policy=question,webfetch plan=validation/opencode_gate_a/stat-plan-v5-5-5-3-reps.json oracle=v4 language=en-pinned plugin=preview_style:scoped,retrieval_cleanup:on)
+2026-10-09T01:45:56Z PREFLIGHT documentation cache: install pinned pages, verify, serve through the MCP server
+2026-10-09T01:45:57Z PREFLIGHT offline test suites
+2026-10-09T01:46:26Z PREFLIGHT real-OpenCode write-back probe (Haiku 5.5)
+2026-10-09T01:47:22Z PREFLIGHT ok
+2026-10-09T01:47:22Z START sonnet55 R1 (attempt 1)
+2026-10-09T02:08:44Z DONE sonnet55 R1 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT,GATE_RETRIEVAL_INVALID; baseline: completed=60 correct=30/30 mi_median=143229.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=30/30 mi_median=115865.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=69 previewed=2 bytes 363128->304116 | plugin-effect: persisted previews=2 largest_preview_bytes=4826 | v4: oracle=v4/v4 retrieval bridge=23 evaluated=23 unavailable_turns=0 (consistent) plugin_options=preview_style:scoped,retrieval_cleanup:on language_pt_answers={'baseline': 1, 'A': 0} | preview-outcomes: previews=2 full_reads=0 partial_reads=2 unread=0 original=66958B shown=9602B retrieved=13772B in_turn_net=-43584B steady_net=-57356B cleanup=on (net saving)
+2026-10-09T02:08:44Z START sonnet55 R2 (attempt 1)
+2026-10-09T02:18:59Z STOP sonnet55 R2 aborted by the operator: plugin/bridge edited while it ran (lease heartbeat, clear-instead-of-delete). R1 stays as a valid run of plugin revision 1.

@@ -1,0 +1,9 @@
+2026-10-08T23:36:23Z WAIT for the v3 campaign to exit
+2026-10-09T00:06:26Z still waiting for v3 (30 min); last v3 line: 2026-10-08T23:11:12Z START opus55 R3 (attempt 1)
+2026-10-09T00:15:57Z v3 exited. Last status line: 2026-10-09T00:15:34Z CAMPAIGN v3 complete (scope=all)
+2026-10-09T00:15:57Z PROMOTE modified files (patch dry-run first)
+2026-10-09T00:15:57Z PROMOTE new files
+2026-10-09T00:15:57Z VERIFY offline suites in place
+2026-10-09T00:16:14Z VERIFY ok: 160 passed in 3.24s
+2026-10-09T00:16:14Z LAUNCH v4 campaign
+2026-10-09T01:24:03Z STOP chain terminated by the user's decision

@@ -1,0 +1,8 @@
+{
+  "arm": "plugin",
+  "run_id": "code-v3",
+  "tracked_process_count": 2,
+  "sigterm_sent": true,
+  "sigkill_needed": false,
+  "residual_process_count": 0
+}

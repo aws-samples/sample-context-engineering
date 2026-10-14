@@ -1,0 +1,11 @@
+2026-10-08T16:42:51Z CAMPAIGN v2 start (policy=question,webfetch, stat plan=validation/opencode_gate_a/stat-plan-v2-5-5-3-reps.json)
+2026-10-08T16:42:51Z START variant question-off truncated at F002-filler
+2026-10-08T16:50:54Z DONE variant baseline: sent=19 timeouts=0 classes=[]; A: sent=19 timeouts=0 classes=[]
+2026-10-08T16:50:54Z START sonnet55 R1
+2026-10-08T17:07:07Z DONE sonnet55 R1 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=29/30 mi_median=126906.0 timeouts=0; A: completed=60 correct=29/30 mi_median=124772.5 timeouts=0
+2026-10-08T17:07:07Z START sonnet55 R2
+2026-10-08T17:23:21Z DONE sonnet55 R2 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=29/30 mi_median=125938.0 timeouts=0; A: completed=60 correct=29/30 mi_median=128603.0 timeouts=0
+2026-10-08T17:23:21Z START sonnet55 R3
+2026-10-08T17:41:01Z DONE sonnet55 R3 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=28/30 mi_median=125449.5 timeouts=0; A: completed=60 correct=29/30 mi_median=135807.0 timeouts=0
+2026-10-08T17:41:01Z START opus55 R1
+2026-10-08T19:13:20Z STOP opus55 R1 rc=0 gate=no_go reasons=GATE_COMPLETION_REGRESSION,GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=25/30 mi_median=131199.5 timeouts=0; A: completed=59 correct=27/30 mi_median=155741.0 timeouts=0

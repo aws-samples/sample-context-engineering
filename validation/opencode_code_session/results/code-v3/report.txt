@@ -1,0 +1,29 @@
+                                                      baseline                plugin
+turns ok / sent                                          16/16                 16/16
+model calls                                                 59                    77
+input tokens (read+write+uncached)                   6,384,182             2,171,139
+  cache read                                         6,218,907             1,954,249
+  cache write                                          165,125               216,704
+output tokens                                           55,338                50,618
+dollars (OpenCode cost counter)                          1.588                 1.244
+input per call, median / peak                116,044 / 165,127       25,369 / 45,127
+wall time (s)                                            439.4                 414.6
+files written (write/edit)                                  22                    22
+denied calls                                                 1                     3
+plugin vs baseline: model_input -66.0%, dollars -21.7%, model_calls +30.5%, output -8.5%, wall_s -5.6%, call_input_median -78.1%, call_input_peak -72.7%
+
+[baseline] tools: {'bash': 35, 'write': 20, 'read': 19, 'edit': 2, 'glob': 1, 'grep': 1}
+[baseline] tool errors: {'bash': 1}
+[baseline] test runs: [('T08', 3, 0, 0), ('T09', 3, 0, 0), ('T09', 6, 0, 0), ('T10', 3, 0, 0), ('T10', 9, 0, 0), ('T11', 12, 0, 4), ('T11', 12, 0, 0), ('T12', 12, 0, 0)]
+[baseline] probes: {T13: ok (tools {}), T14: ok (tools {})}
+[baseline] work: created 23 files / 1058 lines; expected present 19/19; json ok 9/9; python compiles 10/10; marketplace lists 4/4; README section True; touched existing packages []
+
+[plugin] tools: {'bash': 48, 'write': 20, 'read': 18, 'grep': 4, 'expand_card': 2, 'edit': 2, 'glob': 1}
+[plugin] tool errors: {'bash': 3}
+[plugin] test runs: [('T08', 3, 0, 0), ('T09', 3, 0, 0), ('T09', 3, 0, 0), ('T10', 3, 0, 0), ('T11', 12, 0, 0), ('T12', 12, 0, 0)]
+[plugin] probes: {T13: ok (tools {'expand_card': 1}), T14: ok (tools {'grep': 1, 'read': 2})}
+[plugin] work: created 23 files / 985 lines; expected present 19/19; json ok 9/9; python compiles 10/10; marketplace lists 4/4; README section True; touched existing packages []
+
+[plugin] mode=a+d options=preview_style:scoped,retrieval_cleanup:on,plugin_rev:2,graph:on,graph_mode:inplace,graph_keep:0,graph_dialogue:0
+[plugin] practice A (bridge): {'transforms': 92, 'operations': {'skipped': 92}, 'rerank_results': {'not_attempted': 92}, 'tool_classes': {'bash': 45, 'glob': 1, 'read': 18, 'grep': 4, 'expand_card': 2, 'write': 20, 'edit': 2}, 'previewed_by_class': {}, 'preview_bytes_saved': 0}
+[plugin] practice D (graph): {'requests': 77, 'checked': 77, 'stored_prefix_equal': 77, 'mismatched_requests': [], 'operations': {'unchanged': 4, 'projected': 73}, 'removed_messages_total': 2704, 'rejected_requests': 0, 'graph_tool_calls': {'expand_card': 2}, 'stored_graph_synthetic_messages': 0}

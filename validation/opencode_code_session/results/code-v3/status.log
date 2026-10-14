@@ -1,0 +1,8 @@
+2026-10-14T11:22:02Z RUN code-v3 start (model=amazon-bedrock/anthropic.claude-sonnet-5-5 turns=validation/opencode_code_session/prompts.json arms=[baseline plugin] plugin_mode=a+d max_turns=all)
+2026-10-14T11:22:18Z SANDBOX ready tree dce54c1964cdcaabf2054137e35f2a8aa7c90094 files 420
+2026-10-14T11:22:18Z START baseline (attempt 1)
+2026-10-14T11:29:39Z DONE baseline rc=0 [code] baseline done: 16/16 turns, 0 not successful
+2026-10-14T11:29:40Z START plugin (attempt 1)
+2026-10-14T11:36:36Z DONE plugin rc=0 [code] plugin done: 16/16 turns, 0 not successful
+2026-10-14T11:36:38Z CLEANUP sandboxes removed
+2026-10-14T11:36:38Z RUN code-v3 complete rc=0

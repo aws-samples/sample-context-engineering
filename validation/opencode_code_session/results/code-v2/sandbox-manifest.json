@@ -1,0 +1,11 @@
+{
+  "src": "<repository>",
+  "arms": [
+    "plugin",
+    "baseline"
+  ],
+  "tree": "f7f33588fe3bf510e23613825fb1d53ce70daeb8",
+  "commits": 1,
+  "tracked_files": 428,
+  "bytes": 61192586
+}

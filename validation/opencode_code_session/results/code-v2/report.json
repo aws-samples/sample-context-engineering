@@ -1,0 +1,298 @@
+{
+  "run": "code-v2",
+  "arms": {
+    "baseline": {
+      "turns_sent": 16,
+      "turns_ok": 16,
+      "timeouts": 0,
+      "errors": 0,
+      "model_calls": 65,
+      "model_input": 7295535,
+      "input_uncached": 162,
+      "cache_read": 7118708,
+      "cache_write": 176665,
+      "output": 64505,
+      "reasoning": 0,
+      "dollars": 1.7989,
+      "call_input_median": 116719,
+      "call_input_peak": 176669,
+      "wall_s": 516.6,
+      "tool_counts": {
+        "bash": 57,
+        "write": 21,
+        "edit": 8,
+        "todowrite": 1
+      },
+      "tool_errors": {
+        "bash": 2
+      },
+      "denied_calls": 2,
+      "files_written": 29,
+      "test_runs": [
+        {
+          "turn": "T08-build-relevance",
+          "passed": 1,
+          "failed": 2,
+          "errors": 0
+        },
+        {
+          "turn": "T08-build-relevance",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 6,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T12-validate",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T12-validate",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        }
+      ],
+      "probes": {
+        "T13-probe-hermes": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {}
+        },
+        "T14-probe-opencode": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {}
+        }
+      },
+      "work": {
+        "created_files": 23,
+        "created_lines": 998,
+        "created_bytes": 43506,
+        "created_under_plugins_dir": 23,
+        "modified_tracked": [
+          "README.md"
+        ],
+        "deleted_tracked": [],
+        "touched_existing_packages": [],
+        "expected_files": 19,
+        "expected_present": 19,
+        "expected_missing": [],
+        "json_files": 9,
+        "json_ok": 9,
+        "json_bad": [],
+        "python_files": 10,
+        "python_compile_ok": 10,
+        "python_bad": [],
+        "marketplace_lists": 4,
+        "marketplace_expected": 4,
+        "readme_section_present": true
+      }
+    },
+    "plugin": {
+      "turns_sent": 16,
+      "turns_ok": 16,
+      "timeouts": 0,
+      "errors": 0,
+      "model_calls": 75,
+      "model_input": 2135767,
+      "input_uncached": 182,
+      "cache_read": 1926403,
+      "cache_write": 209182,
+      "output": 52504,
+      "reasoning": 0,
+      "dollars": 1.241,
+      "call_input_median": 26399,
+      "call_input_peak": 47080,
+      "wall_s": 420.1,
+      "tool_counts": {
+        "bash": 49,
+        "read": 22,
+        "write": 17,
+        "edit": 8,
+        "grep": 3,
+        "glob": 2,
+        "expand_card": 1
+      },
+      "tool_errors": {
+        "bash": 6
+      },
+      "denied_calls": 6,
+      "files_written": 25,
+      "test_runs": [
+        {
+          "turn": "T08-build-relevance",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 0,
+          "failed": 3,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 4,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 10,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T12-validate",
+          "passed": 10,
+          "failed": 0,
+          "errors": 0
+        }
+      ],
+      "probes": {
+        "T13-probe-hermes": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {
+            "expand_card": 1
+          }
+        },
+        "T14-probe-opencode": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {
+            "grep": 1,
+            "read": 1
+          }
+        }
+      },
+      "work": {
+        "created_files": 22,
+        "created_lines": 969,
+        "created_bytes": 35824,
+        "created_under_plugins_dir": 22,
+        "modified_tracked": [
+          "README.md"
+        ],
+        "deleted_tracked": [],
+        "touched_existing_packages": [],
+        "expected_files": 19,
+        "expected_present": 19,
+        "expected_missing": [],
+        "json_files": 9,
+        "json_ok": 9,
+        "json_bad": [],
+        "python_files": 9,
+        "python_compile_ok": 9,
+        "python_bad": [],
+        "marketplace_lists": 4,
+        "marketplace_expected": 4,
+        "readme_section_present": true
+      },
+      "plugin_mode": "a+d",
+      "plugin_options": "preview_style:scoped,retrieval_cleanup:on,plugin_rev:2,graph:on,graph_mode:inplace,graph_keep:0,graph_dialogue:0",
+      "bridge": {
+        "transforms": 96,
+        "operations": {
+          "skipped": 96
+        },
+        "rerank_results": {
+          "not_attempted": 96
+        },
+        "tool_classes": {
+          "glob": 2,
+          "bash": 43,
+          "read": 22,
+          "grep": 3,
+          "write": 17,
+          "edit": 8,
+          "expand_card": 1
+        },
+        "previewed_by_class": {},
+        "preview_bytes_saved": 0
+      },
+      "graph": {
+        "requests": 75,
+        "checked": 75,
+        "stored_prefix_equal": 75,
+        "mismatched_requests": [],
+        "operations": {
+          "unchanged": 2,
+          "projected": 73
+        },
+        "removed_messages_total": 2552,
+        "rejected_requests": 0,
+        "graph_tool_calls": {
+          "expand_card": 1
+        },
+        "stored_graph_synthetic_messages": 0
+      }
+    }
+  },
+  "delta_pct": {
+    "model_input": -70.7,
+    "dollars": -31.0,
+    "model_calls": 15.4,
+    "output": -18.6,
+    "wall_s": -18.7,
+    "call_input_median": -77.4,
+    "call_input_peak": -73.4
+  }
+}
