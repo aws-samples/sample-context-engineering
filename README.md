@@ -10,7 +10,7 @@
 Three **context-engineering practices** for LLM agents: techniques that keep an agent's working context
 small and relevant as a conversation grows, without losing what the task needs.
 
-They ship for two frameworks, over one shared core:
+They ship for three frameworks and one coding agent, over one shared core:
 
 - **[Strands Agents](https://strandsagents.com)** — three plugins that install next to an unmodified
   `strands-agents` from PyPI.
@@ -18,7 +18,10 @@ They ship for two frameworks, over one shared core:
   middlewares for LangChain v1.
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** — four `ContextEngine` plugins (three
   practices + one composed engine, since Hermes is single-select).
-- **[`context-core`](context-core/)** — the framework-agnostic logic both use. It imports no agent
+- **[OpenCode](https://opencode.ai)**, a terminal coding agent — one plugin ([`.opencode/`](.opencode/)) that
+  carries the relevance filter and, **experimentally**, the context graph. Progressive tool disclosure is not
+  ported.
+- **[`context-core`](context-core/)** — the framework-agnostic logic they all use. It imports no agent
   framework.
 
 On a 60-turn benchmark with prompt caching off, the three practices together send **75–84% fewer
@@ -59,6 +62,9 @@ Each package is independent: install one, two or all three. They compose because
 moments: the filter on a tool result before it enters the history, disclosure on the tool list, the
 graph on a history that already exists.
 
+OpenCode is a coding agent, not a framework you build an agent in, so it has no column above: A and D ship together as
+one plugin, [`.opencode/`](.opencode/README.md), and B is not ported there.
+
 ## How to install and use them
 
 | Framework | Guide | Benchmark |
@@ -66,11 +72,13 @@ graph on a history that already exists.
 | Strands Agents | **[`how-to/02-community-plugins-agent-sample.md`](how-to/02-community-plugins-agent-sample.md)** | [`validation/community-plugin-A-B-D/`](validation/community-plugin-A-B-D/README.md) |
 | LangChain / LangGraph | **[`how-to/03-langgraph-plugins-agent-sample.md`](how-to/03-langgraph-plugins-agent-sample.md)** | [`validation/plugins-langgraph/`](validation/plugins-langgraph/README.md) |
 | Hermes Agent | **[`how-to/04-hermes-plugins-agent-sample.md`](how-to/04-hermes-plugins-agent-sample.md)** | [`validation/plugins-hermes/`](validation/plugins-hermes/README.md) |
+| OpenCode (coding agent) | **[`how-to/05-opencode-plugin.md`](how-to/05-opencode-plugin.md)** | [`validation/opencode_gate_a/`](validation/opencode_gate_a/README.md), [`validation/opencode_code_session/`](validation/opencode_code_session/README.md) |
 
-Each guide goes from nothing to a working agent: prerequisites, a minimal agent with one oversized tool,
+The framework guides go from nothing to a working agent: prerequisites, a minimal agent with one oversized tool,
 each practice on its own, then all three together, with the constructor arguments the benchmark uses. Each
 also lists the things that fail silently when the three are combined. **Read those before wiring all
-three.** The ones that apply to both frameworks:
+three.** The OpenCode guide has no agent to write: you copy one plugin into a project and open the filter's
+admission, and it lists its own pitfalls. The ones that apply to the frameworks:
 
 1. **The relevance threshold is a position in a distribution, not a number.** The package default of
    `0.5` rejects every chunk with `cohere.rerank-v3-5`, whose strong matches score ~0.29. The benchmark
@@ -105,9 +113,12 @@ pip install -e context-core \
             -e hermes-plugins/hermes-context-graph \
             -e hermes-plugins/hermes-all-three \
             "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
+
+# OpenCode: the core here, then copy the plugin into your project (steps in the guide)
+pip install -e context-core
 ```
 
-Verified against `strands-agents` 1.56.0 and `langchain` 1.4.2.
+Verified against `strands-agents` 1.56.0, `langchain` 1.4.2 and OpenCode 1.18.34.
 
 ## The results
 
@@ -234,6 +245,7 @@ hermes-plugins/
   hermes-progressive-tool-disclosure/     practice B for Hermes Agent
   hermes-context-graph/                   practice D for Hermes Agent
   hermes-all-three/                       the composed engine (Hermes is single-select)
+.opencode/                                practice A and, experimentally, D as one OpenCode plugin
 docs/design/
   design.md         the concepts, framework-agnostic
   design-a-*.md     idea A — relevance filtering (idea + example)
@@ -244,16 +256,22 @@ how-to/
   02-community-plugins-agent-sample.md    Strands: install and use the three plugins
   03-langgraph-plugins-agent-sample.md    LangGraph: install and use the three middlewares
   04-hermes-plugins-agent-sample.md       Hermes: install and select the four engines
+  05-opencode-plugin.md                   OpenCode: install the plugin, open the filter, turn the graph on
 validation/
   community-plugin-A-B-D/   the benchmark for the Strands plugins
   plugins-langgraph/        the benchmark for the LangGraph middlewares
   plugins-hermes/           the benchmark for the Hermes engines
+  opencode_gate_a/          CE-60 on OpenCode, and the Gate A evaluator for the filter
+  opencode_gate_d/          Gate D for the context graph on OpenCode
+  opencode_code_session/    a scripted real coding session on OpenCode, with and without the plugin
 ```
 
 - **Read the ideas:** start at [`docs/design/design.md`](docs/design/design.md), then the per-practice
   docs.
-- **Run an agent:** the [Strands guide](how-to/02-community-plugins-agent-sample.md) or the
-  [LangGraph guide](how-to/03-langgraph-plugins-agent-sample.md).
+- **Run an agent:** the [Strands guide](how-to/02-community-plugins-agent-sample.md), the
+  [LangGraph guide](how-to/03-langgraph-plugins-agent-sample.md), the
+  [Hermes guide](how-to/04-hermes-plugins-agent-sample.md) or, for a coding agent, the
+  [OpenCode guide](how-to/05-opencode-plugin.md).
 - **Compare the models:** [`BENCHMARK.md`](BENCHMARK.md), one section per model.
 - **Reproduce the numbers:** [`validation/community-plugin-A-B-D/README.md`](validation/community-plugin-A-B-D/README.md)
   or [`validation/plugins-langgraph/README.md`](validation/plugins-langgraph/README.md). Re-rendering a
@@ -275,19 +293,28 @@ This content is a **research validation harness**, not a production application.
 - **Synthetic data only** — All financial scenario data (FinBank, TestBank, NeoBank, account numbers,
   balances) is synthetic, computed by `validation/community-plugin-A-B-D/src/ground_truth.py`. No real
   customer or personal data is used.
-- **Test coverage is uneven.** The packages carry **1,588 passing tests**: `context-core` 449; Strands
+- **Test coverage is uneven.** The packages carry **1,968 passing tests**: `context-core` 829 (449 for the
+  shared practices plus 380 for the OpenCode port); Strands
   `strands-context-graph` 612, `strands-progressive-tool-disclosure` 169, `strands-relevance-filter` 145;
   LangGraph `langgraph-context-graph` 87, `langgraph-progressive-tool-disclosure` 82,
-  `langgraph-relevance-filter` 44. The Strands relevance filter's suite was written against its documented
+  `langgraph-relevance-filter` 44. The OpenCode plugin adds 179 Bun tests and its validation harnesses 227
+  pytest tests, not counted above. The Strands relevance filter's suite was written against its documented
   contract after the fact, so it verifies what the docstrings promise rather than having driven the design.
+- **OpenCode is experimental.** The relevance filter alone did not pass the OpenCode port's own pass/fail bar
+  ([Gate A](validation/opencode_gate_a/README.md): `no_go`, 1 of 3 repetitions; tokens −14 %, dollars −12 % with
+  Sonnet 5.5), and the context graph is opt-in and `experimental`. The larger figures (A + D: tokens −65 %,
+  dollars −31 % on the 60-turn scenario; −71 % and −32 % on a scripted 16-turn coding session) come from a few
+  runs on one model. See
+  [`.opencode/README.md`](.opencode/README.md) and the
+  [reports](validation/opencode_gate_a/results/ce60-v7-v9-REPORT.md).
 - **One replay per cell.** Every benchmark figure comes from a single run per configuration; see
   [how to read one replay](#how-to-read-one-replay).
 
 ## Responsible AI considerations
 
 This repository uses Amazon Bedrock foundation models for benchmarking context-engineering strategies —
-the agent models listed in [`BENCHMARK.md`](BENCHMARK.md), plus `cohere.rerank-v3-5:0` and
-`cohere.embed-multilingual-v3` for the practices themselves. Key considerations:
+the agent models listed in [`BENCHMARK.md`](BENCHMARK.md), plus `cohere.rerank-v3-5:0` (`amazon.rerank-v1:0` in the
+OpenCode plugin) and `cohere.embed-multilingual-v3` for the practices themselves. Key considerations:
 
 - **Intended use** — Measuring token consumption, accuracy, and latency of context-management
   strategies in a controlled benchmark environment. Not intended for real financial advice, customer
