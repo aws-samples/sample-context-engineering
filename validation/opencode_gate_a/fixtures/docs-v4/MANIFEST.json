@@ -1,0 +1,119 @@
+{
+  "fetched_at_utc": "2026-10-08T23:14:05Z",
+  "manifest_digest": "sha256:652e44d15c13b3261234d25a0d03c06f0e0f51fb19a875b5ab916d1a5092360b",
+  "pages": {
+    "bedrock_inference": {
+      "bytes": 6210,
+      "chars": 6198,
+      "sha256": "sha256:d72a5c47042caaeeeb0ac9492408eb6258c37a0204dc6692200e69cd40124e31",
+      "sources": [
+        "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-parameters.html"
+      ],
+      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-parameters.html"
+    },
+    "cloudwatch_alarms": {
+      "bytes": 8694,
+      "chars": 8694,
+      "sha256": "sha256:61fa832a8f956eeda7e2238a7a07925ff30556f4cd8e92a254a69a2953c99afc",
+      "sources": [
+        "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html"
+      ],
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html"
+    },
+    "dynamodb_capacity": {
+      "bytes": 3258,
+      "chars": 3256,
+      "sha256": "sha256:6ab84627ffa95e63ab5f49e3dcf4d6dfea29718c3f4582fb874239291ec25f7a",
+      "sources": [
+        "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html"
+      ],
+      "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadWriteCapacityMode.html"
+    },
+    "dynamodb_partition": {
+      "bytes": 14987,
+      "chars": 14971,
+      "sha256": "sha256:90e756e1e4ba577241b3040100c9456d22508936f4d298c5c1ca0919488459f2",
+      "sources": [
+        "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html"
+      ],
+      "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html"
+    },
+    "eks_networking": {
+      "bytes": 2191,
+      "chars": 2191,
+      "sha256": "sha256:63bd029eccfae3b1bc3f87c9e8314c4265fe92cfacb5d2190913c7ce404c2633",
+      "sources": [
+        "https://docs.aws.amazon.com/eks/latest/userguide/eks-networking.html"
+      ],
+      "url": "https://docs.aws.amazon.com/eks/latest/userguide/eks-networking.html"
+    },
+    "iam_best_practices": {
+      "bytes": 18974,
+      "chars": 18960,
+      "sha256": "sha256:a91b9862a76d631cec44c79eceda6a1c63890d524e27ca6e11be511e5720c8fc",
+      "sources": [
+        "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html"
+      ],
+      "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html"
+    },
+    "lambda_foundation": {
+      "bytes": 21248,
+      "chars": 21232,
+      "sha256": "sha256:6f589431b2bf6204ff613e9ac28206a29c7f6d3338f62aa8985ff47ac5d9c9c2",
+      "sources": [
+        "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html"
+      ],
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html"
+    },
+    "lambda_invocation": {
+      "bytes": 11971,
+      "chars": 11957,
+      "sha256": "sha256:eb12e55b03bac9d3d77e575a8ff25abad7c225bf872fe0fb17f8b810ec13e59d",
+      "sources": [
+        "https://docs.aws.amazon.com/lambda/latest/dg/lambda-invocation.html",
+        "https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html",
+        "https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-configuring.html",
+        "https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-error-handling.html"
+      ],
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-invocation.html"
+    },
+    "rds_backups": {
+      "bytes": 3849,
+      "chars": 3849,
+      "sha256": "sha256:52223e6d9d596cc92feab6a3e55728a5b520d53a66667a80b4198332cac20060",
+      "sources": [
+        "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html"
+      ],
+      "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html"
+    },
+    "s3_naming": {
+      "bytes": 15057,
+      "chars": 15057,
+      "sha256": "sha256:8ca4ca2118e75af8fdee832eb7d4d2026d76336a44ccca7260beb37380ff8efd",
+      "sources": [
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html"
+      ],
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html"
+    },
+    "s3_security": {
+      "bytes": 34544,
+      "chars": 34530,
+      "sha256": "sha256:dee31464281721f8bed9d13a459d43c41d737ae5fc74f937f9a489076c6ff131",
+      "sources": [
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html"
+      ],
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html"
+    },
+    "vpc_subnets": {
+      "bytes": 6584,
+      "chars": 6568,
+      "sha256": "sha256:056e4bc93b37918e4f99b7ea347e900c4eb623db7ef19f2352533c0fef774add",
+      "sources": [
+        "https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html"
+      ],
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html"
+    }
+  },
+  "schema_version": 1,
+  "user_agent": "strands-context-validation/1.0"
+}

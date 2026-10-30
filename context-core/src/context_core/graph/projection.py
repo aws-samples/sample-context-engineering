@@ -58,7 +58,7 @@ from .scoring import (
 )
 from .state import TurnChoice, _GraphState
 
-__all__ = ["Thresholds", "current_turn_ids", "project"]
+__all__ = ["Thresholds", "current_turn_ids", "deliver", "project"]
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,36 @@ def project(
     new_state.retrieval_cycles = 0
 
     return _deliver(new_state, messages, thresholds), new_state
+
+
+def deliver(
+    messages: Sequence[NeutralMessage],
+    state: _GraphState,
+    thresholds: Thresholds = _DEFAULTS,
+) -> Sequence[NeutralMessage]:
+    """Apply the choice ``state`` already holds to ``messages``, without closing a turn or scoring again.
+
+    :func:`project` is the first call of a user turn: it closes the last turn into a Card, scores the graph against the
+    question and freezes the choice. A host that calls the model several times inside one turn (an autonomous tool loop)
+    needs the other half for the second and later calls -- the delivery alone, reading the choice the first call froze --
+    which is what the Strands plugin does with its ``InvokeModelStage.Input`` handler. Recomputing the choice on every
+    call would also undo a retrieval tool's raise: ``expand_card`` rewrites the frozen choice for the rest of the turn,
+    and a fresh choice computed from the Notes would put the Card's evidence back into Description (the evidence axis is
+    decided by message order, never by the Note).
+
+    Nothing is mutated: neither ``messages`` nor ``state``.
+
+    Args:
+        messages: The call's message list, oldest first. Read only.
+        state: The graph state the turn's first :func:`project` returned, possibly raised by a retrieval tool since.
+            Read only.
+        thresholds: What the projection decides under, for the entry ceiling and the guidance.
+
+    Returns:
+        A new list carrying the removal and the final block, or ``messages`` itself -- by object identity on a full pass,
+        on an empty request and on any failure.
+    """
+    return _deliver(state, messages, thresholds)
 
 
 def _copy_state(state: _GraphState) -> _GraphState:

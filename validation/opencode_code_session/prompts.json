@@ -1,0 +1,106 @@
+{
+  "scenario": "claude-code-plugins-v1",
+  "about": "A developer asks OpenCode to write Claude Code plugins for this repository, one step per prompt. The files it writes are throwaway: they live in a sandbox copy that is deleted after scoring and are never part of this repository's implementation.",
+  "turns": [
+    {
+      "turn_id": "T01-orient",
+      "kind": "explore",
+      "prompt": "I am new to this repository. Give me a short overview (under 200 words): what it is, its main folders, and which agent hosts it already supports."
+    },
+    {
+      "turn_id": "T02-hermes-layout",
+      "kind": "explore",
+      "prompt": "Look at how the Hermes plugin packages are laid out under hermes-plugins/. For hermes-relevance-filter, list its files and what each one is for, one line each."
+    },
+    {
+      "turn_id": "T03-hermes-contract",
+      "kind": "explore",
+      "prompt": "Now read hermes-plugins/CONTRACT.md and summarize in at most 8 bullets what a host-specific package has to get right. Include the file and line where the host calls select_context."
+    },
+    {
+      "turn_id": "T04-opencode-plugin",
+      "kind": "explore",
+      "prompt": "Now read the OpenCode plugin (.opencode/plugins/context-engineering.ts and .opencode/README.md). List the hooks and tools it registers and what each one is for."
+    },
+    {
+      "turn_id": "T05-core-api",
+      "kind": "explore",
+      "prompt": "Look at context-core/src/context_core (runtime.py and the package __init__.py). Which classes and functions would a new host adapter call? Give each with a one-line purpose."
+    },
+    {
+      "turn_id": "T06-design-docs",
+      "kind": "explore",
+      "prompt": "Skim docs/design/design.md and the three practice designs (relevance filtering, progressive tool disclosure, context graph). For each practice give me one sentence on what it does and one on what it needs from a host."
+    },
+    {
+      "turn_id": "T07-plan",
+      "kind": "plan",
+      "prompt": "Claude Code plugins are directories with a .claude-plugin/plugin.json manifest and optional hooks/hooks.json, hook scripts, skills, commands and an .mcp.json. Propose a layout under a new folder claude-code-plugins/ that mirrors hermes-plugins/: one package per practice (claude-code-relevance-filter, claude-code-progressive-tool-disclosure, claude-code-context-graph), a claude-code-all-three package, and claude-code-plugins/.claude-plugin/marketplace.json. List the paths with one line each. Do not create any file yet."
+    },
+    {
+      "turn_id": "T08-build-relevance",
+      "kind": "build",
+      "prompt": "Create claude-code-plugins/claude-code-relevance-filter with: .claude-plugin/plugin.json, hooks/hooks.json registering a PostToolUse hook, hooks/relevance_filter.py (reads the hook JSON from stdin, shortens tool results above a token threshold to the passages relevant to the latest user prompt using context_core, and prints the hook JSON output), README.md and tests/test_relevance_filter.py. Keep every file small (under about 80 lines) and use two or three tests. Then run the tests with python3.13 -m pytest and fix any failure."
+    },
+    {
+      "turn_id": "T09-build-disclosure",
+      "kind": "build",
+      "prompt": "Create claude-code-plugins/claude-code-progressive-tool-disclosure in the same style: .claude-plugin/plugin.json, hooks/hooks.json, hooks/tool_disclosure.py (keeps the tool catalog small by showing tool names first and details on demand), README.md and tests/test_tool_disclosure.py. Then run its tests and fix any failure."
+    },
+    {
+      "turn_id": "T10-build-graph",
+      "kind": "build",
+      "prompt": "Create claude-code-plugins/claude-code-context-graph in the same style, with hooks/context_graph.py. Claude Code hooks cannot rewrite earlier messages, so implement what a hook can do (for example record each closed turn as a compact card in a local JSONL file and inject a short summary of earlier cards on UserPromptSubmit) and state that limitation in the README. Include .claude-plugin/plugin.json, hooks/hooks.json and tests/test_context_graph.py. Then run its tests and fix any failure."
+    },
+    {
+      "turn_id": "T11-all-three",
+      "kind": "build",
+      "prompt": "Create claude-code-plugins/claude-code-all-three, one plugin that combines the three hook scripts under a single hooks/hooks.json (with its own .claude-plugin/plugin.json and README.md), and write claude-code-plugins/.claude-plugin/marketplace.json listing the four packages."
+    },
+    {
+      "turn_id": "T12-validate",
+      "kind": "verify",
+      "prompt": "Validate everything you created: run python3.13 -m py_compile on every Python file, python3.13 -m json.tool on every JSON file, and the full test suite under claude-code-plugins/ with python3.13 -m pytest. Report the counts and fix what fails."
+    },
+    {
+      "turn_id": "T13-probe-hermes",
+      "kind": "probe",
+      "prompt": "Quick check from what you read earlier, without opening files again unless you must: which Hermes package has to be used to run all three practices together, and what exactly stops three separate plugins from being active at once?"
+    },
+    {
+      "turn_id": "T14-probe-opencode",
+      "kind": "probe",
+      "prompt": "And in the OpenCode plugin: how often, in milliseconds, does it send a heartbeat to the bridge, and why is that interval needed?"
+    },
+    {
+      "turn_id": "T15-readme",
+      "kind": "edit",
+      "prompt": "Add a short section about the Claude Code plugins to the top-level README.md with a table of the four packages and one line on how to install one."
+    },
+    {
+      "turn_id": "T16-summary",
+      "kind": "summary",
+      "prompt": "Summarize what you built: every file you created, one line each, and anything you are unsure about or left unfinished."
+    }
+  ],
+  "probes": {
+    "T13-probe-hermes": {
+      "all_of": ["hermes-all-three"],
+      "any_of": ["second engine", "only one", "single-select", "single select", "one engine", "one composed", "refuses", "register_context_engine", "single engine"]
+    },
+    "T14-probe-opencode": {
+      "any_regex": ["120[_,.]?000", "\\b120\\s*(s|sec|seconds)\\b", "two minutes", "2 minutes"]
+    }
+  },
+  "expected_files": {
+    "marketplace": "claude-code-plugins/.claude-plugin/marketplace.json",
+    "packages": ["claude-code-relevance-filter", "claude-code-progressive-tool-disclosure", "claude-code-context-graph", "claude-code-all-three"],
+    "per_package": [".claude-plugin/plugin.json", "hooks/hooks.json", "README.md"],
+    "scripts": {
+      "claude-code-relevance-filter": ["hooks/relevance_filter.py", "tests/test_relevance_filter.py"],
+      "claude-code-progressive-tool-disclosure": ["hooks/tool_disclosure.py", "tests/test_tool_disclosure.py"],
+      "claude-code-context-graph": ["hooks/context_graph.py", "tests/test_context_graph.py"]
+    },
+    "readme_mention": "claude-code-plugins"
+  }
+}

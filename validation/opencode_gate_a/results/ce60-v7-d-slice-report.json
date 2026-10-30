@@ -1,0 +1,334 @@
+{
+  "d": [
+    {
+      "run_id": "ce60-v7-sonnet55-r1",
+      "baseline": {
+        "model_calls": 94,
+        "input_total": 11973942,
+        "cache_read": 11775957,
+        "cache_write": 197677,
+        "output": 45511,
+        "dollars": 2.1275141999999994
+      },
+      "arm": {
+        "model_calls": 112,
+        "input_total": 6121354,
+        "cache_read": 3962397,
+        "cache_write": 2158517,
+        "output": 72777,
+        "dollars": 6.5211822
+      },
+      "tokens_pct": -48.88,
+      "dollars_pct": 206.52,
+      "cache_write_ratio": 10.92,
+      "output_pct": 59.91,
+      "calls_delta": 18,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          30,
+          30
+        ],
+        "k": 0
+      },
+      "median_model_input": {
+        "baseline": 149247.5,
+        "arm": 54647.5
+      },
+      "graph": {
+        "arm": "A",
+        "run_id": "ce60-v7-sonnet55-r1-A",
+        "sessions_checked": 1,
+        "requests": 112,
+        "checked": 112,
+        "stored_prefix_equal": 112,
+        "mismatched_requests": [],
+        "stored_graph_synthetic_messages": 0,
+        "operations": {
+          "unchanged": 7,
+          "projected": 105
+        },
+        "modes": {
+          "chosen": 60,
+          "delivered": 52
+        },
+        "removed_messages_total": 4608,
+        "block_chars_total": 831271,
+        "rejected_requests": 0,
+        "graph_tool_calls": {
+          "expand_card": 8,
+          "find_context": 4
+        }
+      }
+    },
+    {
+      "run_id": "ce60-v7-sonnet55-r2",
+      "baseline": {
+        "model_calls": 98,
+        "input_total": 12127114,
+        "cache_read": 11934262,
+        "cache_write": 192536,
+        "output": 42222,
+        "dollars": 2.0976182000000003
+      },
+      "arm": {
+        "model_calls": 114,
+        "input_total": 6247056,
+        "cache_read": 4018705,
+        "cache_write": 2227903,
+        "output": 77156,
+        "dollars": 6.744084
+      },
+      "tokens_pct": -48.49,
+      "dollars_pct": 221.51,
+      "cache_write_ratio": 11.57,
+      "output_pct": 82.74,
+      "calls_delta": 16,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          30,
+          30
+        ],
+        "k": 0
+      },
+      "median_model_input": {
+        "baseline": 142447.5,
+        "arm": 55994.5
+      },
+      "graph": {
+        "arm": "A",
+        "run_id": "ce60-v7-sonnet55-r2-A",
+        "sessions_checked": 1,
+        "requests": 114,
+        "checked": 114,
+        "stored_prefix_equal": 114,
+        "mismatched_requests": [],
+        "stored_graph_synthetic_messages": 0,
+        "operations": {
+          "unchanged": 7,
+          "projected": 107
+        },
+        "modes": {
+          "chosen": 60,
+          "delivered": 54
+        },
+        "removed_messages_total": 4360,
+        "block_chars_total": 822533,
+        "rejected_requests": 0,
+        "graph_tool_calls": {
+          "expand_card": 10,
+          "find_context": 3
+        }
+      }
+    },
+    {
+      "run_id": "ce60-v7-sonnet55-r3",
+      "baseline": {
+        "model_calls": 98,
+        "input_total": 12767764,
+        "cache_read": 12565105,
+        "cache_write": 202343,
+        "output": 48013,
+        "dollars": 2.243129999999999
+      },
+      "arm": {
+        "model_calls": 116,
+        "input_total": 6483328,
+        "cache_read": 4113056,
+        "cache_write": 2369816,
+        "output": 81914,
+        "dollars": 7.155897600000001
+      },
+      "tokens_pct": -49.22,
+      "dollars_pct": 219.01,
+      "cache_write_ratio": 11.71,
+      "output_pct": 70.61,
+      "calls_delta": 18,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          30,
+          30
+        ],
+        "k": 0
+      },
+      "median_model_input": {
+        "baseline": 150095.5,
+        "arm": 57015.5
+      },
+      "graph": {
+        "arm": "A",
+        "run_id": "ce60-v7-sonnet55-r3-A",
+        "sessions_checked": 1,
+        "requests": 116,
+        "checked": 116,
+        "stored_prefix_equal": 116,
+        "mismatched_requests": [],
+        "stored_graph_synthetic_messages": 0,
+        "operations": {
+          "unchanged": 7,
+          "projected": 109
+        },
+        "modes": {
+          "chosen": 60,
+          "delivered": 56
+        },
+        "removed_messages_total": 4832,
+        "block_chars_total": 858054,
+        "rejected_requests": 0,
+        "graph_tool_calls": {
+          "expand_card": 12,
+          "find_context": 3
+        }
+      }
+    }
+  ],
+  "a": [
+    {
+      "run_id": "ce60-v6-sonnet55-r1",
+      "baseline": {
+        "model_calls": 98,
+        "input_total": 11615725,
+        "cache_read": 11450000,
+        "cache_write": 165409,
+        "output": 46223,
+        "dollars": 2.0213845000000004
+      },
+      "arm": {
+        "model_calls": 103,
+        "input_total": 10575661,
+        "cache_read": 10385127,
+        "cache_write": 190208,
+        "output": 46403,
+        "dollars": 1.9787147
+      },
+      "tokens_pct": -8.95,
+      "dollars_pct": -2.11,
+      "cache_write_ratio": 1.15,
+      "output_pct": 0.39,
+      "calls_delta": 5,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          30,
+          30
+        ],
+        "k": 0
+      },
+      "median_model_input": {
+        "baseline": 146477.0,
+        "arm": 125021.5
+      },
+      "graph": {}
+    },
+    {
+      "run_id": "ce60-v6-sonnet55-r2",
+      "baseline": {
+        "model_calls": 105,
+        "input_total": 13462969,
+        "cache_read": 13076782,
+        "cache_write": 385859,
+        "output": 49545,
+        "dollars": 2.7684317
+      },
+      "arm": {
+        "model_calls": 106,
+        "input_total": 10829712,
+        "cache_read": 10639297,
+        "cache_write": 190083,
+        "output": 50532,
+        "dollars": 2.0451211999999996
+      },
+      "tokens_pct": -19.56,
+      "dollars_pct": -26.13,
+      "cache_write_ratio": 0.49,
+      "output_pct": 1.99,
+      "calls_delta": 1,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          30,
+          30
+        ],
+        "k": 0
+      },
+      "median_model_input": {
+        "baseline": 155944.5,
+        "arm": 118019.0
+      },
+      "graph": {}
+    },
+    {
+      "run_id": "ce60-v6-sonnet55-r3",
+      "baseline": {
+        "model_calls": 97,
+        "input_total": 12125918,
+        "cache_read": 11940223,
+        "cache_write": 185381,
+        "output": 46616,
+        "dollars": 2.1242628
+      },
+      "arm": {
+        "model_calls": 99,
+        "input_total": 10531857,
+        "cache_read": 10347722,
+        "cache_write": 183817,
+        "output": 46982,
+        "dollars": 1.9647706999999994
+      },
+      "tokens_pct": -13.15,
+      "dollars_pct": -7.51,
+      "cache_write_ratio": 0.99,
+      "output_pct": 0.79,
+      "calls_delta": 2,
+      "correct": {
+        "baseline": [
+          30,
+          30
+        ],
+        "arm": [
+          29,
+          30
+        ],
+        "k": -1
+      },
+      "median_model_input": {
+        "baseline": 149699.5,
+        "arm": 127656.5
+      },
+      "graph": {}
+    }
+  ],
+  "label": {
+    "label": "D_TOKENS_ONLY",
+    "d_costs_correctness": false,
+    "mean_tokens_pct": -48.86,
+    "mean_dollars_pct": 215.68,
+    "min_k": 0,
+    "thresholds": {
+      "dollars_pct_at_most": -16.9,
+      "tokens_pct_at_most": -18.9,
+      "k_at_least": -1
+    }
+  },
+  "a_alone": {
+    "mean_tokens_pct": -13.89,
+    "mean_dollars_pct": -11.92
+  }
+}

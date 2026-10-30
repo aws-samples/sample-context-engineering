@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ce60-fixture": {
+      "type": "local",
+      "command": ["python3.13", "validation/opencode_mcp_server.py"],
+      "cwd": ".",
+      "enabled": true,
+      "timeout": 5000
+    }
+  }
+}

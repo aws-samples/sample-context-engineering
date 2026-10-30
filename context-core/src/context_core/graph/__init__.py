@@ -8,7 +8,7 @@ import anywhere in this subpackage -- see :mod:`context_core.message` for the sh
 from .cards import closed_turn_ranges, derive_and_register, is_turn_boundary, rebuild_into, turn_ranges
 from .compaction import guidance, render_final_block
 from .matcher import EmbeddingSimilarityMatcher, SimilarityMatcher
-from .projection import Thresholds, current_turn_ids, project
+from .projection import Thresholds, current_turn_ids, deliver, project
 from .removal import apply_removal, removal_ids, remove_messages
 from .scoring import compute_notes, distribute, full_pass_choice, warm_up_choice
 from .state import Card, CardChoice, CardKind, GraphState, Link, LinkKind, Resolution, ToolPair, TurnChoice
@@ -33,6 +33,7 @@ __all__ = [
     "closed_turn_ranges",
     "compute_notes",
     "current_turn_ids",
+    "deliver",
     "derive_and_register",
     "distribute",
     "full_pass_choice",

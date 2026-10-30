@@ -1,0 +1,10 @@
+{
+  "confidence_level": 0.95,
+  "paired_unit": "per_turn",
+  "method": "paired-descriptive-v1-mcp-ce60",
+  "decision_rule": "gate-a-thresholds-v1",
+  "minimum_paired_repetitions": 3,
+  "approval_id": "user-approved-ce60-mcp-2026",
+  "approval_actor": "owner",
+  "digest": "sha256:e87edc04693f4a0769bebc5d2d28df2d18ea953a2e5674ef582d3726673db97f"
+}

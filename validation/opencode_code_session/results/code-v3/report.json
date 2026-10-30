@@ -1,0 +1,276 @@
+{
+  "run": "code-v3",
+  "arms": {
+    "baseline": {
+      "turns_sent": 16,
+      "turns_ok": 16,
+      "timeouts": 0,
+      "errors": 0,
+      "model_calls": 59,
+      "model_input": 6384182,
+      "input_uncached": 150,
+      "cache_read": 6218907,
+      "cache_write": 165125,
+      "output": 55338,
+      "reasoning": 0,
+      "dollars": 1.5884,
+      "call_input_median": 116044,
+      "call_input_peak": 165127,
+      "wall_s": 439.4,
+      "tool_counts": {
+        "bash": 35,
+        "write": 20,
+        "read": 19,
+        "edit": 2,
+        "glob": 1,
+        "grep": 1
+      },
+      "tool_errors": {
+        "bash": 1
+      },
+      "denied_calls": 1,
+      "files_written": 22,
+      "test_runs": [
+        {
+          "turn": "T08-build-relevance",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 6,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 9,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 12,
+          "failed": 0,
+          "errors": 4
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T12-validate",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        }
+      ],
+      "probes": {
+        "T13-probe-hermes": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {}
+        },
+        "T14-probe-opencode": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {}
+        }
+      },
+      "work": {
+        "created_files": 23,
+        "created_lines": 1058,
+        "created_bytes": 43321,
+        "created_under_plugins_dir": 23,
+        "modified_tracked": [
+          "README.md"
+        ],
+        "deleted_tracked": [],
+        "touched_existing_packages": [],
+        "expected_files": 19,
+        "expected_present": 19,
+        "expected_missing": [],
+        "json_files": 9,
+        "json_ok": 9,
+        "json_bad": [],
+        "python_files": 10,
+        "python_compile_ok": 10,
+        "python_bad": [],
+        "marketplace_lists": 4,
+        "marketplace_expected": 4,
+        "readme_section_present": true
+      }
+    },
+    "plugin": {
+      "turns_sent": 16,
+      "turns_ok": 16,
+      "timeouts": 0,
+      "errors": 0,
+      "model_calls": 77,
+      "model_input": 2171139,
+      "input_uncached": 186,
+      "cache_read": 1954249,
+      "cache_write": 216704,
+      "output": 50618,
+      "reasoning": 0,
+      "dollars": 1.2437,
+      "call_input_median": 25369,
+      "call_input_peak": 45127,
+      "wall_s": 414.6,
+      "tool_counts": {
+        "bash": 48,
+        "write": 20,
+        "read": 18,
+        "grep": 4,
+        "expand_card": 2,
+        "edit": 2,
+        "glob": 1
+      },
+      "tool_errors": {
+        "bash": 3
+      },
+      "denied_calls": 3,
+      "files_written": 22,
+      "test_runs": [
+        {
+          "turn": "T08-build-relevance",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T09-build-disclosure",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T10-build-graph",
+          "passed": 3,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T11-all-three",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        },
+        {
+          "turn": "T12-validate",
+          "passed": 12,
+          "failed": 0,
+          "errors": 0
+        }
+      ],
+      "probes": {
+        "T13-probe-hermes": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {
+            "expand_card": 1
+          }
+        },
+        "T14-probe-opencode": {
+          "correct": true,
+          "answered": true,
+          "tool_calls": {
+            "grep": 1,
+            "read": 2
+          }
+        }
+      },
+      "work": {
+        "created_files": 23,
+        "created_lines": 985,
+        "created_bytes": 39836,
+        "created_under_plugins_dir": 23,
+        "modified_tracked": [
+          "README.md"
+        ],
+        "deleted_tracked": [],
+        "touched_existing_packages": [],
+        "expected_files": 19,
+        "expected_present": 19,
+        "expected_missing": [],
+        "json_files": 9,
+        "json_ok": 9,
+        "json_bad": [],
+        "python_files": 10,
+        "python_compile_ok": 10,
+        "python_bad": [],
+        "marketplace_lists": 4,
+        "marketplace_expected": 4,
+        "readme_section_present": true
+      },
+      "plugin_mode": "a+d",
+      "plugin_options": "preview_style:scoped,retrieval_cleanup:on,plugin_rev:2,graph:on,graph_mode:inplace,graph_keep:0,graph_dialogue:0",
+      "bridge": {
+        "transforms": 92,
+        "operations": {
+          "skipped": 92
+        },
+        "rerank_results": {
+          "not_attempted": 92
+        },
+        "tool_classes": {
+          "bash": 45,
+          "glob": 1,
+          "read": 18,
+          "grep": 4,
+          "expand_card": 2,
+          "write": 20,
+          "edit": 2
+        },
+        "previewed_by_class": {},
+        "preview_bytes_saved": 0
+      },
+      "graph": {
+        "requests": 77,
+        "checked": 77,
+        "stored_prefix_equal": 77,
+        "mismatched_requests": [],
+        "operations": {
+          "unchanged": 4,
+          "projected": 73
+        },
+        "removed_messages_total": 2704,
+        "rejected_requests": 0,
+        "graph_tool_calls": {
+          "expand_card": 2
+        },
+        "stored_graph_synthetic_messages": 0
+      }
+    }
+  },
+  "delta_pct": {
+    "model_input": -66.0,
+    "dollars": -21.7,
+    "model_calls": 30.5,
+    "output": -8.5,
+    "wall_s": -5.6,
+    "call_input_median": -78.1,
+    "call_input_peak": -72.7
+  }
+}

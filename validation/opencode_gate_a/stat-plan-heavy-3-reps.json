@@ -1,0 +1,10 @@
+{
+  "confidence_level": 0.95,
+  "paired_unit": "per_turn",
+  "method": "paired-descriptive-v1",
+  "decision_rule": "gate-a-thresholds-v1",
+  "minimum_paired_repetitions": 3,
+  "approval_id": "user-approved-ce60-heavy-2026",
+  "approval_actor": "owner",
+  "digest": "sha256:898e8f1efc99df1d09eff6c69a0005221292b7f5414dbb225ee73186eefb96d8"
+}

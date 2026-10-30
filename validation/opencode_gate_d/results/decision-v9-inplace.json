@@ -1,0 +1,40 @@
+{
+  "gate": "Gate_D",
+  "outcome": "go",
+  "capability_state": "experimental",
+  "precondition": "waived_by_owner",
+  "reasons": [],
+  "checks": {
+    "precondition": true,
+    "evidence_present": true,
+    "records_well_formed": true,
+    "request_only_transcript": true,
+    "scenarios_covered": true,
+    "cards_have_sources": true,
+    "card_ids_stable": true,
+    "card_ids_not_shared_between_sessions": true,
+    "full_pass_present": true,
+    "full_pass_equals_baseline": true,
+    "no_extra_durable_effect": true,
+    "projection_engaged": true,
+    "scenarios_reported_no_failure": true
+  },
+  "requests_evaluated": 1145,
+  "scenarios_covered": [
+    "tool_loop",
+    "subagent",
+    "compact",
+    "resume",
+    "recovery",
+    "full_pass",
+    "live",
+    "pre_card"
+  ],
+  "gate_a_outcome": "no_go",
+  "waiver": {
+    "by": "owner",
+    "requirement": "FR5.1/BR5.1",
+    "reason": "Owner asked for practice D on OpenCode to be measured anyway; Gate A stays no_go."
+  },
+  "gate_a_reclassified": false
+}

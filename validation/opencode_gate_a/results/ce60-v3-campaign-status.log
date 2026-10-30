@@ -1,0 +1,23 @@
+2026-10-08T19:23:58Z CAMPAIGN v3 start (scope=all policy=question,webfetch plan=validation/opencode_gate_a/stat-plan-v3-5-5-3-reps.json)
+2026-10-08T19:23:58Z PREFLIGHT offline write-back tests
+2026-10-08T19:23:58Z PREFLIGHT real-OpenCode write-back probe (Haiku 5.5)
+2026-10-08T19:24:19Z PREFLIGHT ok
+2026-10-08T19:24:19Z START sonnet55 R1 (attempt 1)
+2026-10-08T19:45:31Z STOP sonnet55 R1 rc=0 check=1 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=59 correct=25/30 mi_median=117147.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=29/30 mi_median=129076.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=49 previewed=1 bytes 180950->151221
+2026-10-08T19:48:51Z CAMPAIGN v3 start (scope=all policy=question,webfetch plan=validation/opencode_gate_a/stat-plan-v3-5-5-3-reps.json)
+2026-10-08T19:48:51Z PREFLIGHT offline write-back tests
+2026-10-08T19:48:51Z PREFLIGHT real-OpenCode write-back probe (Haiku 5.5)
+2026-10-08T19:49:12Z PREFLIGHT ok
+2026-10-08T19:49:12Z START sonnet55 R1 (attempt 1)
+2026-10-08T20:05:32Z DONE sonnet55 R1 gate=no_go reasons=GATE_CORRECTNESS_REGRESSION,GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=30/30 mi_median=121394.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=29/30 mi_median=158109.5 timeouts=0 errors=[] retryable=[] residual=0; A transforms=37 previewed=2 bytes 268764->203501 | plugin-effect: persisted previews=1 largest_preview_bytes=4138
+2026-10-08T20:05:32Z START sonnet55 R2 (attempt 1)
+2026-10-08T20:21:58Z DONE sonnet55 R2 gate=no_go reasons=GATE_CORRECTNESS_REGRESSION,GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=30/30 mi_median=129282.0 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=29/30 mi_median=129719.5 timeouts=0 errors=[] retryable=[] residual=0; A transforms=50 previewed=1 bytes 177648->147919 | plugin-effect: persisted previews=1 largest_preview_bytes=4138
+2026-10-08T20:21:58Z START sonnet55 R3 (attempt 1)
+2026-10-08T20:37:22Z DONE sonnet55 R3 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=29/30 mi_median=124796.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=29/30 mi_median=134110.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=52 previewed=1 bytes 203052->173323 | plugin-effect: persisted previews=1 largest_preview_bytes=4138
+2026-10-08T20:37:22Z START opus55 R1 (attempt 1)
+2026-10-08T21:43:27Z DONE opus55 R1 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=28/30 mi_median=134488.0 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=28/30 mi_median=168473.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=41 previewed=3 bytes 304418->203621 | plugin-effect: persisted previews=3 largest_preview_bytes=4138
+2026-10-08T21:43:27Z START opus55 R2 (attempt 1)
+2026-10-08T23:11:12Z DONE opus55 R2 gate=no_go reasons=GATE_CORRECTNESS_REGRESSION,GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=28/30 mi_median=143048.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=20/30 mi_median=164864.5 timeouts=0 errors=[] retryable=[] residual=0; A transforms=61 previewed=4 bytes 456408->201960 | plugin-effect: persisted previews=2 largest_preview_bytes=4158
+2026-10-08T23:11:12Z START opus55 R3 (attempt 1)
+2026-10-09T00:15:34Z DONE opus55 R3 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=23/30 mi_median=142927.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=28/30 mi_median=194365.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=51 previewed=4 bytes 630176->257394 | plugin-effect: persisted previews=3 largest_preview_bytes=4160
+2026-10-09T00:15:34Z CAMPAIGN v3 complete (scope=all)

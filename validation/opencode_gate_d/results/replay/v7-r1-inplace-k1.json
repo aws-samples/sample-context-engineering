@@ -1,0 +1,53 @@
+{
+  "totals": {
+    "requests": 112,
+    "engaged_requests": 108,
+    "received_tokens_est": 4879865,
+    "sent_tokens_est": 517992,
+    "reduction_pct": -89.39,
+    "max_received_tokens_est": 85022,
+    "max_sent_tokens_est": 14575,
+    "removed_messages": 8794,
+    "block_chars": 0,
+    "pair_splits": 0,
+    "cards_final": 170,
+    "closed_turns_final": 59,
+    "cards_lost_to_title_collision": 0
+  },
+  "variant": "inplace(keep=1)+unique_titles",
+  "calibrated": {
+    "scale_to_real_tokens": 1.681,
+    "baseline_dollars": 2.076,
+    "projected_dollars": 1.605,
+    "dollars_change_pct": -22.7,
+    "cache_write_ratio": 1.62,
+    "tokens_change_pct": -61.3
+  },
+  "cache_model": {
+    "projected": {
+      "read_tokens": 2587931.0,
+      "write_tokens": 170061.0,
+      "cost_units": 471369.35
+    },
+    "baseline": {
+      "read_tokens": 7018225.0,
+      "write_tokens": 105085.0,
+      "cost_units": 833178.75
+    },
+    "cost_change_pct": -43.43
+  },
+  "status": {
+    "projections": 112,
+    "choices": 60,
+    "deliveries": 52,
+    "full_passes": 112,
+    "engaged": 0,
+    "removed_messages": 0,
+    "block_chars": 0,
+    "expand_calls": 0,
+    "find_calls": 0,
+    "resets": 0,
+    "scoring_unavailable": 0,
+    "errors": 0
+  }
+}

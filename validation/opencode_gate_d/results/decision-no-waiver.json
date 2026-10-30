@@ -1,0 +1,25 @@
+{
+  "gate": "Gate_D",
+  "outcome": "unsupported",
+  "capability_state": "unsupported",
+  "precondition": "unmet",
+  "reasons": [
+    "CAPABILITY_UNSUPPORTED"
+  ],
+  "checks": {
+    "precondition": false
+  },
+  "requests_evaluated": 0,
+  "scenarios_covered": [
+    "tool_loop",
+    "subagent",
+    "compact",
+    "resume",
+    "recovery",
+    "full_pass",
+    "pre_card"
+  ],
+  "gate_a_outcome": "no_go",
+  "waiver": {},
+  "gate_a_reclassified": false
+}

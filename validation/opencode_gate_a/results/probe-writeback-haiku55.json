@@ -1,0 +1,35 @@
+{
+  "probe": "probe-writeback",
+  "script": ".opencode/runner/probe-writeback.ts",
+  "host": "opencode",
+  "host_version": "1.18.34",
+  "model": "amazon-bedrock/anthropic.claude-haiku-5-5",
+  "payload_policy": "sizes, tool names and booleans only",
+  "defect": "the plugin wrote the preview to output.output; OpenCode builds the model-facing text of a direct MCP tool from content[].text AFTER tool.execute.after, so every MCP replacement was discarded",
+  "before_fix": {
+    "source": "persisted tool outputs of arm-A sessions ce60-v2-sonnet55-r1..r3 and ce60-v2-opus55-r1",
+    "large_result_persisted_bytes": 33677,
+    "has_preview_marker": false,
+    "bridge_reported": "previewed 33677->3948"
+  },
+  "after_fix": {
+    "bridge": {
+      "operation": "previewed",
+      "input_bytes": 44960,
+      "output_bytes": 4002,
+      "rerank_result": "success"
+    },
+    "persisted_bytes": 4192,
+    "has_preview_marker": true,
+    "model_called_retrieve_context": true,
+    "retrieve_context_returned_bytes": 44960
+  },
+  "verdict": {
+    "bridge_previewed": true,
+    "persisted_is_smaller_than_original": true,
+    "persisted_has_preview_marker": true
+  },
+  "cleanup": {
+    "residual_process_count": 0
+  }
+}

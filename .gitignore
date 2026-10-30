@@ -19,3 +19,8 @@ tmp/
 # Local backup of retired material and discarded worktree patches. Kept on disk, never
 # versioned.
 bkp/
+
+# Local environment file and installed dependencies (the OpenCode plugin installs into .opencode/node_modules)
+.env
+node_modules
+.DS_Store

@@ -1,0 +1,13 @@
+2026-10-09T00:16:14Z CAMPAIGN v4 start (scope=all policy=question,webfetch plan=validation/opencode_gate_a/stat-plan-v4-5-5-3-reps.json oracle=v4 language=en-pinned)
+2026-10-09T00:16:14Z PREFLIGHT documentation cache: install pinned pages, verify, serve through the MCP server
+2026-10-09T00:16:15Z PREFLIGHT offline test suites
+2026-10-09T00:16:20Z PREFLIGHT real-OpenCode write-back probe (Haiku 5.5)
+2026-10-09T00:16:39Z PREFLIGHT ok
+2026-10-09T00:16:39Z START sonnet55 R1 (attempt 1)
+2026-10-09T00:33:58Z DONE sonnet55 R1 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=30/30 mi_median=139513.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=30/30 mi_median=159689.5 timeouts=0 errors=[] retryable=[] residual=0; A transforms=50 previewed=2 bytes 301266->242254 | plugin-effect: persisted previews=2 largest_preview_bytes=4188 | v4: oracle=v4/v4 retrieval bridge=2 evaluated=2 unavailable_turns=0 (consistent) language_pt_answers={'baseline': 1, 'A': 1} | preview-outcomes: previews=2 re_expanded=2 original=66958B shown=8326B retrieved=66958B net=+8326B (no net saving)
+2026-10-09T00:33:58Z START sonnet55 R2 (attempt 1)
+2026-10-09T00:53:54Z DONE sonnet55 R2 gate=no_go reasons=GATE_CORRECTNESS_REGRESSION,GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=30/30 mi_median=146873.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=29/30 mi_median=176814.5 timeouts=0 errors=[] retryable=[] residual=0; A transforms=56 previewed=3 bytes 361106->266560 | plugin-effect: persisted previews=3 largest_preview_bytes=4188 | v4: oracle=v4/v4 retrieval bridge=3 evaluated=3 unavailable_turns=0 (consistent) language_pt_answers={'baseline': 1, 'A': 1} | preview-outcomes: previews=3 re_expanded=3 original=106436B shown=12460B retrieved=106436B net=+12460B (no net saving)
+2026-10-09T00:53:54Z START sonnet55 R3 (attempt 1)
+2026-10-09T01:21:05Z DONE sonnet55 R3 gate=no_go reasons=GATE_MODEL_INPUT_INSUFFICIENT; baseline: completed=60 correct=30/30 mi_median=151901.5 timeouts=0 errors=[] retryable=[] residual=0; A: completed=60 correct=30/30 mi_median=171941.0 timeouts=0 errors=[] retryable=[] residual=0; A transforms=62 previewed=3 bytes 364174->269628 | plugin-effect: persisted previews=3 largest_preview_bytes=4188 | v4: oracle=v4/v4 retrieval bridge=3 evaluated=3 unavailable_turns=0 (consistent) language_pt_answers={'baseline': 0, 'A': 2} | preview-outcomes: previews=3 re_expanded=3 original=106436B shown=12460B retrieved=106436B net=+12460B (no net saving)
+2026-10-09T01:21:05Z START opus55 R1 (attempt 1)
+2026-10-09T01:24:03Z STOP opus55 R1 aborted by the user (no information gain after Sonnet v4 R1-R3); partial results marked ABORTED-BY-USER.txt
