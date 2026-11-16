@@ -74,11 +74,11 @@ chunks are exact substrings of the source (`_select_chunks`, `preview.py:256`; a
 `preview.py:358`) — so numbers, currency and tables stay exact.
 
 **Four things travel back to the model.** The rewritten content is a marker, a **disclaimer**, the
-verbatim preview, and a reference token (`middleware.py:856-860`). The disclaimer is built from the
-`PreviewStats` the selection returned (`_disclaimer`, `middleware.py:154`; called at
-`middleware.py:856`) and states how much of the result is on screen, that an answer needing every
-row cannot be computed from it, and — with the tool registered — the call and the budgets that reach
-the rest (`middleware.py:184-188`).
+verbatim preview, and a reference token (`middleware.py:788-792`). The disclaimer comes from the core:
+the middleware imports `excerpt_disclaimer` (`middleware.py:61`, defined at `preview.py:547`) and calls
+it at `middleware.py:788` with the `PreviewStats` the selection returned. It states how much of the
+result is on screen, that an answer needing every row cannot be computed from it, and — with the tool
+registered — the call and the budgets that reach the rest (`preview.py:576-580`).
 
 **The message is never mutated.** The rewrite is `result.model_copy(update={"content": content})`
 (`middleware.py:804`), and non-scorable content parts (image, file, audio, video — `middleware.py:102`)
@@ -90,7 +90,7 @@ the `if references:` branch that appends the token never runs (`middleware.py:79
 memoized (`middleware.py:785`), `self.tools` is empty so LangGraph compiles no tool
 (`middleware.py:366`), and `after_agent` returns `None` before touching the state
 (`middleware.py:827-828`). The disclaimer takes its other branch and tells the model to say the
-result was filtered rather than aggregate the excerpt (`middleware.py:181`). Filtering itself is
+result was filtered rather than aggregate the excerpt (`preview.py:573`). Filtering itself is
 unaffected.
 
 ---
@@ -106,7 +106,7 @@ The middleware attaches to the LangChain v1 `create_agent` middleware surface on
 | 2 | `wrap_tool_call` — the sync twin | `middleware.py:633` | Override. Calls `handler(request)` synchronously, **exactly once** (`middleware.py:648`), and drives the shared `_process_result` coroutine to completion (`middleware.py:649`) through `_run_to_completion` (`middleware.py:107`): `asyncio.run` on this thread when no loop is running here (`middleware.py:116-119`), on a one-worker `ThreadPoolExecutor` when one is (`middleware.py:120-121`). So `agent.invoke` filters exactly as `agent.ainvoke` does. | Same as #1 | Same as #1 |
 | 3 | `after_agent` — the `AfterInvocationEvent` analog | `middleware.py:806` | Override; returns a **state update dict** rather than writing anything. Fires when the run ends. | `self._include_retrieval_tool` (`middleware.py:827`); `state["messages"]` (`middleware.py:829`); `self.retrieval_tool_name` (`middleware.py:830`) | `state["messages"]`, via the returned `{"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}` (`middleware.py:834`). The reduced list is built by `_drop_tool_exchanges` (`middleware.py:160`). Nothing else. |
 | 4 | `aafter_agent` | `middleware.py:836` | Async form. The cleanup is pure list surgery, so it simply delegates to `after_agent` (`middleware.py:838`). | Same as #3 | Same as #3 |
-| 5 | `retrieve_all_context` on `self.tools` | `middleware.py:366`, built at `middleware.py:441`, decorated `@tool(_RETRIEVAL_TOOL_NAME)` at `middleware.py:452` | LangGraph reads `tools` at **compile time**; an empty sequence registers nothing, which is how the opt-out drops it (`middleware.py:365-366`). Built **per instance**, not as a class attribute, because it closes over *this* middleware's store and rankings (`middleware.py:444-446`). | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; `self._store` (`middleware.py:561`); `self._max_result_tokens` (`middleware.py:585`); `self._rankings` (`middleware.py:665`) | Nothing in state. Returns content to the model. |
+| 5 | `retrieve_all_context` on `self.tools` | `middleware.py:366`, built at `middleware.py:441`, decorated `@tool(_RETRIEVAL_TOOL_NAME)` at `middleware.py:452` | LangGraph reads `tools` at **compile time**; an empty sequence registers nothing, which is how the opt-out drops it (`middleware.py:365-366`). Built **per instance**, not as a class attribute, because it closes over *this* middleware's store and rankings (`middleware.py:444-446`). | `reference`/`pattern`/`line_range`/`context_lines`/`max_chunks`/`max_tokens`; `self._store` (`middleware.py:561`); `self._max_result_tokens` (`middleware.py:585`); `self._rankings` (`middleware.py:592`) | Nothing in state. Returns content to the model. |
 
 **Construction is inert** (`middleware.py:282-284`). `__init__` (`middleware.py:321`) validates
 `max_result_tokens > 0` (`middleware.py:347-348`), calls `super().__init__()`
@@ -157,55 +157,55 @@ sequenceDiagram
     Note over Agent,State: HumanMessage already in state.messages
     Agent->>Model: ainvoke (messages)
     Model-->>Agent: AIMessage with tool_calls
-    Agent->>MW: awrap_tool_call(request, handler)  middleware.py:682
-    MW->>Agent: result = await handler(request)  middleware.py:698
+    Agent->>MW: awrap_tool_call(request, handler)  middleware.py:614
+    MW->>Agent: result = await handler(request)  middleware.py:630
     Agent-->>MW: raw ToolMessage
-    MW->>MW: _process_result(request, result)  middleware.py:699 and :719
-    Note over Agent,MW: under agent.invoke the sync twin wrap_tool_call calls the same<br/>handler and drives the same _process_result to completion on a<br/>private loop  middleware.py:701, :716-717 and :108
+    MW->>MW: _process_result(request, result)  middleware.py:631 and :651
+    Note over Agent,MW: under agent.invoke the sync twin wrap_tool_call calls the same<br/>handler and drives the same _process_result to completion on a<br/>private loop  middleware.py:633, :649 and :107
 
-    MW->>MW: guard 1 isinstance ToolMessage  middleware.py:724
-    MW->>MW: guard 2 name is not retrieve_all_context  middleware.py:732
-    MW->>MW: guard 3 not request.tool.return_direct  middleware.py:737
+    MW->>MW: guard 1 isinstance ToolMessage  middleware.py:656
+    MW->>MW: guard 2 name is not retrieve_all_context  middleware.py:664
+    MW->>MW: guard 3 not request.tool.return_direct  middleware.py:669
 
-    MW->>Ad: _split_content_blocks(result)  middleware.py:740 and :925
+    MW->>Ad: _split_content_blocks(result)  middleware.py:672 and :857
     Ad->>Ad: tool_message_to_result_block(msg)  _adapter.py:58
     Ad->>Ad: _content_to_text_blocks(msg.content)  _adapter.py:41
-    Ad-->>MW: scorable text/json blocks + passthrough parts  middleware.py:951
+    Ad-->>MW: scorable text/json blocks + passthrough parts  middleware.py:883
 
-    MW->>MW: guard 4 _approximate_tokens(Strands heuristic) over threshold  middleware.py:744-745 and :125
-    MW->>MW: guard 5 should_filter veto, fails open  middleware.py:751-763
-    MW->>MW: guard 6 rendered scorable text non-empty  middleware.py:767-769
+    MW->>MW: guard 4 _approximate_tokens(Strands heuristic) over threshold  middleware.py:676-677 and :124
+    MW->>MW: guard 5 should_filter veto, fails open  middleware.py:683-695
+    MW->>MW: guard 6 rendered scorable text non-empty  middleware.py:699-701
 
-    Note over MW,Store: _filter_and_rewrite  middleware.py:808  filtering never depends on the store
-    MW->>MW: references = await _store_raw(tool_call_id, scorable)  middleware.py:838 and :773
+    Note over MW,Store: _filter_and_rewrite  middleware.py:740  filtering never depends on the store
+    MW->>MW: references = await _store_raw(tool_call_id, scorable)  middleware.py:770 and :705
     loop each scorable sub-block (index)
-        MW->>Store: await store.store("{tool_call_id}_{index}", raw, content_type)  middleware.py:798
+        MW->>Store: await store.store("{tool_call_id}_{index}", raw, content_type)  middleware.py:730
         Store-->>MW: reference like mem_1_call-123_0  store.py:156
     end
 
-    MW->>Ad: to_neutral_list(state messages)  middleware.py:465 and _adapter.py:134
+    MW->>Ad: to_neutral_list(state messages)  middleware.py:426 and _adapter.py:134
     Ad->>Ad: to_neutral_list_with_sources folds a HumanMessage marked<br/>ATTACHED_TEXT_KEY back onto the tool-result message before it<br/>_adapter.py:139, :98 and :159-167
     Ad-->>MW: neutral messages, one per source group  _adapter.py:171
-    MW->>MW: latest_user_text(neutral) plus json args, tail-capped  message.py:80 and middleware.py:475-476
+    MW->>MW: latest_user_text(neutral) plus json args, tail-capped  message.py:80 and middleware.py:436-437
 
-    MW->>Prev: await build_with_stats(full_text, query)  middleware.py:844 and preview.py:504
-    Prev->>Prev: _chunk_text(text, chunk_tokens)  preview.py:522 and :80
-    Prev->>Prev: single chunk that already fits, return verbatim, no scoring  preview.py:529-530
-    Prev->>Prev: search_units += ceil(n / max_sources_per_query)  preview.py:534
-    Prev->>RR: await score(query, chunk texts)  preview.py:536 and reranker.py:203
-    RR->>RR: asyncio.to_thread(_rerank, query, batch) per 100  reranker.py:239 and :244
+    MW->>Prev: await build_with_stats(full_text, query)  middleware.py:776 and preview.py:505
+    Prev->>Prev: _chunk_text(text, chunk_tokens)  preview.py:523 and :81
+    Prev->>Prev: single chunk that already fits, return verbatim, no scoring  preview.py:530-531
+    Prev->>Prev: search_units += ceil(n / max_sources_per_query)  preview.py:535
+    Prev->>RR: await score(query, chunk texts)  preview.py:537 and reranker.py:206
+    RR->>RR: asyncio.to_thread(_rerank, query, batch) per 100  reranker.py:242 and :247
     RR-->>Prev: one score per chunk, or RerankerError
-    Prev->>Prev: _validate_scores(raw, len(chunks))  preview.py:539 and :214
-    Prev->>Prev: _select_chunks(threshold, budget_chars)  preview.py:540 and :255
-    Prev->>Prev: ranking = indices by descending score  preview.py:541
-    Prev->>Prev: _assemble_preview(verbatim plus gap markers)  preview.py:543 and :357
-    Prev-->>MW: (preview, PreviewStats)  preview.py:543
+    Prev->>Prev: _validate_scores(raw, len(chunks))  preview.py:540 and :215
+    Prev->>Prev: _select_chunks(threshold, budget_chars)  preview.py:541 and :256
+    Prev->>Prev: ranking = indices by descending score  preview.py:542
+    Prev->>Prev: _assemble_preview(verbatim plus gap markers)  preview.py:544 and :358
+    Prev-->>MW: (preview, PreviewStats)  preview.py:544
 
-    MW->>MW: _rankings[reference] = stats.ranking, one sub-block only  middleware.py:853-854
-    MW->>MW: disclaimer = _disclaimer(token_count, stats, references, tool_name)  middleware.py:856 and :154
-    MW->>MW: marker = "[Relevance: tool result, ~N tokens]" plus disclaimer plus preview  middleware.py:857
-    MW->>MW: marker plus blank line plus "[ref: ...]" or "[refs: ...]"  middleware.py:858-860
-    MW-->>Agent: result.model_copy(update content=marker)  middleware.py:872
+    MW->>MW: _rankings[reference] = stats.ranking, one sub-block only  middleware.py:785-786
+    MW->>MW: disclaimer = excerpt_disclaimer(token_count, stats, references, tool_name)  middleware.py:788 and preview.py:547
+    MW->>MW: marker = "[Relevance: tool result, ~N tokens]" plus disclaimer plus preview  middleware.py:789
+    MW->>MW: marker plus blank line plus "[ref: ...]" or "[refs: ...]"  middleware.py:790-792
+    MW-->>Agent: result.model_copy(update content=marker)  middleware.py:804
     Agent->>State: filtered ToolMessage enters state.messages
     Agent->>Model: next ainvoke (marker · disclaimer · excerpt · reference)
     Note right of Model: answers from the excerpt, or takes the<br/>retrieval branch of §4b when the question<br/>needs every row
@@ -223,7 +223,7 @@ Failure short-circuits that leave the raw `ToolMessage` in state unchanged:
 **Opt-out mode** removes three steps and changes one: the `_store_raw` loop does not run
 (`middleware.py:720-721`), the `[ref: ...]` line is skipped (`middleware.py:790`), no ranking is
 memoized (`middleware.py:785`), and the disclaimer takes its no-reference branch
-(`middleware.py:181`). Everything between `_filter_and_rewrite` and the `model_copy` is
+(`preview.py:573`). Everything between `_filter_and_rewrite` and the `model_copy` is
 identical.
 
 ### 3a. What each band owns
@@ -232,7 +232,7 @@ identical.
 |------|------|-------------------|
 | `awrap_tool_call`, `wrap_tool_call`, the six guards, `after_agent`/`aafter_agent`, `self.tools` | 1 | Pure LangChain/LangGraph attachment. `ToolMessage`, `AIMessage`, `RemoveMessage`, `REMOVE_ALL_MESSAGES`, `BaseTool`, `@tool` are the only framework types imported (`middleware.py:43-45`). |
 | `tool_message_to_result_block`, `to_neutral`, `to_neutral_list`, `to_neutral_list_with_sources`, `_content_to_text_blocks` | 2 | The single place both worlds are touched (`_adapter.py:3-5`). Maps `ToolMessage` to a neutral `{"toolResult": ...}` block carried on a user-role message (`_adapter.py:19`, `_adapter.py:108-109`). For an `AIMessage` it also drops the provider's content-part copies of a tool call — `tool_use`, `tool_call`, `function_call` (`_CALL_PART_TYPES`, `_adapter.py:88`; `_is_call_part`, `_adapter.py:92`; applied at `_adapter.py:119`) — because `tool_calls` is the canonical form and becomes the `toolUse` block (`_adapter.py:120-129`); a kept copy would survive as an opaque `json` block when a core drops the `toolUse` (`_adapter.py:114-118`). Reading a *list* back is not one-to-one: `to_neutral_list` delegates to `to_neutral_list_with_sources` (`_adapter.py:134-136`), which folds an `ATTACHED_TEXT_KEY`-marked `HumanMessage` onto the tool-result message before it (`_adapter.py:98`, condition at `_adapter.py:159-165`). |
-| Marker, disclaimer, reference token, history surgery | 1 | Model-facing *text* and state surgery are binding concerns, named as such at `middleware.py:16-18`. |
+| Marker, reference token, history surgery | 1 | Model-facing *text* and state surgery are binding concerns, named as such at `middleware.py:16-18`. The disclaimer is the exception: its text now comes from the core (`excerpt_disclaimer`, `preview.py:547`), called at `middleware.py:788`, while that docstring still claims it. |
 | `_chunk_text`, `score`, `_validate_scores`, `_select_chunks`, `_assemble_preview`, `PreviewStats` | 3 | Every decision about *content*. Framework-agnostic by construction — plain strings and dataclasses (`preview.py:8-9`). |
 | `Store` / `InMemoryStore` / `FileStore` / `S3Store`, `_search_content`, `_is_searchable_content` | 3 | Offload backends and retrieval search helpers (`relevance/__init__.py:4-5`). |
 | `latest_user_text` | 3 | Operates on the neutral shape, so the binding converts first (`message.py:80`, called at `middleware.py:426`). |
@@ -270,9 +270,12 @@ at `middleware.py:841`). The fold exists for the middleware *inside* the graph �
 disclosure fold read the digest as a fresh user turn, treated the turn's own `get_tool_details`
 exchange as closed and folded it away, so the model never saw its load and loaded again every cycle.
 
-Two core privates are imported directly because re-deriving them in the binding would be a second
-implementation of core logic: `_assemble_preview`/`_chunk_text` (`middleware.py:62`, rationale at
-`middleware.py:57-60`) and `_is_searchable_content`/`_search_content` (`middleware.py:62`).
+The chunker and the gap-marker assembler are no longer reached from here: the `max_chunks` read moved
+into the core, so the binding imports the public `read_chunks` (`middleware.py:61`, defined at
+`preview.py:584`) and the core calls `_chunk_text` (`preview.py:81`) and `_assemble_preview`
+(`preview.py:358`) itself. One pair of core privates is still imported directly, because re-deriving
+the search behaviour in the binding would be a second implementation of core logic:
+`_is_searchable_content`/`_search_content` (`middleware.py:62`, rationale at `middleware.py:57-60`).
 
 ---
 
@@ -294,16 +297,16 @@ sequenceDiagram
         participant Store as Store
     end
 
-    Note over MW,Store: _store_raw  middleware.py:773  returns [] when the tool is off or no store  middleware.py:788-789
+    Note over MW,Store: _store_raw  middleware.py:705  returns [] when the tool is off or no store  middleware.py:720-721
     loop each scorable sub-block (index)
-        MW->>MW: text block encodes utf-8 as text/plain  middleware.py:795
-        MW->>MW: json block pretty-prints as application/json  middleware.py:797
-        MW->>Store: await store.store("{tool_call_id}_{index}", raw, content_type)  middleware.py:798
+        MW->>MW: text block encodes utf-8 as text/plain  middleware.py:727
+        MW->>MW: json block pretty-prints as application/json  middleware.py:729
+        MW->>Store: await store.store("{tool_call_id}_{index}", raw, content_type)  middleware.py:730
         Store-->>MW: reference "mem_{counter}_{key}"  store.py:152 and :156
     end
-    Note right of MW: the write happens BEFORE any rewrite, so a<br/>reference always names content already there<br/>middleware.py:821-822
-    MW->>MW: _rankings[reference] = stats.ranking only when one reference and one sub-block  middleware.py:853-854
-    MW->>MW: marker plus blank line plus "[ref: ...]" or "[refs: ...]"  middleware.py:858-860
+    Note right of MW: the write happens BEFORE any rewrite, so a<br/>reference always names content already there<br/>middleware.py:753-754
+    MW->>MW: _rankings[reference] = stats.ranking only when one reference and one sub-block  middleware.py:785-786
+    MW->>MW: marker plus blank line plus "[ref: ...]" or "[refs: ...]"  middleware.py:790-792
 ```
 
 The ranking is memoized only for a reference holding exactly the text that was chunked — one
@@ -325,46 +328,46 @@ sequenceDiagram
     end
 
     Model->>Agent: tool_call retrieve_all_context(reference, pattern?, line_range?,<br/>context_lines?, max_chunks?, max_tokens?)
-    Agent->>MW: await retrieve_all_context(...)  middleware.py:492
-    MW->>MW: await self._retrieve(...)  middleware.py:556 and :567
-    MW->>MW: max_chunks / max_tokens integer over 0, bool rejected  middleware.py:596-598
+    Agent->>MW: await retrieve_all_context(...)  middleware.py:453
+    MW->>MW: await self._retrieve(...)  middleware.py:517 and :528
+    MW->>MW: max_chunks / max_tokens integer over 0, bool rejected  middleware.py:557-559
     alt no store configured
-        MW-->>Model: ValueError "reference not found: {reference}"  middleware.py:601-602
+        MW-->>Model: ValueError "reference not found: {reference}"  middleware.py:562-563
     else store present
-        MW->>Store: await store.retrieve(reference)  middleware.py:605
+        MW->>Store: await store.retrieve(reference)  middleware.py:566
         alt reference unknown
             Store-->>MW: raise KeyError  store.py:177
-            MW-->>Model: ValueError "reference not found: {reference}"  middleware.py:606-607
+            MW-->>Model: ValueError "reference not found: {reference}"  middleware.py:567-568
         else found
             Store-->>MW: (content_bytes, content_type)
             alt every read option is None
-                MW->>MW: _decode_full_content(bytes, type, reference)  middleware.py:611 and :974
+                MW->>MW: _decode_full_content(bytes, type, reference)  middleware.py:572 and :906
                 Note right of MW: text/* to str · application/json to parsed json ·<br/>image/* to an image part · application/* to a file part ·<br/>else a lossy utf-8 decode · unbounded
                 MW-->>Model: full original content
             else any read option given
-                MW->>Search: _is_searchable_content(content_type)  middleware.py:613 and search.py:35
+                MW->>Search: _is_searchable_content(content_type)  middleware.py:574 and search.py:35
                 alt binary content
-                    MW-->>Model: ValueError "cannot search binary content (...)"  middleware.py:614-617
+                    MW-->>Model: ValueError "cannot search binary content (...)"  middleware.py:575-578
                 else searchable
-                    MW->>MW: text = bytes.decode utf-8  middleware.py:619
-                    MW->>MW: ctx_lines = context_lines or 5  middleware.py:620
-                    MW->>MW: max_chars = (max_tokens or max_result_tokens) times 4  middleware.py:624
-                    Note right of MW: precedence line_range, then pattern, then max_chunks<br/>middleware.py:528 · max_tokens bounds every mode  middleware.py:529-530
+                    MW->>MW: text = bytes.decode utf-8  middleware.py:580
+                    MW->>MW: ctx_lines = context_lines or 5  middleware.py:581
+                    MW->>MW: max_chars = (max_tokens or max_result_tokens) times 4  middleware.py:585
+                    Note right of MW: precedence line_range, then pattern, then max_chunks<br/>middleware.py:489 · max_tokens bounds every mode  middleware.py:490-491
                     alt max_chunks, no line_range and no pattern
-                        MW->>MW: _read_chunks(reference, text, max_chunks, max_chars)  middleware.py:628 and :645
-                        MW->>MW: chunks = _chunk_text(text, chunk_tokens)  middleware.py:661
-                        MW->>MW: ranking = self._rankings.get(reference)  middleware.py:665
-                        Note right of MW: no ranking, or a stale length, degrades to<br/>document order and the header says so<br/>middleware.py:666-670
-                        MW->>MW: top-N by ranking, re-sorted into document order  middleware.py:672
-                        MW->>MW: _assemble_preview(chunks, chosen, max_chars)  middleware.py:673 and preview.py:357
-                        MW-->>Model: header "[K of N chunks (order), lines 1-L in total,<br/>limit ~T tokens]" plus chunks with gap markers  middleware.py:674-678
+                        MW->>MW: read_chunks(text, chunk_tokens, ranking, max_chunks, max_chars)  middleware.py:589 and preview.py:584
+                        MW->>MW: chunks = _chunk_text(text, chunk_tokens)  preview.py:603
+                        MW->>MW: ranking = self._rankings.get(reference)  middleware.py:592
+                        Note right of MW: no ranking, or a stale length, degrades to<br/>document order and the header says so<br/>preview.py:607-611
+                        MW->>MW: top-N by ranking, re-sorted into document order  preview.py:613
+                        MW->>MW: _assemble_preview(chunks, chosen, max_chars)  preview.py:614 and :358
+                        MW-->>Model: header "[K of N chunks (order), lines 1-L in total,<br/>limit ~T tokens]" plus chunks with gap markers  preview.py:615-619
                     else max_tokens alone
-                        MW->>Search: _search_content(text, line_range=(1, last), max_chars)  middleware.py:631
+                        MW->>Search: _search_content(text, line_range=(1, last), max_chars)  middleware.py:598
                         Search-->>MW: the whole content, cut to the budget
                         MW-->>Model: numbered lines, bounded by max_chars
                     else line_range or pattern
-                        Note right of MW: a valid span drops the pattern  middleware.py:634-638<br/>context_lines alone reads the head, span=(1, ctx_lines)  middleware.py:639-641
-                        MW->>Search: _search_content(text, pattern, span, ctx_lines, max_chars)  middleware.py:643
+                        Note right of MW: a valid span drops the pattern  middleware.py:601-605<br/>context_lines alone reads the head, span=(1, ctx_lines)  middleware.py:606-608
+                        MW->>Search: _search_content(text, pattern, span, ctx_lines, max_chars)  middleware.py:610
                         Search->>Search: line_range to _search_by_line_range  search.py:92 and :160
                         Search->>Search: pattern to _search_by_pattern, ReDoS-guarded  search.py:90 and :121
                         Search-->>MW: numbered lines / matches plus context / "No matches"
@@ -384,12 +387,13 @@ Notes read from source:
   is the model's explicit choice to pay for more, and it bounds **every** mode
   (`middleware.py:490-491`). A full read with no options at all is the one unbounded path
   (`middleware.py:571-572`).
-- **`max_chunks` reuses the filter's own ranking.** `_read_chunks` (`middleware.py:645`) re-chunks
-  the stored text with the same `chunk_tokens` (`middleware.py:661`) and reads the ranking memoized
-  at filter time (`middleware.py:665`); a missing ranking, or one whose length no longer matches,
-  degrades to document order and the header says so (`middleware.py:666-670`). The chosen chunks are
-  rendered in **document order** with a gap marker for every omitted span
-  (`middleware.py:672-673`), so a `max_chunks` at least the chunk count returns the whole result.
+- **`max_chunks` reuses the filter's own ranking.** The core's `read_chunks` (`preview.py:584`)
+  re-chunks the stored text with the `chunk_tokens` (`middleware.py:591`) and the ranking
+  (`middleware.py:592`) the middleware passes it, the ranking being the one memoized at filter time;
+  a missing ranking, or one whose length no longer matches, degrades to document order and the header
+  says so (`preview.py:607-611`). The chosen chunks are rendered in **document order** with a gap
+  marker for every omitted span (`preview.py:613-614`), so a `max_chunks` at least the chunk count
+  returns the whole result.
 - **Argument validation runs before the store is touched.** A `max_chunks`/`max_tokens` that is not
   an integer ≥ 1 — `bool` included, since `True` would pass as `1` — raises `ValueError`
   (`middleware.py:557-559`).
@@ -421,27 +425,27 @@ sequenceDiagram
         participant State as state.messages
     end
 
-    Agent->>MW: after_agent(state, runtime)  middleware.py:874
+    Agent->>MW: after_agent(state, runtime)  middleware.py:806
     alt include_retrieval_tool is False
-        MW-->>Agent: return None, state untouched  middleware.py:895-896
+        MW-->>Agent: return None, state untouched  middleware.py:827-828
     else tool registered
-        MW->>State: messages = list(_state_messages(state))  middleware.py:897 and :909
-        MW->>MW: kept = _drop_tool_exchanges(messages, tool_name)  middleware.py:898 and :199
-        MW->>MW: answered = every ToolMessage tool_call_id  middleware.py:216
+        MW->>State: messages = list(_state_messages(state))  middleware.py:829 and :841
+        MW->>MW: kept = _drop_tool_exchanges(messages, tool_name)  middleware.py:830 and :160
+        MW->>MW: answered = every ToolMessage tool_call_id  middleware.py:177
         loop each AIMessage with a closed retrieve_all_context call
-            Note right of MW: closed means every matching id is answered<br/>somewhere in the history  middleware.py:222
+            Note right of MW: closed means every matching id is answered<br/>somewhere in the history  middleware.py:183
             alt all tool calls of the AIMessage are retrieve_all_context
-                MW->>MW: drop the AIMessage whole, its interim text with it  middleware.py:225-226 and :233-234
-                MW->>MW: drop the answering ToolMessages  middleware.py:235-237
+                MW->>MW: drop the AIMessage whole, its interim text with it  middleware.py:186-187 and :194-234
+                MW->>MW: drop the answering ToolMessages  middleware.py:196-198
             else mixed with other tool calls
-                MW->>MW: model_copy keeping only the other tool_calls  middleware.py:240-242
+                MW->>MW: model_copy keeping only the other tool_calls  middleware.py:201-203
             end
         end
-        Note right of MW: an unclosed call is left as it is, so the history<br/>never holds a tool call with no result  middleware.py:222 and :206-207
+        Note right of MW: an unclosed call is left as it is, so the history<br/>never holds a tool call with no result  middleware.py:183 and :167-207
         alt nothing matched
-            MW-->>Agent: return None  middleware.py:228-229 and :899-900
+            MW-->>Agent: return None  middleware.py:189-190 and :831-900
         else something removed
-            MW-->>Agent: {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}  middleware.py:902
+            MW-->>Agent: {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}  middleware.py:834
         end
     end
 ```
@@ -480,13 +484,13 @@ this middleware writes and removes only its own closed exchanges (`middleware.py
 
 1. **Reads the `[Relevance: ...]` marker and the disclaimer as a signal that content was replaced.**
    The marker text (`middleware.py:789`) is the cue and the disclaimer is the instruction
-   (`middleware.py:174-188`). *Fails if:* the model ignores both and treats the excerpt as the
+   (`preview.py:566-580`). *Fails if:* the model ignores both and treats the excerpt as the
    complete tool output — it then answers from a partial view.
 2. **Does not aggregate over the excerpt.** The disclaimer names the categories that cannot be
    computed from it — maximum, minimum, total, count, average, ranking, any comparison across the
-   whole result (`middleware.py:177-178`). *Fails if:* the model computes the aggregate anyway and is
+   whole result (`preview.py:569-570`). *Fails if:* the model computes the aggregate anyway and is
    confidently wrong, which is the failure the disclaimer exists to prevent
-   (`middleware.py:157-159`).
+   (`preview.py:550-552`).
 3. **Trusts the verbatim excerpt for the on-target passages.** Selection keeps the highest-scoring
    chunks — `_select_chunks` (`preview.py:256`). *Fails if:* the reranker mis-scored (wrong query,
    poor model), so the needed passage scored below `relevance_threshold` and was cut. There is an
@@ -495,14 +499,14 @@ this middleware writes and removes only its own closed exchanges (`middleware.py
 4. **Notices the gap markers and the trailing `[ref: ...]`/`[refs: ...]` token, and calls
    `retrieve_all_context` with that exact reference.** These are the affordances telling the model
    there is more and how to reach it (`_format_gap_marker`, `preview.py:326`; token built at
-   `middleware.py:791`; the disclaimer names the call and the reference at `middleware.py:185`).
+   `middleware.py:791`; the disclaimer names the call and the reference at `preview.py:577`).
    *Fails if:* the model does not parse the reference token, or fabricates one that was never issued
    (→ `ValueError` "reference not found", `middleware.py:568`); or it reaches for the tool to re-read
    a passage the excerpt already shows, which the description tells it not to do
    (`middleware.py:465-466`).
 5. **States the figures it relied on in the answer.** The retrieval exchange is removed when the run
    ends (`middleware.py:806`, update at `middleware.py:834`), so a figure that lives only in the tool
-   result is gone from the next turn. Both the disclaimer (`middleware.py:187-188`) and the tool
+   result is gone from the next turn. Both the disclaimer (`preview.py:579-580`) and the tool
    description (`middleware.py:481-482`) say so. *Fails if:* the model answers by pointing at the
    retrieved block instead of restating the number, and a later turn asks a follow-up about it.
 
@@ -517,7 +521,7 @@ inside the first line of the last chunk makes `first_unshown_line` that line its
 
 With `include_retrieval_tool=False` assumptions 4 and 5 are moot and 1–3 stand unchanged, and the
 disclaimer's other branch asks for one thing: **say that the result was filtered instead of computing
-the aggregate from the excerpt** (`middleware.py:181`). *Fails if:* the model aggregates anyway. There
+the aggregate from the excerpt** (`preview.py:573`). *Fails if:* the model aggregates anyway. There
 is no recovery affordance — `self.tools` is empty so LangGraph compiled no such tool
 (`middleware.py:366`) and no reference was ever issued (`middleware.py:790`) — so the failure is
 unrecoverable within the turn. Gap markers (`_GAP_MARKER`, `preview.py:322`) are still emitted, so
@@ -565,18 +569,18 @@ rather than inventing a reference.
 
 ### 6a. The marker, the disclaimer and the reference token
 
-Built at `middleware.py:856-860`, quoted exactly:
+Built at `middleware.py:788-792`, quoted exactly:
 
 ```python
-disclaimer = _disclaimer(token_count, stats, references, self.retrieval_tool_name)
+disclaimer = excerpt_disclaimer(token_count, stats, references, self.retrieval_tool_name)
 marker = f"[Relevance: tool result, ~{token_count:,} tokens]\n{disclaimer}\n\n{preview}"
 if references:
     token = f"[ref: {references[0]}]" if len(references) == 1 else f"[refs: {', '.join(references)}]"
     marker = f"{marker}\n\n{token}"
 ```
 
-The disclaimer itself, `_disclaimer` (`middleware.py:154`), quoted exactly from
-`middleware.py:173-189`:
+The disclaimer itself, the core's `excerpt_disclaimer` (`preview.py:547`), quoted exactly from
+`preview.py:565-581`:
 
 ```python
 spans = ", ".join(f"{start}-{end}" if start != end else f"{start}" for start, end in stats.shown_spans)
@@ -598,8 +602,10 @@ return (
 )
 ```
 
-This is **character-for-character the Strands plugin's text**: the band-1 disclaimer builder is the
-one piece of model-facing prose the two bindings share by duplication rather than through the core.
+This is **character-for-character the Strands plugin's text**, and no longer by duplication: the
+disclaimer builder moved into the core (`excerpt_disclaimer`, `preview.py:547`) and both bindings call
+that one function, so the only piece of model-facing prose the two used to keep in step by hand is now
+shared code.
 
 `stats.shown_spans` merges adjacent chunks into 1-indexed inclusive line spans
 (`preview.py:63-72`), and the numbers come from the `PreviewStats` the selection returned
@@ -626,7 +632,7 @@ excerpt (`middleware.py:789`). With more than one stored sub-block the last line
 
 In the opt-out the `if references:` branch never runs (`middleware.py:790`, loop skipped at
 `middleware.py:720-721`), so there is no trailing token and the disclaimer ends at its no-reference
-sentence (`middleware.py:181`):
+sentence (`preview.py:573`):
 
 ```text
 ... cannot be computed from this excerpt. Say that the result was filtered instead of computing it from the excerpt.
@@ -653,7 +659,7 @@ _GAP_MARKER = "\n[... {n} lines omitted ...]\n"
 Rendered by `_format_gap_marker` (`preview.py:326`) as e.g. `\n[... 42 lines omitted ...]\n`. These
 markers are emitted in **both** modes, and also inside a `max_chunks` retrieval, where
 `_assemble_preview` renders the chosen chunks with a marker for every span left out
-(`middleware.py:673`). When the budget cannot hold a chunk at all, the dropped chunk and its
+(`preview.py:614`). When the budget cannot hold a chunk at all, the dropped chunk and its
 preceding marker are folded into one merged marker (`preview.py:412-420`).
 
 ### 6c. `retrieve_all_context` description / docstring
@@ -775,7 +781,8 @@ raise ValueError(
 )
 ```
 
-The `max_chunks` header, from `_read_chunks` (`middleware.py:674-677`), quoted exactly:
+The `max_chunks` header, from the core's `read_chunks` (`preview.py:584`), quoted exactly from
+`preview.py:615-618`:
 
 ```python
 header = (
@@ -785,8 +792,8 @@ header = (
 ```
 
 `order` is the literal `"most relevant first"` when the filter's ranking was reused
-(`middleware.py:670`) and `"document order"` when it was not (`middleware.py:668`). An empty stored
-text answers `"Content is empty (0 lines)."` (`middleware.py:663`).
+(`preview.py:611`) and `"document order"` when it was not (`preview.py:609`). An empty stored
+text answers `"Content is empty (0 lines)."` (`preview.py:605`).
 
 Search-path messages the model may see, from `search.py`, quoted exactly:
 
@@ -835,7 +842,7 @@ on.
 |-----|---------|--------|----------|
 | `reranker` | lazily built `BedrockReranker` | `middleware.py:395` | Scorer ranking chunks vs. query. Supplying one avoids ever building an AWS client (`middleware.py:383-385`). |
 | `relevance_threshold` | `0.5` — `_DEFAULT_RELEVANCE_THRESHOLD` | `middleware.py:79`, read at `middleware.py:398` | Minimum `[0,1]` score for a chunk to enter the excerpt. |
-| `chunk_tokens` | `2_500` — `_DEFAULT_CHUNK_TOKENS` | `middleware.py:82`, read at `middleware.py:399` | Scoring granularity — approximate token budget of one scored chunk. Also the granularity a `max_chunks` read re-chunks with (`middleware.py:661`). `<1` raises `ValueError` at chunk time (`preview.py:100-101`). |
+| `chunk_tokens` | `2_500` — `_DEFAULT_CHUNK_TOKENS` | `middleware.py:82`, read at `middleware.py:399` | Scoring granularity — approximate token budget of one scored chunk. Also the granularity a `max_chunks` read re-chunks with (`middleware.py:591`). `<1` raises `ValueError` at chunk time (`preview.py:100-101`). |
 | `preview_tokens` | `1_000` — `_DEFAULT_PREVIEW_TOKENS` | `middleware.py:85`, read at `middleware.py:400` | Budget for what stays visible; excerpt ≤ `preview_tokens × 4` chars (`preview.py:522`). |
 | `summarize_overflow` | `False` | `middleware.py:401` | **Reserved** — accepted and stored but not acted upon (`middleware.py:223-224`, `preview.py:453-454`); the excerpt is always verbatim substrings plus gap markers. |
 
@@ -878,7 +885,7 @@ block (`message.py:83-85`). The fold that delegation performs leaves the query u
 |-----------|---------|--------|----------|
 | `model_id` | `"amazon.rerank-v1:0"` — `_DEFAULT_MODEL_ID` | `reranker.py:45`, parameter at `reranker.py:162` | Rerank model id or full ARN; a bare id is resolved to a foundation-model ARN in the client region (`reranker.py:203`). |
 | `boto_session` | `None` | `reranker.py:164` | Optional boto3 session; else one is created from `region_name` (`reranker.py:182`). |
-| `boto_client_config` | `None` | `reranker.py:165` | Optional botocore config; caller values win (`reranker.py:195`), `user_agent_extra` is extended with `context-core` not replaced (`reranker.py:187-194`, constant at `reranker.py:48`). |
+| `boto_client_config` | `None` | `reranker.py:165` | Optional botocore config; caller values win (`reranker.py:195`), `user_agent_extra` is extended with the caller's tag, `context-core` unless the binding passes its own (`reranker.py:167`), not replaced (`reranker.py:190-197`, constant at `reranker.py:48`). |
 | `region_name` | `None` | `reranker.py:166` | AWS region; used only when no `boto_session`. |
 | `max_sources_per_query` (class attr) | `100` — `_MAX_SOURCES_PER_QUERY` | `reranker.py:47`, attribute at `reranker.py:157` | Max chunks per `rerank` call; larger lists are paginated in `score` (`reranker.py:242`). It is also what `search_units` is computed from (`preview.py:535`). |
 | connect/read timeout (fixed) | `10` s — `_DEFAULT_TIMEOUT_SECONDS` | `reranker.py:46`, applied at `reranker.py:187-188` | Fail-fast so the agent loop is not stalled; overridable via `boto_client_config`. |
@@ -912,7 +919,7 @@ rejection at `store.py:194-198` is never reached either. See §9.
 | `bucket` | *(required)* | `store.py:417` | S3 bucket for stored objects; the reference is an `s3://` URI (`store.py:485`). |
 | `prefix` | `""` | `store.py:418` | Key prefix; retrieval rejects refs outside bucket/prefix (`store.py:508`, `store.py:511`). |
 | `boto_session` | `None` | `store.py:419` | Optional boto3 session; else created from `region_name`. |
-| `boto_client_config` | `None` | `store.py:420` | Optional botocore config; `user_agent_extra` extended with `context-core` (`store.py:440-447`). |
+| `boto_client_config` | `None` | `store.py:420` | Optional botocore config; `user_agent_extra` extended with the caller's tag, `context-core` by default (`store.py:422`), not replaced (`store.py:443-450`). |
 | `region_name` | `None` | `store.py:421` | AWS region; used only when no `boto_session`. |
 
 ---

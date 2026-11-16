@@ -14,8 +14,8 @@ The ``retrieve_all_context`` tool is shipped on the middleware's ``tools`` attri
 references back by span, pattern, chunk count or token budget.
 
 Every decision this module makes about *content* is delegated to :mod:`context_core.relevance`; what
-lives here is attachment, the LangChain↔neutral adaptation (through :mod:`._adapter`), the marker and
-disclaimer text, and the history surgery. Two things are deliberately native rather than core:
+lives here is attachment, the LangChain↔neutral adaptation (through :mod:`._adapter`), the reference
+marker, and the history surgery. Two things are deliberately native rather than core:
 
 - **The token count is the Strands default heuristic, recomputed here.** The Strands plugin wraps the
   result as a message and calls ``model.count_tokens``; unless a provider opts into native counting,
@@ -54,10 +54,10 @@ from context_core.relevance import (
     Store,
 )
 
-# Private core helpers: the chunker and the gap-marker assembler. ``retrieve_all_context`` renders the
-# N most relevant chunks with the ranking the filter already computed, which is the same chunking and
-# the same assembly the preview used -- re-deriving either here would be a second implementation of
-# core logic. The core does not re-export them, so they are imported from their module.
+# Core helpers shared with the Strands binding: the excerpt disclaimer and the ``max_chunks`` reader.
+# ``retrieve_all_context`` renders the N most relevant chunks with the ranking the filter already
+# computed, the same chunking and assembly the preview used -- re-deriving either here would be a
+# second implementation of core logic. The core does not re-export them, so they come from their module.
 from context_core.relevance.preview import excerpt_disclaimer, read_chunks
 from context_core.relevance.search import _is_searchable_content, _search_content
 

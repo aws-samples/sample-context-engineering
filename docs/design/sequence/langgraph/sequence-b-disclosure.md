@@ -378,35 +378,35 @@ still waiting for its result is a legitimate tail (`catalog.py:627`).
 
 ```mermaid
 sequenceDiagram
-    participant RW as _rewrite [middleware.py:749]
-    participant FM as _fold_messages [middleware.py:419]
+    participant RW as _rewrite [middleware.py:726]
+    participant FM as _fold_messages [middleware.py:396]
     participant AD as _adapter
-    participant Core as fold_closed_exchanges [catalog.py:508]
+    participant Core as fold_closed_exchanges [catalog.py:537]
 
     Note over RW,FM: Band 1 · interface
-    RW->>FM: (request.messages, active) [middleware.py:783]
+    RW->>FM: (request.messages, active) [middleware.py:760]
     Note over AD: Band 2 · adapter
     FM->>AD: to_neutral_list_with_sources(originals) [_adapter.py:158]
     AD->>AD: an AIMessage's tool_use content parts are dropped · tool_calls is canonical [_adapter.py:127]
     AD->>AD: a HumanMessage marked ATTACHED_TEXT_KEY is folded back onto the tool-result message before it [_adapter.py:180,185]
     AD-->>FM: neutral dicts · each carrying tracking_id when the message had an id · plus the messages each one stands for [_adapter.py:148,189]
     Note over Core: Band 3 · core
-    FM->>Core: fold_closed_exchanges(neutral, active) [middleware.py:438]
+    FM->>Core: fold_closed_exchanges(neutral, active) [middleware.py:415]
     alt nothing folded
-        Core-->>FM: the SAME list object back [catalog.py:542,556]
-        FM-->>RW: originals, untouched [middleware.py:440]
+        Core-->>FM: the SAME list object back [catalog.py:571,585]
+        FM-->>RW: originals, untouched [middleware.py:417]
     else something folded
-        Core-->>FM: a new list · unrewritten items are the SAME dict objects [catalog.py:575,592]
-        FM->>FM: by_identity = id(neutral item) to its source group of BaseMessages [middleware.py:442]
+        Core-->>FM: a new list · unrewritten items are the SAME dict objects [catalog.py:604,621]
+        FM->>FM: by_identity = id(neutral item) to its source group of BaseMessages [middleware.py:419]
         loop each item of the folded list
             alt the item is one the core did not rewrite
-                FM->>FM: extend with that group's ORIGINAL BaseMessage objects · byte-identical [middleware.py:447]
+                FM->>FM: extend with that group's ORIGINAL BaseMessage objects · byte-identical [middleware.py:424]
             else the item is a rewritten dict
                 FM->>AD: to_langchain(item) [_adapter.py:210]
                 AD-->>FM: a LIST · surviving ToolMessages then a HumanMessage marked ATTACHED_TEXT_KEY for the sentence [_adapter.py:272]
             end
         end
-        FM-->>RW: the folded messages [middleware.py:450]
+        FM-->>RW: the folded messages [middleware.py:427]
     end
 ```
 
@@ -559,46 +559,46 @@ is what has them (`middleware.py:596`, docstring `middleware.py:780`).
 ```mermaid
 sequenceDiagram
     participant Agent as create_agent model node
-    participant MW as wrap_model_call [middleware.py:641]
-    participant Prime as _prime_summaries [middleware.py:725]
-    participant RW as _rewrite [middleware.py:749]
+    participant MW as wrap_model_call [middleware.py:618]
+    participant Prime as _prime_summaries [middleware.py:702]
+    participant RW as _rewrite [middleware.py:726]
     participant Idx as LexicalToolIndex [tool_index.py:177]
-    participant Cat as build_catalog [catalog.py:376]
-    participant Sum as SummaryCache [catalog.py:242]
+    participant Cat as build_catalog [catalog.py:405]
+    participant Sum as SummaryCache [catalog.py:271]
     participant Provider as the model call
 
     Agent->>MW: request · tools = every bound tool · system_message = the caller's
-    MW->>Prime: _prime_summaries(request) [middleware.py:660]
+    MW->>Prime: _prime_summaries(request) [middleware.py:637]
     alt the model writes the lines, and some description is over the limit
-        Prime->>Provider: one plain call per tool · _SUMMARY_SYSTEM_PROMPT plus name and description [middleware.py:729,698]
-        Provider-->>Prime: the line · clamped, or the truncation when it answered nothing [middleware.py:714]
-        Prime->>Sum: prime(name, description, line) · usage added to summary_usage [middleware.py:715,708]
+        Prime->>Provider: one plain call per tool · _SUMMARY_SYSTEM_PROMPT plus name and description [middleware.py:706,675]
+        Provider-->>Prime: the line · clamped, or the truncation when it answered nothing [middleware.py:691]
+        Prime->>Sum: prime(name, description, line) · usage added to summary_usage [middleware.py:692,685]
     else a caller summarizer, no catalog, no model, or every line cached
-        Prime-->>MW: nothing to do [middleware.py:685,695]
+        Prime-->>MW: nothing to do [middleware.py:662,672]
     end
-    Note over Prime,Provider: a summary call goes to request.model directly, outside the handler chain [middleware.py:680]
-    MW->>RW: _rewrite(request) [middleware.py:661]
-    RW->>RW: _specs_of(bound) · BaseTool or provider dict alike [middleware.py:761,200]
+    Note over Prime,Provider: a summary call goes to request.model directly, outside the handler chain [middleware.py:657]
+    MW->>RW: _rewrite(request) [middleware.py:638]
+    RW->>RW: _specs_of(bound) · BaseTool or provider dict alike [middleware.py:738,201]
     alt the disclosure tools are not both bound
-        RW-->>MW: the request itself, unchanged [middleware.py:764]
+        RW-->>MW: the request itself, unchanged [middleware.py:741]
     else both are bound
-        RW->>Idx: _ensure_index · fingerprint changed, so this call builds [middleware.py:766,814]
-        RW->>RW: history = request.state messages, else the call's own [middleware.py:774]
-        RW->>RW: cycle = number of AIMessages in that history [middleware.py:775,280]
-        RW->>RW: loaded = request.state loaded_tools [middleware.py:776]
-        RW->>RW: _last_used inside _active_names [middleware.py:778,777]
-        RW->>RW: tools = _keep_active · caller objects, arrival order [middleware.py:782]
-        RW->>RW: messages = _fold_messages · see section 6 [middleware.py:783]
-        RW->>Cat: build_catalog(specs, catalog_chars, active, cache) [middleware.py:785]
-        Cat->>Sum: line for each name NOT active [catalog.py:413]
-        Sum-->>Cat: the primed line when there is one, else verbatim or a boundary cut [catalog.py:301,316]
-        Cat-->>RW: the header plus one line per hidden tool, or an empty string [catalog.py:373,370]
+        RW->>Idx: _ensure_index · fingerprint changed, so this call builds [middleware.py:743,791]
+        RW->>RW: history = request.state messages, else the call's own [middleware.py:751]
+        RW->>RW: cycle = number of AIMessages in that history [middleware.py:752,257]
+        RW->>RW: loaded = request.state loaded_tools [middleware.py:753]
+        RW->>RW: _last_used inside _active_names [middleware.py:755,754]
+        RW->>RW: tools = _keep_active · caller objects, arrival order [middleware.py:759]
+        RW->>RW: messages = _fold_messages · see section 6 [middleware.py:760]
+        RW->>Cat: build_catalog(specs, catalog_chars, active, cache) [middleware.py:762]
+        Cat->>Sum: line for each name NOT active [catalog.py:442]
+        Sum-->>Cat: the primed line when there is one, else verbatim or a boundary cut [catalog.py:330,345]
+        Cat-->>RW: the header plus one line per hidden tool, or an empty string [catalog.py:402,399]
         alt the block is non-empty
-            RW->>RW: system_message = _with_catalog(...) [middleware.py:787]
+            RW->>RW: system_message = _with_catalog(...) [middleware.py:764]
         end
-        RW-->>MW: request.override(tools, messages, system_message) [middleware.py:798]
+        RW-->>MW: request.override(tools, messages, system_message) [middleware.py:775]
     end
-    MW->>Provider: handler(request) [middleware.py:664]
+    MW->>Provider: handler(request) [middleware.py:641]
     Note over Provider: tools = find_tools + get_tool_details + always_available + live loads
     Note over Provider: system = the caller's message plus the catalog block as one more text block
     Note over Provider: messages = the folded copy · no call shape for a tool absent from tools
@@ -652,27 +652,27 @@ result is resident in the history while a tool list is per call and forgettable 
 sequenceDiagram
     participant Model
     participant MW as the middleware
-    participant Tool as get_tool_details [middleware.py:947]
-    participant State as loaded_tools channel [middleware.py:170]
+    participant Tool as get_tool_details [middleware.py:924]
+    participant State as loaded_tools channel [middleware.py:171]
 
     Note over Model: Call N · cycle = k · reads the catalog in the system message
-    MW-->>Model: tools = callable only · system += catalog · messages folded [middleware.py:798]
+    MW-->>Model: tools = callable only · system += catalog · messages folded [middleware.py:775]
     Model->>Tool: get_tool_details(["list_investment_transactions"])
-    Tool->>MW: _load(names, runtime) [middleware.py:963,1003]
-    MW->>MW: bare string tolerated · duplicates dropped · names stripped [middleware.py:1017,1018]
-    MW->>MW: cycle = number of AIMessages in state MINUS one [middleware.py:1023]
+    Tool->>MW: _load(names, runtime) [middleware.py:940,980]
+    MW->>MW: bare string tolerated · duplicates dropped · names stripped [middleware.py:994,995]
+    MW->>MW: cycle = number of AIMessages in state MINUS one [middleware.py:1000]
     loop each requested name
-        MW->>MW: spec present and not a disclosure tool, so loaded[name] = cycle [middleware.py:1030,1033]
-        MW->>MW: line = name plus its cached catalog summary [middleware.py:1034]
+        MW->>MW: spec present and not a disclosure tool, so loaded[name] = cycle [middleware.py:1007,1010]
+        MW->>MW: line = name plus its cached catalog summary [middleware.py:1011]
     end
-    MW->>State: Command(update = messages + loaded_tools) [middleware.py:1050,1051,1053]
-    State->>State: _merge_loads keeps the later cycle per name [middleware.py:138,158]
-    MW-->>Model: "Loaded. These tools are callable with their full parameters on your next call..." [middleware.py:84,1045]
-    Note over Model: Call N+1 · cycle = k+1 · used k is strictly earlier, so the tool is active [middleware.py:361]
-    MW-->>Model: the loaded tool carried as the caller's own object [middleware.py:782]
-    Model->>MW: list_investment_transactions(real args) · wrap_tool_call [middleware.py:821]
-    MW->>MW: the name is in the active set for the cycle it chose on, so the call runs [middleware.py:890]
-    MW->>MW: no write · the call itself renews through _last_used next time [middleware.py:322]
+    MW->>State: Command(update = messages + loaded_tools) [middleware.py:1027,1028,1030]
+    State->>State: _merge_loads keeps the later cycle per name [middleware.py:139,159]
+    MW-->>Model: "Loaded. These tools are callable with their full parameters on your next call..." [middleware.py:85,1022]
+    Note over Model: Call N+1 · cycle = k+1 · used k is strictly earlier, so the tool is active [middleware.py:338]
+    MW-->>Model: the loaded tool carried as the caller's own object [middleware.py:759]
+    Model->>MW: list_investment_transactions(real args) · wrap_tool_call [middleware.py:798]
+    MW->>MW: the name is in the active set for the cycle it chose on, so the call runs [middleware.py:867]
+    MW->>MW: no write · the call itself renews through _last_used next time [middleware.py:299]
 ```
 
 `get_tool_details` takes a **list**, which is what keeps a step needing three tools to one cycle rather
@@ -696,27 +696,27 @@ set does not have, and either disclosure tool, are skipped (`middleware.py:973`)
 ```mermaid
 sequenceDiagram
     participant Model
-    participant Tool as find_tools [middleware.py:925]
-    participant MW as _search [middleware.py:967]
+    participant Tool as find_tools [middleware.py:902]
+    participant MW as _search [middleware.py:944]
     participant Idx as LexicalToolIndex [tool_index.py:177]
 
     Note over Model: no catalog name fits the need
     Model->>Tool: find_tools("list investment transactions")
-    Tool->>MW: _search(need, runtime) [middleware.py:945]
+    Tool->>MW: _search(need, runtime) [middleware.py:922]
     alt need is blank
-        MW-->>Model: _EMPTY_NEED_GUIDANCE [middleware.py:982,101]
+        MW-->>Model: _EMPTY_NEED_GUIDANCE [middleware.py:959,102]
     else need is usable
-        MW->>MW: specs from runtime.tools · _ensure_index [middleware.py:984,985]
+        MW->>MW: specs from runtime.tools · _ensure_index [middleware.py:961,962]
         MW->>Idx: search(need, top_k) [middleware.py:988 · tool_index.py:214]
         alt search raised
-            MW-->>Model: _SEARCH_FAILED_GUIDANCE [middleware.py:991,107]
+            MW-->>Model: _SEARCH_FAILED_GUIDANCE [middleware.py:968,108]
         else matches returned
             Idx-->>MW: at most top_k non-zero scores · ties by indexing order [tool_index.py:241,239]
-            MW->>MW: one line per match · bound and not a disclosure tool [middleware.py:994,996]
+            MW->>MW: one line per match · bound and not a disclosure tool [middleware.py:971,973]
             alt nothing usable
-                MW-->>Model: _NO_MATCH_GUIDANCE [middleware.py:1000,104]
+                MW-->>Model: _NO_MATCH_GUIDANCE [middleware.py:977,105]
             else names to report
-                MW-->>Model: _MATCHES_HEADER plus one line per match · NOTHING loaded [middleware.py:1001,79]
+                MW-->>Model: _MATCHES_HEADER plus one line per match · NOTHING loaded [middleware.py:978,80]
                 Model->>Tool: get_tool_details([names]) · then exactly as section 9
             end
         end
@@ -755,7 +755,7 @@ either (docstring `middleware.py:806`).
 The exemptions are dealt with in order. The two disclosure tools and everything in `always_available`
 return first (`middleware.py:849`). A name nothing bound has is not this middleware's to judge — the agent
 answers it already (`middleware.py:856`, comment `middleware.py:855`). A name in the recomputed active set
-returns (`middleware.py:867`). Only then is the parameter test applied (`middleware.py:895`).
+returns (`middleware.py:867`). Only then is the parameter test applied (`middleware.py:872`).
 
 **The guard loads nothing on the model's behalf.** It cancels with `_PREMATURE_CALL_MESSAGE`
 (`middleware.py:878`), which names the tool and points at `get_tool_details`. A recovery that loaded the
@@ -765,30 +765,30 @@ which is the very shortcut the catalog rule forbids (docstring `middleware.py:12
 ```mermaid
 sequenceDiagram
     participant Model
-    participant WTC as wrap_tool_call [middleware.py:821]
-    participant Cancel as _cancellation [middleware.py:858]
+    participant WTC as wrap_tool_call [middleware.py:798]
+    participant Cancel as _cancellation [middleware.py:835]
     participant Handler as the tool
 
     Note over Model: the model calls a catalog name without loading it first
     Model->>WTC: ToolCallRequest · tool_call.name = X
-    WTC->>Cancel: _cancellation(request) [middleware.py:846]
+    WTC->>Cancel: _cancellation(request) [middleware.py:823]
     alt X is a disclosure tool or in always_available
-        Cancel-->>WTC: None · nothing written [middleware.py:872,873]
+        Cancel-->>WTC: None · nothing written [middleware.py:849,850]
     else neither
-        Cancel->>Cancel: specs from request.runtime.tools [middleware.py:875,876]
+        Cancel->>Cancel: specs from request.runtime.tools [middleware.py:852,853]
         alt X is bound to nothing
-            Cancel-->>WTC: None · the agent answers it already [middleware.py:879,880]
+            Cancel-->>WTC: None · the agent answers it already [middleware.py:856,857]
         else X is bound
-            Cancel->>Cancel: chose_on = AIMessages in state MINUS one [middleware.py:885]
-            Cancel->>Cancel: _last_used then _active_names for chose_on [middleware.py:888,887]
+            Cancel->>Cancel: chose_on = AIMessages in state MINUS one [middleware.py:862]
+            Cancel->>Cancel: _last_used then _active_names for chose_on [middleware.py:865,864]
             alt X is active on chose_on
-                Cancel-->>WTC: None · the schema was visible, so the call is informed [middleware.py:890,891]
+                Cancel-->>WTC: None · the schema was visible, so the call is informed [middleware.py:867,868]
             else X was never visible
                 alt X declares no required parameter
-                    Cancel-->>WTC: None · an empty call to it is legitimate [middleware.py:895,896]
+                    Cancel-->>WTC: None · an empty call to it is legitimate [middleware.py:872,873]
                 else X requires parameters
-                    Cancel->>Cancel: log the cancellation, count it on the instance [middleware.py:898,899]
-                    Cancel-->>WTC: ToolMessage · status error · _PREMATURE_CALL_MESSAGE [middleware.py:900,901,904]
+                    Cancel->>Cancel: log the cancellation, count it on the instance [middleware.py:875,876]
+                    Cancel-->>WTC: ToolMessage · status error · _PREMATURE_CALL_MESSAGE [middleware.py:877,878,881]
                     WTC-->>Model: "'X' did not run: it is not loaded... call get_tool_details with [X] first"
                     Note over Model: X is NOT loaded by the guard · the model must call get_tool_details itself
                     Model->>WTC: get_tool_details(["X"]) · then exactly as section 9
@@ -796,14 +796,15 @@ sequenceDiagram
             end
         end
     end
-    WTC->>Handler: handler(request) on any None above [middleware.py:847]
+    WTC->>Handler: handler(request) on any None above [middleware.py:824]
 ```
 
-Only the `required` list decides — `_requires_parameters` (`middleware.py:238`) answers `True` only when
-that list is non-empty (`middleware.py:259`): a tool whose parameters are all optional is callable with no
-arguments, so an empty call to it is not the symptom of a missing schema (docstring `middleware.py:242`).
-Any schema shape the function cannot read is treated as requiring nothing (`middleware.py:254`,
-`middleware.py:257`), which errs towards letting the call run — and that is the same direction
+Only the `required` list decides. The test itself is the core's — the middleware imports
+`requires_parameters` (`middleware.py:58`) — and it answers `True` only when that list is non-empty
+(`catalog.py:203`, return at `catalog.py:228`): a tool whose parameters are all optional is callable with
+no arguments, so an empty call to it is not the symptom of a missing schema (docstring `catalog.py:206`).
+Any schema shape the function cannot read is treated as requiring nothing (`catalog.py:220`,
+`catalog.py:225`), which errs towards letting the call run — and that is the same direction
 `_schema_of` errs in when a schema cannot be rendered at all (`middleware.py:198`).
 
 The guard does **not** require an empty input. Arguments or not, the model could not have known the
@@ -817,14 +818,14 @@ docstring `middleware.py:838`).
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Catalog: bound · one line in the system-message catalog [catalog.py:368]
-    Catalog --> Loaded: get_tool_details([name]) · Command writes loaded_tools[name] = cycle [middleware.py:1033,1053]
-    Catalog --> Cancelled: guessed call · cancelled, and NOTHING is loaded [middleware.py:900]
+    [*] --> Catalog: bound · one line in the system-message catalog [catalog.py:397]
+    Catalog --> Loaded: get_tool_details([name]) · Command writes loaded_tools[name] = cycle [middleware.py:1010,1030]
+    Catalog --> Cancelled: guessed call · cancelled, and NOTHING is loaded [middleware.py:877]
     Cancelled --> Catalog: the model must call get_tool_details itself
-    Loaded --> Live: the next call sees used strictly earlier than cycle [middleware.py:361]
-    Live --> Live: called again · _last_used reads the use out of the AIMessage, no write [middleware.py:322]
-    Live --> Idle: not called · cycle minus used is still at most ttl_cycles, so it is kept [middleware.py:361]
-    Idle --> Catalog: cycle minus used exceeds ttl_cycles · absent from the active set [middleware.py:358]
+    Loaded --> Live: the next call sees used strictly earlier than cycle [middleware.py:338]
+    Live --> Live: called again · _last_used reads the use out of the AIMessage, no write [middleware.py:299]
+    Live --> Idle: not called · cycle minus used is still at most ttl_cycles, so it is kept [middleware.py:338]
+    Idle --> Catalog: cycle minus used exceeds ttl_cycles · absent from the active set [middleware.py:335]
     note right of Catalog
         ttl_cycles default = 3 (DEFAULT_TTL_CYCLES, middleware.py:67)
         Release withdraws the schema from the next call's tool list.
