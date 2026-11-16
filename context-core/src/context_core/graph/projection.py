@@ -145,7 +145,7 @@ def project(
     # Counted per turn, so it starts each turn at zero.
     new_state.retrieval_cycles = 0
 
-    projected, _trailing_blocks = deliver(new_state, messages, thresholds)
+    projected, _trailing_blocks = _deliver(new_state, messages, thresholds)
     return projected, new_state
 
 
@@ -176,7 +176,8 @@ def deliver(
         A new list carrying the removal and the final block, or ``messages`` itself -- by object identity on a full pass,
         on an empty request and on any failure.
     """
-    return _deliver(state, messages, thresholds)
+    projected, _trailing_blocks = _deliver(state, messages, thresholds)
+    return projected
 
 
 def _copy_state(state: _GraphState) -> _GraphState:
@@ -463,7 +464,7 @@ def _cache_description_vectors(state: _GraphState, matcher: SimilarityMatcher, *
 # ---- the delivery: removal and compaction, as one step --------------------------------------------
 
 
-def deliver(
+def _deliver(
     state: _GraphState,
     messages: Sequence[NeutralMessage],
     thresholds: Thresholds = _DEFAULTS,

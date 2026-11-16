@@ -20,7 +20,7 @@ import copy
 from collections.abc import Sequence
 from types import MappingProxyType
 
-from context_core.graph.projection import Thresholds, choose, close_turns, current_turn_ids, deliver, project
+from context_core.graph.projection import Thresholds, _deliver, choose, close_turns, current_turn_ids, project
 from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 
 
@@ -273,7 +273,7 @@ def test_a_choice_that_collapses_nothing_returns_the_received_list() -> None:
         full_pass=False,
     )
 
-    projected, trailing_blocks = deliver(state, messages, Thresholds())
+    projected, trailing_blocks = _deliver(state, messages, Thresholds())
 
     assert projected is messages
     assert trailing_blocks == 0
@@ -340,7 +340,7 @@ def test_the_three_phases_run_by_hand_equal_project() -> None:
     state = _GraphState()
     close_turns(state, messages, thresholds)
     state.choice = choose(state, messages, matcher, None, thresholds)
-    projected, trailing_blocks = deliver(state, messages, thresholds)
+    projected, trailing_blocks = _deliver(state, messages, thresholds)
 
     assert projected == expected
     assert state.cards == expected_state.cards
@@ -365,7 +365,7 @@ def test_choose_returns_the_choice_without_storing_it_or_advancing_the_turn() ->
 def test_deliver_on_a_full_pass_returns_the_received_list_and_no_trailing_block() -> None:
     messages = conversation()
 
-    projected, trailing_blocks = deliver(_GraphState(), messages)
+    projected, trailing_blocks = _deliver(_GraphState(), messages)
 
     assert projected is messages
     assert trailing_blocks == 0
