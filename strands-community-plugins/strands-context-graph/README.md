@@ -50,10 +50,31 @@ scores at the wrong scale and the graph quietly collapses or expands everything.
 `expand_threshold=0.0, collapse_floor=0.0` projects every Card at Full Content, producing a call identical field for
 field to the one produced without the plugin. Use it to tell a graph problem apart from a pre-existing one.
 
+## Where the logic lives
+
+The Card model, the deterministic scan, the scoring, the similarity matcher, the projection and the bodies of the three
+retrieval tools live in `agent-context-core` (`context_core.graph`), the same code the LangGraph and Hermes bindings run.
+This package is the Strands interface: the `InvokeModelStage.Input` handler that calls `context_core.graph.project()` on
+every model call, the `AfterToolCallEvent` hook that records artifact references, and the `@tool` wrappers
+(`plugin.py`); every SDK import (`_compat.py`); and the conversion between Strands messages and the core's neutral shape,
+which keeps each message's `tracking_id` (`_adapter.py`).
+
+Because `project()` runs on every model call, the Turn Choice, the reuse TTL clock and the retrieval budget advance per
+model call, as in the LangGraph binding.
+
+## Install
+
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
+```bash
+uv pip install -e context-core -e strands-community-plugins/strands-context-graph
+```
+
 ## Dependencies
 
-One runtime dependency: `strands-agents` (range-pinned with a real upper bound). No graph library, no similarity
-library. The only remote call in any configuration is the default matcher's embedding round — at most one per turn.
+Two runtime dependencies: `agent-context-core` and `strands-agents` (range-pinned with a real upper bound). No graph
+library, no similarity library. The only remote call in any configuration is the default matcher's embedding round; its
+cache absorbs Descriptions that did not change between model calls.
 
 ## Private-API caveats
 
@@ -62,23 +83,27 @@ what a rename actually costs you, and it is the only column that varies.
 
 | Private symbol | Used by | What it buys | Degrades as | What would remove the fragility |
 | --- | --- | --- | --- | --- |
-| `strands._middleware.stages.InvokeModelStage` + its `.Input` phase | `projection.py`, `plugin.py` | The one seam where the messages sent to the provider change, without touching `agent.messages` | **Hard dependency.** `ImportError` at import — the plugin has no other delivery point | A public per-call input-transform stage |
-| Same-stage ordering against a memory manager's fold | `projection.py`, `plugin.py` | The Removal running before any memory block is folded in | **Silently, as a worse answer.** No exception; one wiring-time `warnings.warn` is the whole protection | Declared middleware ordering (priority, or a documented phase order) |
-| `MiddlewareRegistry._handlers` | `projection.py`, `plugin.py` | Moving the delivery to index zero of the stage, and reading back whether anything folds behind it | **No ordering guarantee.** The delivery stays registered in wiring order and the ordering notice fires | The same declared-ordering API |
-| `strands.injection._message_injection._create_injection_middleware` | `projection.py` | Folding the Descriptions block into the last `user` message, with no `role` of its own | **Hard dependency.** `ImportError` at import — reimplementing the fold is what this reuse exists to avoid | A public "append a trailing block to the model input" API |
-| `dynamic_trailing_blocks` on `InvokeModelContext` | `projection.py` (via the primitive), `compaction.py` | Telling downstream links how many blocks were appended, so they are not mistaken for history | **Hard dependency**, carried by the primitive above | The same public trailing-block API |
-| `strands.injection._message_injection._is_user_turn` | `cards.py` | The turn boundary rule — `role == "user"` with no `toolResult` block — reused rather than reimplemented | **Hard dependency.** `ImportError` at import. Deliberate: a local copy would drift from the SDK's rule and silently mis-split turns, which is worse than a loud failure | A public turn-boundary predicate |
-| `pin_message._get_tool_use_ids` (with public `is_pinned`) | `removal.py` | Indexing tool pairs so a Removal never splits a `toolUse` from its `toolResult` | **Hard dependency.** `ImportError` at import. Deliberate for the same reason: a split pair is a protocol error, not a degradation | A public tool-pair accessor alongside `is_pinned` |
-| `agent._plugin_registry._plugins` | `plugin.py`, `store.py` | Finding what else is wired to the agent — a memory manager to warn about, a `ContextManager` to bridge to | **Quietly.** Reads as "nothing else is wired": no ordering notice, no Stash bridge | A public read-only view of an agent's plugins |
+| `strands._middleware.stages.InvokeModelStage` + its `.Input` phase | `_compat.py`, `plugin.py` | The one seam where the messages sent to the provider change, without touching `agent.messages` | **Hard dependency.** `ImportError` at import — the plugin has no other delivery point | A public per-call input-transform stage |
+| `dynamic_trailing_blocks` on `InvokeModelContext` | `plugin.py` | Telling downstream links how many blocks were appended, so they are not mistaken for history | **Hard dependency**, on the same context object | A public trailing-block API |
+| Same-stage ordering against a memory manager's fold | `plugin.py` | The Removal running before any memory block is folded in | **Silently, as a worse answer.** No exception; one wiring-time `warnings.warn` is the whole protection | Declared middleware ordering (priority, or a documented phase order) |
+| `agent._middleware_registry._handlers` | `plugin.py` | Moving the delivery to index zero of the stage, and reading back whether anything folds behind it | **No ordering guarantee.** The delivery stays registered in wiring order and the ordering notice fires | The same declared-ordering API |
+| `agent._plugin_registry._plugins` | `plugin.py`, `context_core.graph.store` | Finding what else is wired to the agent — a memory manager to warn about, a `ContextManager` to bridge to | **Quietly.** Reads as "nothing else is wired": no ordering notice, no Stash bridge | A public read-only view of an agent's plugins |
 | `_provide_memory_context` / `_injection_config` on a memory manager | `plugin.py` | Recognising a memory fold by member rather than by type | **No ordering notice.** The manager is not recognised, so the warning that protects the ordering is not emitted | A public capability marker for "this plugin folds into the model input" |
-| `ContextManager` / `_stash` / `_extract_text` | `store.py` | The optional Stash fallback bridge for artifact references | **No Stash interop.** The plugin's own store still resolves every reference it recorded; a Stash-only reference answers as prose naming the miss | A public reference-store protocol on `ContextManager` |
-| `context_offloader.search._search_content` | `store.py` | Line/pattern matching inside a resolved artifact without reimplementing its guards | **Whole reads only.** A `line_range`/`pattern` request answers as prose saying targeted reads are unavailable | A public artifact-search helper |
+| `ContextManager` / `_stash` / `_extract_text` | `_compat.py` registers them; `context_core.graph.store` resolves them | The optional Stash fallback bridge for artifact references | **No Stash interop.** The plugin's own store still resolves every reference it recorded; a Stash-only reference answers as prose naming the miss | A public reference-store protocol on `ContextManager` |
+| `context_offloader.search._search_content` | `_compat.py` registers it; `context_core.graph.store` resolves it | Line/pattern matching inside a resolved artifact without reimplementing its guards | **Whole reads only.** A `line_range`/`pattern` request answers as prose saying targeted reads are unavailable | A public artifact-search helper |
+
+Three SDK rules the plugin used to import are no longer imported: the turn boundary (`_is_user_turn`), the tool-pair
+index (`_get_tool_use_ids`, with `is_pinned`) and the fold of a trailing block into the last `user` message
+(`_create_injection_middleware`). `context_core.graph` carries framework-free copies, and `tests/test_sdk_parity.py`
+checks each copy against the SDK original on generated conversations, skipping with the symbol's name when the SDK no
+longer ships it. The one deliberate difference: the core's fold keeps the folded message's `tracking_id`.
 
 Two shapes of dependency, then. The **hard** ones fail at import: they are the seam the plugin is built on, and a rename
 there is a version-range problem, which is why `strands-agents` is pinned with a real upper bound. Everything else is
-resolved by name at call time and degrades — the Stash bridge in particular is built **entirely** on private symbols and
-turns into no-Stash-interop, not a crash, if any of them is renamed or changes shape. No handler, tool or middleware
-propagates an exception out of the agent loop in any of these cases.
+resolved by name at call time and degrades — the Stash bridge in particular is built **entirely** on private symbols,
+registered in `context_core.graph.store.HOST_SYMBOLS` by `_compat.py`, and turns into no-Stash-interop, not a crash, if
+any of them is renamed or changes shape. No handler, tool or middleware propagates an exception out of the agent loop in
+any of these cases.
 
 ## License
 

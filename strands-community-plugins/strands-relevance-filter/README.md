@@ -14,6 +14,11 @@ row (a maximum, a total, a count). Its exchanges are removed from the history wh
 
 No private SDK surface is used: no `ContextManager`, no `_middleware`, no `Stash`.
 
+The chunking, reranking, selection, preview, store and bounded reads live in `agent-context-core`
+(`context_core.relevance`), the same code the LangGraph and Hermes bindings run. This package is the Strands
+interface: the `AfterToolCallEvent` hook and the `retrieve_all_context` tool (`plugin.py`), every SDK import
+(`_compat.py`), and the conversion between Strands messages and the core's neutral shape (`_adapter.py`).
+
 ## Retrieving the rest of a result
 
 `retrieve_all_context` takes the `reference` from the excerpt plus one way of bounding the read.
@@ -33,9 +38,13 @@ never costs more than keeping the original would have.
 
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install strands-relevance-filter
+uv pip install -e context-core -e strands-community-plugins/strands-relevance-filter
 ```
+
+This pulls in `agent-context-core` and `strands-agents`.
 
 ## Development
 

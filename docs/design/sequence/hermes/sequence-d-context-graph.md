@@ -14,28 +14,28 @@
 
 ## 1. What the engine does, mechanically
 
-`class ContextGraphEngine(BaseEngine)` (`engine.py:93`) holds the `GraphState` and the reference store on
+`class ContextGraphEngine(BaseEngine)` (`engine.py:94`) holds the `GraphState` and the reference store on
 the instance (process-local, not Hermes persisted state — the same rationale as the LangGraph binding's
 per-conversation store).
 
-- `select_context(request_messages)` (`engine.py:171`): run `context_core.graph.project` over the closed
+- `select_context(request_messages)` (`engine.py:172`): run `context_core.graph.project` over the closed
   turns, return the projected list (Cards at full / description / title). The core returns the input list
   by identity on a full pass, read here as "change nothing" (`return None`). Fail-open.
-- `on_turn_complete(messages)` (`engine.py:199`): store each tool return as an artifact under
+- `on_turn_complete(messages)` (`engine.py:200`): store each tool return as an artifact under
   `<tool_call_id>_0` (`record_references`) and derive its artifact Cards
   (`derive_and_register_artifacts`, `cards.py:779`). Our own retrieval answers are skipped.
-- `get_tool_schemas()` (`engine.py:233`): `[expand_card, expand_artifact, find_context]`;
-  `handle_tool_call` (`engine.py:239`) dispatches to `expand_card` (`engine.py:257`), `expand_artifact`
-  (`engine.py:287`) and `find_context` (`engine.py:316`), all returning JSON strings.
+- `get_tool_schemas()` (`engine.py:234`): `[expand_card, expand_artifact, find_context]`;
+  `handle_tool_call` (`engine.py:240`) dispatches to `expand_card` (`engine.py:258`), `expand_artifact`
+  (`engine.py:288`) and `find_context` (`engine.py:317`), all returning JSON strings.
 
 ## 2. Integration table
 
 | # | Member | Defined at | Host call site | Role |
 |---|---|---|---|---|
-| 1 | `select_context` | `engine.py:171` | `conversation_loop.py:1295` | project closed turns, request-only |
-| 2 | `on_turn_complete` | `engine.py:199` | finalization seam | record artifacts, derive artifact Cards |
-| 3 | `get_tool_schemas` | `engine.py:233` | `agent_init.py:2138` | register the three recovery tools |
-| 4 | `handle_tool_call` | `engine.py:239` | `tool_executor.py:1666` | run expand_card · expand_artifact · find_context |
+| 1 | `select_context` | `engine.py:172` | `conversation_loop.py:1295` | project closed turns, request-only |
+| 2 | `on_turn_complete` | `engine.py:200` | finalization seam | record artifacts, derive artifact Cards |
+| 3 | `get_tool_schemas` | `engine.py:234` | `agent_init.py:2138` | register the three recovery tools |
+| 4 | `handle_tool_call` | `engine.py:240` | `tool_executor.py:1666` | run expand_card · expand_artifact · find_context |
 
 ## 3. The turn
 

@@ -159,7 +159,7 @@ def deliver(
     :func:`project` is the first call of a user turn: it closes the last turn into a Card, scores the graph against the
     question and freezes the choice. A host that calls the model several times inside one turn (an autonomous tool loop)
     needs the other half for the second and later calls -- the delivery alone, reading the choice the first call froze --
-    which is what the Strands plugin does with its ``InvokeModelStage.Input`` handler. Recomputing the choice on every
+    which is what the OpenCode bridge does on a turn's later calls. Recomputing the choice on every
     call would also undo a retrieval tool's raise: ``expand_card`` rewrites the frozen choice for the rest of the turn,
     and a fresh choice computed from the Notes would put the Card's evidence back into Description (the evidence axis is
     decided by message order, never by the Note).

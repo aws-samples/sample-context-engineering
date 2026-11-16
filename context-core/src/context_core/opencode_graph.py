@@ -19,11 +19,11 @@ four jobs:
 4. **Offer the two retrieval tools** (``expand_card`` and ``find_context``) as host-neutral functions over that state.
    ``expand_artifact`` is deliberately absent: it resolves references some offloader minted, and OpenCode has none.
 
-How the host's calling pattern maps onto the core, which is what keeps this faithful to the Strands plugin:
+How the host's calling pattern maps onto the core (the per-turn freeze the Strands plugin had before decision D-1):
 
-- OpenCode calls the hook once per *model call* (every step of a tool loop), not once per user turn. The Strands plugin
-  scores once per turn -- at ``BeforeInvocationEvent`` -- freezes the choice, and delivers it on every model call of the
-  turn, so the context cannot shift mid-reasoning and a retrieval tool's raise lasts exactly the rest of the turn. Here
+- OpenCode calls the hook once per *model call* (every step of a tool loop), not once per user turn. This bridge
+  scores once per turn, freezes the choice, and delivers it on every model call of the turn, so the context cannot
+  shift mid-reasoning and a retrieval tool's raise lasts exactly the rest of the turn. Here
   the first call of a user turn runs :func:`~context_core.graph.project` (close the last turn into a Card, score, freeze,
   deliver) and every later call of the same turn runs :func:`~context_core.graph.deliver` over the frozen choice. Computing
   the choice on every call would silently undo ``expand_card``: the evidence axis is decided by message order, so a fresh

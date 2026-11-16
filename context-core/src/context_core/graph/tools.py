@@ -105,8 +105,8 @@ def expand_card(
     """Raise every Subject Card in ``titles`` to Full Content for the remainder of the turn.
 
     Both axes, dialogue *and* evidence (Requirement 12.2). The elevation rewrites the frozen choice rather than adding a
-    field to the state, so it ends with the turn: the next ``BeforeInvocationEvent`` recomputes the choice from the
-    graph, and the fed-back Note carries the request across that boundary (Requirement 12.14). A full pass is left as
+    field to the state, so it ends at the next ``project``, which recomputes the choice from the graph (the next model
+    call, or the next turn under OpenCode); the fed-back Note carries the request across that boundary (Req. 12.14). A full pass is left as
     is, since every Card is already at Full Content and a ``by_title`` entry would flip ``full_pass`` to false and cost
     the delivery its identity short circuit.
 

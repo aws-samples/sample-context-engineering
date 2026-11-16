@@ -25,7 +25,7 @@ through `_compat.py` — the real ABC when Hermes is installed, a faithful stub 
   each one over the gate — the Strands `ceil(chars/4)` text / `ceil(json/2)` JSON heuristic
   (`_approximate_tokens`, `engine.py:76`) — it drives `_build_rewrite` (`engine.py:193`): store the full
   text in the store under `<tool_call_id>_0`, score and build the verbatim preview
-  (`RelevancePreview.build_with_stats`, `preview.py:504`), and record `(marker, reference)` keyed by
+  (`RelevancePreview.build_with_stats`, `preview.py:505`), and record `(marker, reference)` keyed by
   `tool_call_id`.
 - `select_context(request_messages)` (`engine.py:219`) returns a request-only copy with each recorded
   oversized result replaced by its marker, and closed `retrieve_all_context` exchanges dropped

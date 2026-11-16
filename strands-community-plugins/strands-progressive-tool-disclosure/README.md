@@ -18,13 +18,20 @@ The plugin reads the per-call copy the event loop hands to `InvokeModelStage` an
 `agent.tool_registry.registry` or `agent.messages` — every tool stays callable and the stored history
 is intact, regardless of what one call shows.
 
+The lexical tool index, the catalog lines and the closed-exchange fold live in `agent-context-core`
+(`context_core.disclosure`), the same code the LangGraph and Hermes bindings run. This package keeps what is
+specific to Strands: the per-agent state, the TTL, the model summarizer and the cancellation write-back
+(`plugin.py`), every SDK import (`_compat.py`), and the message conversion (`_adapter.py`).
+
 ## Install
 
+From a clone of [sample-context-engineering](https://github.com/aws-samples/sample-context-engineering):
+
 ```bash
-pip install strands-progressive-tool-disclosure
+uv pip install -e context-core -e strands-community-plugins/strands-progressive-tool-disclosure
 ```
 
-One runtime dependency: `strands-agents`. The default index is standard-library only. The default
+Two runtime dependencies: `agent-context-core` and `strands-agents`. The default index is standard-library only. The default
 summarizer calls the agent's own model once per tool whose description is longer than
 `catalog_chars`, on the first projected call, and caches the line; pass a `summarizer` to avoid it.
 

@@ -94,7 +94,8 @@ The packages are not on PyPI yet. Install them from a clone of this repository:
 
 ```bash
 # Strands
-pip install -e strands-community-plugins/strands-relevance-filter \
+pip install -e context-core \
+            -e strands-community-plugins/strands-relevance-filter \
             -e strands-community-plugins/strands-progressive-tool-disclosure \
             -e strands-community-plugins/strands-context-graph \
             "strands-agents>=1.44.0,<2.0.0"

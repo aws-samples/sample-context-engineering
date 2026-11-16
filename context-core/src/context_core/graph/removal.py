@@ -10,8 +10,8 @@ It asks, it does not decide, because ``remove_messages`` may preserve any reques
 message, or by tool-pair reconciliation; the compaction computes what actually left by comparing the request against the
 returned list. Hence ``ids`` and not ``dropped``.
 
-Absence carries the lag between the two halves: the graph is derived on ``MessageAddedEvent`` and read on
-``InvokeModelStage.Input``, so a call can land before the previous turn's Card exists or while the current turn is still
+Absence carries the lag between the two halves: the graph is derived by the write half and read by the delivery, so a
+call can land before the previous turn's Card exists or while the current turn is still
 open. Neither needs a check, since an underived Card has no key in ``state.cards`` and the turn in progress is
 subtracted via ``current_turn_ids``. A failed derivation costs full content for that turn with no conditional to get
 wrong. A title missing from the choice reads as full, the same fail-safe direction. An artifact Card gets no special
@@ -102,7 +102,7 @@ def removal_ids(
 
     Args:
         state: The graph state. Read only.
-        choice: The turn choice, frozen at ``BeforeInvocationEvent``. A title absent from ``choice.by_title`` reads as
+        choice: The turn choice the read half computed. A title absent from ``choice.by_title`` reads as
             full content.
         current_turn_ids: Durable identities of the turn in progress. Never in the return.
 
@@ -186,7 +186,7 @@ def apply_removal(
     Args:
         messages: The call's message list. Read only.
         state: The graph state. Read only.
-        choice: The turn choice, frozen at ``BeforeInvocationEvent``.
+        choice: The turn choice the read half computed.
         current_turn_ids: Durable identities of the turn in progress. Never removed.
 
     Returns:
