@@ -450,7 +450,7 @@ class sticky_collapse:  # noqa: N801 - used as a context manager, reads like a f
     """
 
     def __enter__(self) -> sticky_collapse:
-        self._original = projection._compute_choice
+        self._original = projection.choose
         memo: dict[str, CardChoice] = {}
         original = self._original
 
@@ -475,11 +475,11 @@ class sticky_collapse:  # noqa: N801 - used as a context manager, reads like a f
 
             return TurnChoice(by_title=MappingProxyType(decided), full_pass=False, selected=choice.selected)
 
-        projection._compute_choice = wrapper  # type: ignore[assignment]
+        projection.choose = wrapper  # type: ignore[assignment]
         return self
 
     def __exit__(self, *exc: object) -> None:
-        projection._compute_choice = self._original  # type: ignore[assignment]
+        projection.choose = self._original  # type: ignore[assignment]
 
 
 def _keyword_matcher() -> SimilarityMatcher:
