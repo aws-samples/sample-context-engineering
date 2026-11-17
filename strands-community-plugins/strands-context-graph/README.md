@@ -70,6 +70,16 @@ From a clone of [sample-context-engineering](https://github.com/aws-samples/samp
 uv pip install -e context-core -e strands-community-plugins/strands-context-graph
 ```
 
+## Compatibility
+
+| Plugin version | `strands-agents` tested |
+| --- | --- |
+| 0.2.x | 1.53 – 1.65 |
+| 0.1.x | 1.53 – 1.61; fails to import from 1.62 |
+
+Below 1.53, `InvokeModelContext` has no `dynamic_trailing_blocks` field, so the delivery cannot be written and every
+model call goes out unprojected.
+
 ## Dependencies
 
 Two runtime dependencies: `agent-context-core` and `strands-agents` (range-pinned with a real upper bound). No graph
@@ -83,7 +93,7 @@ what a rename actually costs you, and it is the only column that varies.
 
 | Private symbol | Used by | What it buys | Degrades as | What would remove the fragility |
 | --- | --- | --- | --- | --- |
-| `strands._middleware.stages.InvokeModelStage` + its `.Input` phase | `_compat.py`, `plugin.py` | The one seam where the messages sent to the provider change, without touching `agent.messages` | **Hard dependency.** `ImportError` at import — the plugin has no other delivery point | A public per-call input-transform stage |
+| `InvokeModelStage` + its `.Input` phase (`strands._middleware.stages` up to 1.61, public `strands.middleware` from 1.62) | `_compat.py`, `plugin.py` | The one seam where the messages sent to the provider change, without touching `agent.messages` | **Hard dependency.** `ImportError` at import when neither path exists — the plugin has no other delivery point | Public since 1.62; `_compat.py` imports whichever path the installed SDK has |
 | `dynamic_trailing_blocks` on `InvokeModelContext` | `plugin.py` | Telling downstream links how many blocks were appended, so they are not mistaken for history | **Hard dependency**, on the same context object | A public trailing-block API |
 | Same-stage ordering against a memory manager's fold | `plugin.py` | The Removal running before any memory block is folded in | **Silently, as a worse answer.** No exception; one wiring-time `warnings.warn` is the whole protection | Declared middleware ordering (priority, or a documented phase order) |
 | `agent._middleware_registry._handlers` | `plugin.py` | Moving the delivery to index zero of the stage, and reading back whether anything folds behind it | **No ordering guarantee.** The delivery stays registered in wiring order and the ordering notice fires | The same declared-ordering API |

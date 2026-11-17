@@ -99,7 +99,7 @@ are in band 3 (`tools.py`); what lives on the plugin is the agent's state, the a
 ## 2. Integration table — where the binding attaches to the Strands SDK
 
 Every Strands symbol is funnelled through `_compat.py`, "so an SDK rename or move is a one-file patch"
-(`_compat.py:3`): `InvokeModelContext` and `InvokeModelStage` from `strands._middleware.stages` (`_compat.py:23`),
+(`_compat.py:3`): `InvokeModelContext` and `InvokeModelStage` from `strands.middleware` (`_compat.py:33`), or from `strands._middleware.stages` before Strands 1.62 (`_compat.py:37`),
 `NullConversationManager` (`_compat.py:24`), `AfterToolCallEvent` (`_compat.py:27`), `Plugin` (`_compat.py:28`),
 `tool` (`_compat.py:29`) and `ToolContext` (`_compat.py:30`). The last two are imported at runtime rather than under
 `TYPE_CHECKING`, because `@tool` reads `ToolContext` off the signature at decoration time (`_compat.py:26`).
@@ -112,7 +112,7 @@ Every Strands symbol is funnelled through `_compat.py`, "so an SDK rename or mov
 | `self._states` | `plugin.py:654` | One graph per agent, created on first use (`_state_for`, `plugin.py:801`) | the agent as key | Its own `WeakKeyDictionary`; dropped with the agent |
 | `self._stores` | `plugin.py:658` | One reference store per agent (`_store_for`, `plugin.py:817`) | the agent as key | Its own `WeakKeyDictionary` |
 | `retrieval_tool_names` | `plugin.py:727` | Publishes the registered tool names, read at call time (`plugin.py:754`) | `self._tools` | — |
-| `HOST_SYMBOLS` | `_compat.py:48`, applied at `_compat.py:56` | Registers the Strands locations of the three optional store bridges, by `setdefault` | — | `context_core.graph.store.HOST_SYMBOLS` |
+| `HOST_SYMBOLS` | `_compat.py:56`, applied at `_compat.py:64` | Registers the Strands locations of the three optional store bridges, by `setdefault` | — | `context_core.graph.store.HOST_SYMBOLS` |
 | Manager notice | `_warn_on_destructive_manager` (`plugin.py:757`), emitted at `plugin.py:776` | One `warnings.warn` when the conversation manager can trim | `agent.conversation_manager` | Nothing — the manager is "not removed, not replaced, not reconfigured" (`plugin.py:296`) |
 | Ordering notice | `_warn_on_memory_fold_ordering` (`plugin.py:779`), emitted at `plugin.py:799` | One `warnings.warn` when a memory fold may sit ahead of the removal | the plugin registry and the middleware registry | Nothing |
 
@@ -121,7 +121,7 @@ registry come out as they went in, the retrieval tools aside" (`plugin.py:682`).
 front of the model is the folded `<collapsed_turns>` block on the last **user** message (§9) and the return value of a
 retrieval tool.
 
-**Three bridges registered, not one.** `STRANDS_HOST_SYMBOLS` (`_compat.py:48`) names all three keys the core's
+**Three bridges registered, not one.** `STRANDS_HOST_SYMBOLS` (`_compat.py:56`) names all three keys the core's
 artifact store reaches through: `extract_text`, `search_content` and `context_manager`. The LangGraph binding registers
 only `search_content` and supplies its second resolution layer explicitly, because LangGraph has no `ContextManager`.
 Here the layer is discovered on the agent by `_stash_of` (`store.py:483`), which walks the plugin registry for an
@@ -138,10 +138,10 @@ Named in the module docstring with the public API that would remove each one (`p
 | `_provide_memory_context` / `_injection_config` on a candidate | `_folds_memory` (`plugin.py:325`) | The manager is not recognised and the notice it would have triggered is not emitted |
 | `agent._middleware_registry._handlers` | `_Delivery.register` (`plugin.py:167`) and `_delivery_precedes_memory_fold` (`plugin.py:344`) | The move to index 0 fails and is logged (`plugin.py:170`), leaving the delivery registered in wiring order; the ordering question then answers `False`, which warns rather than reassures |
 
-`InvokeModelStage` itself is the fourth private surface and is not soft: there is no public middleware API yet
-(`_compat.py:22`). What is **no longer** imported is the set of SDK primitives the plugin used to copy behaviour from —
+`InvokeModelStage` itself is the fourth surface and is not soft: private up to Strands 1.61 and public from 1.62,
+imported from whichever path the SDK has (`_compat.py:33`). What is **no longer** imported is the set of SDK primitives the plugin used to copy behaviour from —
 `_is_user_turn`, `_get_tool_use_ids` / `is_pinned` and `_create_injection_middleware` — because `context_core.graph`
-carries framework-free copies of all three (`_compat.py:7`). `tests/test_sdk_parity.py` is what keeps the copies
+carries framework-free copies of all three (`_compat.py:9`). `tests/test_sdk_parity.py` is what keeps the copies
 honest: it checks each against the SDK's own, plus the one deliberate divergence, the core fold keeping `tracking_id`
 where the SDK primitive drops it.
 
@@ -237,7 +237,7 @@ sequenceDiagram
 
 | Step | Band | Why it sits there |
 |------|------|-------------------|
-| `register`, the index-zero move, `deliver`, `_on_after_tool_call`, the three `@tool` members, the two `warnings.warn` notices, the per-agent state and store maps | 1 | Pure Strands attachment. `InvokeModelStage`, `AfterToolCallEvent`, `Plugin`, `tool`, `ToolContext` and `NullConversationManager` are the only framework symbols, and they are all imported through `_compat.py` (`_compat.py:38`). |
+| `register`, the index-zero move, `deliver`, `_on_after_tool_call`, the three `@tool` members, the two `warnings.warn` notices, the per-agent state and store maps | 1 | Pure Strands attachment. `InvokeModelStage`, `AfterToolCallEvent`, `Plugin`, `tool`, `ToolContext` and `NullConversationManager` are the only framework symbols, and they are all imported through `_compat.py` (`_compat.py:45`). |
 | `dynamic_trailing_blocks` arithmetic | 1 | A Strands provider concept: the count tells it how many trailing blocks of the last message are per-call content, so the final block stays out of a cached prefix (`plugin.py:126`). The core returns the raw count and `project` drops it (`projection.py:148`). |
 | `_LazyMatcher` | 1 | A binding-side wrapper so the default matcher stays unbuilt on the path where `choose` never scores (`plugin.py:92`). The core takes the protocol and knows nothing about laziness. |
 | `messages_to_neutral`, `messages_from_neutral`, `message_to_neutral`, `result_to_neutral` | 2 | The single place both worlds are touched (`_adapter.py:12`). Four casts and no conversion — §6. |
@@ -245,7 +245,7 @@ sequenceDiagram
 | `warm_up_choice`, `compute_notes`, `_propagate`, `distribute`, `expire_reuse`, `record_reuse` | 3 | Every decision about *which rung*. Plain mappings and floats throughout. |
 | `apply_removal`, `render_final_block`, `_fold_into_last_user_message`, `guidance` | 3 | The removal, the block's text, and the fold — the SDK's injection primitive reimplemented verbatim so the core carries no framework import (`projection.py:517`). |
 | `expand_card`, `expand_artifact`, `find_context`, `_similar_neighbors`, `resolve_artifact`, `read_artifact` | 3 | Retrieval bodies and every model-facing string they return. |
-| `InMemoryReferenceStore`, `record_references`, `HOST_SYMBOLS` | 3 | The store and the optional-bridge registry; the Strands *locations* of the bridges are band 1 (`_compat.py:48`). |
+| `InMemoryReferenceStore`, `record_references`, `HOST_SYMBOLS` | 3 | The store and the optional-bridge registry; the Strands *locations* of the bridges are band 1 (`_compat.py:56`). |
 
 ---
 

@@ -20,7 +20,7 @@ from typing import Any
 
 from context_core.graph.cards import rebuild_into
 from context_core.graph.projection import _card_config
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import InvokeModelContext
 
 from strands_context_graph import ContextGraph
 

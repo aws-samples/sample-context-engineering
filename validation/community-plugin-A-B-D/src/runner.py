@@ -424,7 +424,7 @@ def build_agent(config: RunConfig, session: boto3.Session, collector: RunCollect
     Returns:
         The agent, with the collector's middleware registered last in the invoke stage.
     """
-    from strands._middleware.stages import InvokeModelStage
+    from strands_context_graph._compat import InvokeModelStage  # the SDK's path differs before and after 1.62
 
     session_manager = _session_manager(config)
 

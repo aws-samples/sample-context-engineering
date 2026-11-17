@@ -46,6 +46,15 @@ uv pip install -e context-core -e strands-community-plugins/strands-relevance-fi
 
 This pulls in `agent-context-core` and `strands-agents`.
 
+## Compatibility
+
+| Plugin version | `strands-agents` tested |
+| --- | --- |
+| 0.2.x | 1.44 – 1.65 |
+| 0.1.x | 1.44 – 1.65 |
+
+The plugin uses only public hooks, so the middleware move in Strands 1.62 does not touch it.
+
 ## Development
 
 ```bash

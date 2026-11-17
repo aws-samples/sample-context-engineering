@@ -32,8 +32,8 @@ from context_core.graph.cards import rebuild
 from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import MiddlewareRegistry
+from strands_context_graph._compat import InvokeModelContext
 
 from strands_context_graph import ContextGraph
 from strands_context_graph.plugin import _Delivery as Projection

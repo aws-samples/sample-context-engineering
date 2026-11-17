@@ -2,10 +2,10 @@
 
 Validates: Requirements 12.4, 12.5.
 
-The plugin rewrites ``tool_specs`` through SDK internals: ``InvokeModelStage`` and
-``InvokeModelContext`` from ``strands._middleware.stages``, registered with
-``agent._middleware_registry.add_middleware``. Underscore-prefixed names carry no stability
-guarantee, so a minor SDK release can move them. This file is where that shows up: three assertions
+The plugin rewrites ``tool_specs`` through ``InvokeModelStage`` and ``InvokeModelContext`` --
+public ``strands.middleware`` from Strands 1.62, private ``strands._middleware`` before it -- registered
+with ``agent._middleware_registry.add_middleware``. Strands 1.62 moved the package without an alias,
+which is the kind of move this file exists to catch: three assertions
 over the shape the plugin relies on, each one reached through the package's own ``_compat`` module so
 the test fails at the same import the plugin would fail at.
 
@@ -18,11 +18,14 @@ import dataclasses
 from typing import Any
 
 from strands import Agent
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.types import MiddlewareInputPhase
 from strands.models.model import Model
 
-from strands_progressive_tool_disclosure._compat import InvokeModelContext, InvokeModelStage
+from strands_progressive_tool_disclosure._compat import (
+    InvokeModelContext,
+    InvokeModelStage,
+    MiddlewareInputPhase,
+    MiddlewareRegistry,
+)
 
 TOOL_SPECS = [{"name": "run_query", "description": "runs a query", "inputSchema": {}}]
 

@@ -6,9 +6,17 @@ and this file is the guard: on Hypothesis-generated conversations each core func
 function returns. When the SDK renames or drops a symbol the test SKIPS with a message naming it, so the suite says
 "the SDK moved" instead of failing for an unrelated reason.
 
-One difference is deliberate and pinned here rather than hidden: the core's fold carries ``tracking_id`` onto the
-folded message (the next projection's scan reads Cards off that identity), the SDK's does not. The SDK strips
-``tracking_id`` before ``Model.stream``, so the provider request is the same either way.
+The SDK's fold changed in Strands 1.65, and the core keeps the earlier rule on purpose, so every Strands version
+in the supported range produces the same request. Two rules are probed from the installed SDK rather than read off
+its version number (:func:`_sdk_fold_rules`), and each test asserts the core against what that SDK does:
+
+- ``tracking_id``. The core's fold always carries it onto the folded message (the next projection's scan reads
+  Cards off that identity). The SDK dropped it before 1.65 and keeps it from 1.65. The SDK strips ``tracking_id``
+  before ``Model.stream``, so the provider request is the same either way.
+- The ``\\n\\n`` separator. The core puts it in front of the folded text whenever the target message has content,
+  as the SDK did before 1.65. From 1.65 the SDK puts it there only when the target has a *text* block, so a user
+  message holding only a ``toolResult`` gets the text with no separator. The difference is that one prefix and
+  nothing else, and it is what the tests normalise when the installed SDK uses the newer rule.
 """
 
 from __future__ import annotations
@@ -63,6 +71,45 @@ def _without_tracking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{k: v for k, v in m.items() if k != "tracking_id"} for m in messages]
 
 
+@dataclass(frozen=True)
+class _FoldRules:
+    """How the installed SDK's fold behaves on the two points where Strands 1.65 changed it."""
+
+    separates_non_text_target: bool
+    keeps_tracking_id: bool
+
+
+def _sdk_fold_rules(sdk_fold: Any) -> _FoldRules:
+    """Probe the SDK fold once on a user message that holds only a tool result and carries a ``tracking_id``."""
+    target = {
+        "role": "user",
+        "content": [{"toolResult": {"toolUseId": "t1", "status": "success", "content": [{"text": "r"}]}}],
+        "tracking_id": "m0",
+    }
+    folded, _ = sdk_fold([target], "x")
+    return _FoldRules(
+        separates_non_text_target=folded[0]["content"][-1]["text"].startswith("\n\n"),
+        keeps_tracking_id="tracking_id" in folded[0],
+    )
+
+
+def _as_the_sdk_would(
+    original: list[dict[str, Any]], folded: list[dict[str, Any]], text: str, rules: _FoldRules
+) -> list[dict[str, Any]]:
+    """The core's folded list, with the separator rewritten to the installed SDK's rule. Nothing else changes."""
+    if rules.separates_non_text_target or text.startswith("\n"):
+        return folded
+    result = list(folded)
+    for index, (before, after) in enumerate(zip(original, folded, strict=True)):
+        if after is before:
+            continue
+        has_text = any("text" in block for block in before["content"])
+        if before["content"] and not has_text:
+            last = after["content"][-1]
+            result[index] = {**after, "content": [*after["content"][:-1], {"text": last["text"].removeprefix("\n\n")}]}
+    return result
+
+
 # ---- the three predicates -------------------------------------------------------------------------
 
 
@@ -97,21 +144,24 @@ _fold_text = st.sampled_from(["<collapsed_turns>block</collapsed_turns>", "\nlea
 @given(_conversation, _fold_text)
 def test_the_fold_primitive_matches_the_sdk(messages: list[dict[str, Any]], text: str) -> None:
     sdk = _sdk("strands.injection._message_injection", "_fold_into_last_user_message")
+    rules = _sdk_fold_rules(sdk)
     before = copy.deepcopy(messages)
 
     core_messages, core_blocks = core_fold(messages, text)
     sdk_messages, sdk_blocks = sdk(messages, text)
 
     assert core_blocks == sdk_blocks
-    assert _without_tracking(list(core_messages)) == _without_tracking(list(sdk_messages))
+    expected = _as_the_sdk_would(messages, list(core_messages), text, rules)
+    assert _without_tracking(expected) == _without_tracking(list(sdk_messages))
     assert messages == before
 
 
 @settings(deadline=None)
 @given(_conversation, _fold_text)
-def test_the_core_fold_keeps_tracking_id_where_the_sdk_drops_it(messages: list[dict[str, Any]], text: str) -> None:
-    """The one deliberate difference, pinned: only the folded message's ``tracking_id`` differs."""
+def test_the_core_fold_always_keeps_tracking_id(messages: list[dict[str, Any]], text: str) -> None:
+    """The core keeps the folded message's ``tracking_id`` on every SDK; the SDK does so only from 1.65."""
     sdk = _sdk("strands.injection._message_injection", "_fold_into_last_user_message")
+    rules = _sdk_fold_rules(sdk)
     core_messages, _ = core_fold(messages, text)
     sdk_messages, _ = sdk(messages, text)
 
@@ -120,7 +170,10 @@ def test_the_core_fold_keeps_tracking_id_where_the_sdk_drops_it(messages: list[d
             assert sdk_m is original
             continue
         assert core_m.get("tracking_id") == original.get("tracking_id")
-        assert "tracking_id" not in sdk_m
+        if rules.keeps_tracking_id:
+            assert sdk_m.get("tracking_id") == original.get("tracking_id")
+        else:
+            assert "tracking_id" not in sdk_m
 
 
 @dataclass
@@ -148,12 +201,14 @@ def test_the_everyturn_injection_middleware_matches_the_core_fold(
     core's count to the incoming value rather than overwrite it.
     """
     create = _sdk("strands.injection._message_injection", "_create_injection_middleware")
+    rules = _sdk_fold_rules(_sdk("strands.injection._message_injection", "_fold_into_last_user_message"))
     handler = create(lambda _context: text, trigger="everyTurn")
     context = _Context(_Agent(), messages, already)
 
     folded_context = asyncio.run(handler(context))
     core_messages, core_blocks = core_fold(messages, text)
+    as_sdk = _as_the_sdk_would(messages, list(core_messages), text, rules)
 
-    expected = replace(context, messages=list(core_messages), dynamic_trailing_blocks=already + core_blocks)
+    expected = replace(context, messages=as_sdk, dynamic_trailing_blocks=already + core_blocks)
     assert folded_context.dynamic_trailing_blocks == expected.dynamic_trailing_blocks
     assert _without_tracking(list(folded_context.messages)) == _without_tracking(expected.messages)

@@ -108,11 +108,12 @@ SDK's hooks. The core is listed first so this checkout's copy is the one install
 -e ../../strands-community-plugins/strands-context-graph
 -e ../../strands-community-plugins/strands-progressive-tool-disclosure
 -e ../../strands-community-plugins/strands-relevance-filter
-strands-agents>=1.44.0,<2.0.0
+strands-agents>=1.53.0,<2.0.0
 ```
 
-The one private seam the bindings still couple to is `strands._middleware.stages.InvokeModelStage`
-(progressive disclosure and the context graph). The context graph no longer imports
+Progressive disclosure and the context graph attach to `InvokeModelStage`, private
+(`strands._middleware.stages`) up to Strands 1.61 and public (`strands.middleware`) from 1.62; each
+plugin's `_compat.py`, and the harness through it, imports from whichever path the installed SDK has. The context graph no longer imports
 `strands.injection._message_injection`: the core carries its own copy of that fold, pinned to the SDK
 original by `strands-context-graph/tests/test_sdk_parity.py`.
 

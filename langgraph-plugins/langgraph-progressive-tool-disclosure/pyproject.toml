@@ -28,8 +28,8 @@ classifiers = [
 ]
 dependencies = [
     "agent-context-core>=0.1.0,<0.2",
-    "langchain>=1.0,<2",
-    "langgraph>=1.0,<2",
+    "langchain>=1.2.12,<2",
+    "langgraph>=1.1.5,<2",
 ]
 
 [project.urls]

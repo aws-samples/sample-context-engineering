@@ -6,7 +6,7 @@ package is the thin interface: a `create_agent` middleware whose `wrap_model_cal
 call for a single turn — `request.override(tools=…, system_message=…+catalog, messages=…folded)` — plus
 the `find_tools` / `get_tool_details` tools and the `BaseMessage` ↔ neutral adapter.
 
-Verified against `langchain` 1.x.
+Tested `langchain` / `langgraph` versions are in [Compatibility](#compatibility).
 
 ## Install
 
@@ -19,6 +19,25 @@ uv pip install -e context-core -e langgraph-plugins/langgraph-progressive-tool-d
 This pulls in `agent-context-core`, `langchain` and
 `langgraph`. Tool search is lexical and local. By default, catalog lines that exceed `catalog_chars` are
 summarized by the agent's own model.
+
+## Compatibility
+
+The package declares `langchain>=1.2.12,<2` and `langgraph>=1.1.5,<2`. These are the oldest versions where
+the three LangGraph plugin suites and the validation harness all pass.
+
+| `langchain` | `langgraph` | `langchain-core` | Result |
+| --- | --- | --- | --- |
+| 1.5.0 | 1.2.22 | 1.8.1 | passes |
+| 1.4.2 | 1.2.12 | 1.6.5 | passes |
+| 1.3.0 | 1.2.22 | 1.8.1 | passes |
+| 1.2.12 – 1.2.18 | 1.1.5 / 1.1.10 | 1.8.1 | passes |
+| 1.2.10 | 1.0.8 | 1.2.10 | 2 failures |
+| 1.0.0 – 1.2.0 | 1.0.x | | 37 failures |
+
+Before `langchain` 1.1, `ModelRequest` has no `system_message` field, which the middleware overrides to add
+the catalog. On 1.2.10 with `langgraph` 1.0.8, the full agent does not restrict its tools and a direct call to
+a catalog tool is not cancelled. `langgraph` below 1.1.5 could not be tested with `langchain` 1.2.12: those
+releases accept a `langgraph-prebuilt` that imports `ExecutionInfo`, which only exists in newer `langgraph`.
 
 ## Usage
 

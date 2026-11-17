@@ -14,7 +14,7 @@ import warnings
 
 import pytest
 from strands import Agent
-from strands._middleware.stages import InvokeModelStage
+from strands_context_graph._compat import InvokeModelStage
 from strands.agent.conversation_manager import (
     NullConversationManager,
     SlidingWindowConversationManager,

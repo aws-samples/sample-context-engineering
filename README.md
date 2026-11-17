@@ -98,14 +98,14 @@ pip install -e context-core \
             -e strands-community-plugins/strands-relevance-filter \
             -e strands-community-plugins/strands-progressive-tool-disclosure \
             -e strands-community-plugins/strands-context-graph \
-            "strands-agents>=1.44.0,<2.0.0"
+            "strands-agents>=1.53.0,<2.0.0"
 
 # LangChain / LangGraph
 pip install -e context-core \
             -e langgraph-plugins/langgraph-relevance-filter \
             -e langgraph-plugins/langgraph-progressive-tool-disclosure \
             -e langgraph-plugins/langgraph-context-graph \
-            "langchain>=1.0,<2" "langgraph>=1.0,<2" "langchain-aws>=1.7,<2"
+            "langchain>=1.2.12,<2" "langgraph>=1.1.5,<2" "langchain-aws>=1.7,<2"
 
 # Hermes Agent (hermes-agent is version 0.0.0 and not on PyPI; install the host from source)
 pip install -e context-core \
@@ -119,7 +119,22 @@ pip install -e context-core \
 pip install -e context-core
 ```
 
-Verified against `strands-agents` 1.56.0, `langchain` 1.4.2 and OpenCode 1.18.34.
+Verified against OpenCode 1.18.34. The LangGraph plugins pass their suites on `langchain` 1.2.12 – 1.5.0 with
+`langgraph` 1.1.5 – 1.2.22; the per-version table is in each plugin's README. For Strands, each plugin version declares the
+`strands-agents` range its test suite passed on:
+
+| Strands plugins | `strands-relevance-filter`, `strands-progressive-tool-disclosure` | `strands-context-graph` |
+|---|---|---|
+| **0.2.x** | 1.44 – 1.65 | 1.53 – 1.65 |
+| 0.1.x | 1.44 – 1.61 (disclosure fails to import from 1.62) | 1.53 – 1.61 (fails to import from 1.62) |
+
+To install a given version without a clone, point pip at its tag, core first (the core is not on PyPI, so pip cannot
+fetch it as a dependency):
+
+```bash
+pip install "git+https://github.com/aws-samples/sample-context-engineering@v0.2.0#subdirectory=context-core" \
+            "git+https://github.com/aws-samples/sample-context-engineering@v0.2.0#subdirectory=strands-community-plugins/strands-context-graph"
+```
 
 ## The results
 

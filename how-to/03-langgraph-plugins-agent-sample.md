@@ -25,7 +25,7 @@ together** — two of them lose state silently.
 | | Requirement | Why |
 |---|---|---|
 | Python | **3.10 or newer** (3.12 for the benchmark) | the packages' `requires-python` |
-| `langchain` / `langgraph` | **>= 1.0, < 2** | the `create_agent` middleware API; verified on `langchain` 1.4.2 |
+| `langchain` / `langgraph` | **`langchain` >= 1.2.12, `langgraph` >= 1.1.5, both < 2** | the `create_agent` middleware API; tested up to `langchain` 1.5.0 / `langgraph` 1.2.22 |
 | `langchain-aws` | >= 1.7 | `ChatBedrockConverse`, the Bedrock chat model |
 | AWS CLI | **v2** | only to configure and verify credentials |
 
@@ -58,7 +58,7 @@ uv pip install -e context-core \
                -e langgraph-plugins/langgraph-relevance-filter \
                -e langgraph-plugins/langgraph-progressive-tool-disclosure \
                -e langgraph-plugins/langgraph-context-graph \
-               "langchain>=1.0,<2" "langgraph>=1.0,<2" "langchain-aws>=1.7,<2"
+               "langchain>=1.2.12,<2" "langgraph>=1.1.5,<2" "langchain-aws>=1.7,<2"
 ```
 
 Plain `pip install -e ...` works the same way.
