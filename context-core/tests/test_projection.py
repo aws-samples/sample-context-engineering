@@ -20,7 +20,7 @@ import copy
 from collections.abc import Sequence
 from types import MappingProxyType
 
-from context_core.graph.projection import Thresholds, _deliver, current_turn_ids, project
+from context_core.graph.projection import Thresholds, _deliver, choose, close_turns, current_turn_ids, project
 from context_core.graph.state import CardChoice, TurnChoice, _GraphState
 
 
@@ -273,9 +273,10 @@ def test_a_choice_that_collapses_nothing_returns_the_received_list() -> None:
         full_pass=False,
     )
 
-    projected = _deliver(state, messages, Thresholds())
+    projected, trailing_blocks = _deliver(state, messages, Thresholds())
 
     assert projected is messages
+    assert trailing_blocks == 0
 
 
 # ---- nothing is mutated ---------------------------------------------------------------------------
@@ -319,3 +320,52 @@ def test_body_budget_is_honoured() -> None:
 
     assert state.choice.full_pass is False
     assert len(projected) < len(messages)
+
+
+# ---- the phase API --------------------------------------------------------------------------------
+
+
+def test_the_three_phases_run_by_hand_equal_project() -> None:
+    """``project`` is the composition of ``close_turns``, ``choose`` and ``deliver``, plus its own bookkeeping.
+
+    A binding that runs the phases on separate hooks (Strands) must get the same projection as one that calls
+    ``project`` (LangGraph, Hermes) for the same messages and state.
+    """
+    messages = conversation()
+    matcher = TableMatcher({"how many instances were running in Ireland": 0.9}, default=0.1)
+    thresholds = Thresholds()
+
+    expected, expected_state = project(messages, None, matcher, None, thresholds)
+
+    state = _GraphState()
+    close_turns(state, messages, thresholds)
+    state.choice = choose(state, messages, matcher, None, thresholds)
+    projected, trailing_blocks = _deliver(state, messages, thresholds)
+
+    assert projected == expected
+    assert state.cards == expected_state.cards
+    assert state.choice == expected_state.choice
+    assert trailing_blocks == 1
+
+
+def test_choose_returns_the_choice_without_storing_it_or_advancing_the_turn() -> None:
+    messages = conversation()
+    matcher = TableMatcher({"how many instances were running in Ireland": 0.9}, default=0.1)
+    state = _GraphState()
+    close_turns(state, messages)
+    before_choice, before_turn = state.choice, state.turn
+
+    choice = choose(state, messages, matcher)
+
+    assert choice.full_pass is False
+    assert state.choice is before_choice
+    assert state.turn == before_turn
+
+
+def test_deliver_on_a_full_pass_returns_the_received_list_and_no_trailing_block() -> None:
+    messages = conversation()
+
+    projected, trailing_blocks = _deliver(_GraphState(), messages)
+
+    assert projected is messages
+    assert trailing_blocks == 0

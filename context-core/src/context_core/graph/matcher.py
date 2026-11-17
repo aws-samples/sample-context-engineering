@@ -177,6 +177,7 @@ class EmbeddingSimilarityMatcher:
         region_name: str | None = None,
         client: Any = None,
         cache_size: int | None = _DEFAULT_CACHE_SIZE,
+        user_agent_extra: str = "context-core",
     ) -> None:
         """Record the embedding configuration without opening a client.
 
@@ -186,6 +187,8 @@ class EmbeddingSimilarityMatcher:
             region_name: Region, used only when no session is supplied.
             client: Pre-built ``bedrock-runtime`` client, taking precedence over the arguments above.
             cache_size: Distinct ``(purpose, text)`` pairs to keep, or ``None`` for no bound.
+            user_agent_extra: Tag appended to the AWS user agent, so the calls are attributed to the caller. Defaults
+                to ``context-core``; a binding passes its own (the Strands plugins pass ``strands-agents``).
 
         Raises:
             ValueError: When ``cache_size`` is neither ``None`` nor an integer greater than or equal to 1.
@@ -200,6 +203,7 @@ class EmbeddingSimilarityMatcher:
         self._region_name = region_name
         self._client = client
         self._cache_size = cache_size
+        self._user_agent_extra = user_agent_extra
         # Insertion-ordered so the evicted entry is the least recently used one, and a hit moves to the end.
         self._cache: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
 
@@ -305,7 +309,7 @@ class EmbeddingSimilarityMatcher:
             config = BotocoreConfig(
                 connect_timeout=_DEFAULT_TIMEOUT_SECONDS,
                 read_timeout=_DEFAULT_TIMEOUT_SECONDS,
-                user_agent_extra="context-core",
+                user_agent_extra=self._user_agent_extra,
             )
             self._client = session.client(service_name="bedrock-runtime", config=config)
         except Exception as error:

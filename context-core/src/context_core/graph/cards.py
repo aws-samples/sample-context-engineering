@@ -14,7 +14,7 @@ both. Only messages carrying a ``tracking_id`` are addressed; one without is a m
 ``ToolPair.consumed`` comes from order alone: an ``assistant`` message carrying a text block appears after the pair,
 within the same turn (Requirements 6.4, 6.5).
 
-Requirement 3.2 keeps the ``MessageAddedEvent`` hook free of model call, disk and network, so the similarity link reads
+Requirement 3.2 keeps the write half free of model call, disk and network, so the similarity link reads
 vectors the reading half already paid for: an uncached pair gets no edge this turn, and one on the next turn the choice
 runs.
 
@@ -518,9 +518,9 @@ def rebuild(
 
     Every Card, link and turn ordinal is derivable from the host's message history, so a state lost to a restart is
     rebuilt from
-    the conversation: no I/O, no model call, no embedding call. It may run on the ``MessageAddedEvent`` hook only, never
-    ``BeforeInvocationEvent`` (Requirement 14.6), which is on the critical path of the model call: reaching nothing
-    remote is not the same as being free.
+    the conversation: no I/O, no model call, no embedding call. It runs in the write half (``close_turns``), on a state
+    holding no Card (Requirement 14.6); every binding reaches it through ``project`` on the critical path of the model
+    call, so reaching nothing remote is not the same as being free.
 
     Out comes one subject Card per closed turn, in turn order, each ordinal being the position of its boundary among the
     closed turns. Artifact Cards are not rebuilt: they own no durable identity, the subject-side ``artifact`` edge
@@ -1034,7 +1034,7 @@ def link_newly_measurable(
 ) -> int:
     """Measure the ``similar`` edges that became measurable now that ``titles`` are in the vector index.
 
-    This is the second half of the promise this module's header makes: the ``MessageAddedEvent`` hook is kept free of
+    This is the second half of the promise this module's header makes: the write half is kept free of
     network calls, so a Card registered there is measured against an index that cannot yet contain the Card's own
     Description -- it was written moments earlier. Without this pass that measurement is simply never retried, and the
     newest side of every pair stays uncached forever, which leaves the ``similar`` edge unable to form at all on the

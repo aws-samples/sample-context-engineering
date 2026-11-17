@@ -43,7 +43,7 @@ from .state import Card, CardChoice, _GraphState
 __all__ = ["guidance", "render_final_block"]
 
 _FULL: CardChoice = CardChoice(dialogue="full", evidence="full")
-"""How a Card absent from the choice is read. The choice is frozen at ``BeforeInvocationEvent``, so a Card derived after
+"""How a Card absent from the choice is read. The choice is computed by the read half, so a Card derived after
 that instant has no entry. Absent means keep, and a Card kept whole contributes no fragment."""
 
 _HEADER = "<collapsed_turns>"

@@ -17,8 +17,8 @@ uv pip install -e context-core
 ```
 
 The distribution is `agent-context-core`; the import name is `context_core`. You normally do not install
-it directly — the framework bindings depend on it: `langgraph-relevance-filter`,
-`langgraph-progressive-tool-disclosure` and `langgraph-context-graph`.
+it directly — every framework binding depends on it: the three `strands-*` plugins, the three `langgraph-*`
+middlewares, the four `hermes-*` engines and the OpenCode plugin.
 
 The default reranker (`amazon.rerank-v1:0`) and embedder (`cohere.embed-multilingual-v3`) call Amazon
 Bedrock through `boto3`, so using them needs AWS credentials and a region. Both are pluggable, and no AWS
@@ -35,7 +35,9 @@ message type to this shape at the boundary and calls into the core. The contract
 
 ## Provenance
 
-The logic here is **recreated from the Strands community plugins**
-([`community-plugins/strands-*`](https://github.com/aws-samples/sample-context-engineering/tree/main/community-plugins))
-used as **read-only reference**. This package never modifies those packages; it is an independent
-implementation that the LangGraph bindings depend on.
+The logic here was first written inside the Strands community plugins
+([`strands-community-plugins/strands-*`](https://github.com/aws-samples/sample-context-engineering/tree/main/strands-community-plugins))
+and recreated here, framework-free, for the LangGraph bindings. The Strands plugins have since moved onto
+this package too: each one now keeps only its Strands hooks (`plugin.py`), its SDK imports (`_compat.py`)
+and its message conversion (`_adapter.py`), and every decision about content runs here, the same code for
+every framework.

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 
-from strands_relevance_filter.reranker import BedrockReranker
+from strands_relevance_filter import BedrockReranker
 
 _FIGURE = re.compile(r"\d[\d.,]*")
 """A number in any of the shapes the scenario's payloads use, thousands separators included."""

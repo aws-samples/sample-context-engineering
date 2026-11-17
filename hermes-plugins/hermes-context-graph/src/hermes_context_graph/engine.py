@@ -43,6 +43,7 @@ from context_core.graph import (
 from context_core.graph.cards import derive_and_register_artifacts
 from context_core.graph.describe import normalize
 from context_core.graph.scoring import record_reuse, titles_in_turn_order
+from context_core.graph.tools import _artifact_title, _quoted, _render_candidates, _span_of
 from context_core.graph.store import (
     InMemoryReferenceStore,
     absent_message,
@@ -397,10 +398,6 @@ def _stringify(content: Any) -> tuple[str, bool]:
     return str(content), False
 
 
-def _quoted(titles: Sequence[str]) -> str:
-    return ", ".join(f"'{t}'" for t in titles)
-
-
 def _whole_artifact(reference: str, text: str) -> str:
     notice = (
         f"expand_artifact | whole artifact '{reference}' | this re-injects about {estimate_tokens(text)} "
@@ -409,60 +406,12 @@ def _whole_artifact(reference: str, text: str) -> str:
     return f"{notice}\n\n{text}"
 
 
-def _span_of(line_range: dict[str, int] | None) -> tuple[int, int] | None:
-    if line_range is None:
-        return None
-    try:
-        return (int(line_range["start"]), int(line_range["end"]))
-    except (KeyError, TypeError, ValueError, IndexError):
-        return None
-
-
-def _artifact_title(state: GraphState, reference: str) -> str | None:
-    for title in titles_in_turn_order(state):
-        card = state.cards[title]
-        if card.kind == "artifact" and card.reference == reference:
-            return title
-    return None
-
-
 def _nothing_found(need: str, tag: str | None) -> str:
     narrowed = f", among the turns tagged '{tag}'" if tag is not None else ""
     return (
         f"find_context | nothing in this conversation matches '{need}'{narrowed} | the titles already in "
         "front of you are the whole conversation, so name a turn directly with expand_card"
     )
-
-
-def _similar_neighbors(state: GraphState, title: str, exclude: "frozenset[str]", limit: int) -> list[tuple[str, float]]:
-    if limit <= 0:
-        return []
-    neighbors = [
-        (link.target, link.weight)
-        for link in state.links.get(title, ())
-        if link.kind == "similar" and link.target not in exclude and link.target in state.cards
-    ]
-    neighbors.sort(key=lambda pair: (-pair[1], pair[0]))
-    return neighbors[:limit]
-
-
-def _render_candidates(state: GraphState, need: str, chosen: list[str], neighbors_per_candidate: int) -> str:
-    lines = [f"find_context | {len(chosen)} earlier turn(s) match '{need}', best first:"]
-    already = frozenset(chosen)
-    for title in chosen:
-        card = state.cards[title]
-        lines.append(f"- title: {title}")
-        if card.tags:
-            lines.append(f"  tags: {', '.join(card.tags)}")
-        for fragment in card.description.splitlines():
-            if fragment.strip():
-                lines.append(f"  {fragment}")
-        neighbors = _similar_neighbors(state, title, already, neighbors_per_candidate)
-        if neighbors:
-            rendered = ", ".join(f"{n} ({w:.2f})" for n, w in neighbors)
-            lines.append(f"  related turns: {rendered}")
-    lines.append("call expand_card with one of these titles to bring that turn back in full")
-    return "\n".join(lines)
 
 
 def _expand_card_schema() -> Dict[str, Any]:

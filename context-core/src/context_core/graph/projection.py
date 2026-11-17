@@ -29,11 +29,12 @@ a caller gets back are the messages it handed in -- the same object, not merely 
 short circuit of Requirement 1.11, machine-checked in ``tests/test_projection.py``.
 
 **What this module does NOT carry**, and where it went instead: the SDK's ``_create_injection_middleware`` fold, the
-``dynamic_trailing_blocks`` counter it maintains, the ``MiddlewareRegistry._handlers`` reordering, the per-agent
-``WeakKeyDictionary`` lookup and the ``contextvars`` hand-off between the handler and its render callback were all
-mechanism for delivering *inside* an event loop. A single synchronous function needs none of them: the fold is one
-local call on a list (:func:`_fold_into_last_user_message`, the SDK primitive's behaviour reimplemented verbatim), and
-ordering against a memory manager is the binding's problem, not the core's.
+``MiddlewareRegistry._handlers`` reordering, the per-agent ``WeakKeyDictionary`` lookup and the ``contextvars``
+hand-off between the handler and its render callback were all mechanism for delivering *inside* an event loop. A
+single synchronous function needs none of them: the fold is one local call on a list
+(:func:`_fold_into_last_user_message`, the SDK primitive's behaviour reimplemented verbatim), and ordering against a
+memory manager is the binding's problem, not the core's. The fold's trailing-block count is the one piece of that
+mechanism kept: :func:`deliver` returns it, for a binding whose provider keeps per-call text out of the cached prefix.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ from .scoring import (
 )
 from .state import TurnChoice, _GraphState
 
-__all__ = ["Thresholds", "current_turn_ids", "deliver", "project"]
+__all__ = ["Thresholds", "choose", "close_turns", "current_turn_ids", "deliver", "project"]
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +108,9 @@ def project(
     """Project ``messages`` through the graph, and return them with the updated graph state.
 
     One call does the write half, the read half and the delivery, in that order, which is the order the three event
-    hooks imposed. Neither ``messages`` nor ``state`` is modified: the state is deep-copied on the way in, so a caller
-    may hand the same state to two projections and get two independent results.
+    hooks imposed. Each phase is also public (:func:`close_turns`, :func:`choose`, :func:`deliver`) for a binding that
+    runs them on separate hooks, as the Strands plugin does. Neither ``messages`` nor ``state`` is modified: the state
+    is copied on the way in, so a caller may hand the same state to two projections and get two independent results.
 
     Args:
         messages: The conversation, oldest first, in the neutral shape of :mod:`context_core.message`. The trailing
@@ -131,19 +133,20 @@ def project(
     """
     new_state = _copy_state(state) if state is not None else _GraphState()
 
-    _close_turns(new_state, messages, thresholds)
+    close_turns(new_state, messages, thresholds)
 
     # The clock the fed-back note is aged by. The plugin reads ``agent.event_loop_metrics.cycle_count``; with no agent
     # to read, the turn ordinal is the neutral equivalent -- monotonic, incremented once per projection, and never
     # advanced by a burst of messages inside one turn (Requirement 13.3).
     expire_reuse(new_state, new_state.turn)
-    new_state.choice = _compute_choice(new_state, messages, matcher, body_budget, thresholds)
+    new_state.choice = choose(new_state, messages, matcher, body_budget, thresholds)
     # After the increment the ordinal names the turn now opening, whose boundary the next projection will see.
     new_state.turn += 1
     # Counted per turn, so it starts each turn at zero.
     new_state.retrieval_cycles = 0
 
-    return _deliver(new_state, messages, thresholds), new_state
+    projected, _trailing_blocks = _deliver(new_state, messages, thresholds)
+    return projected, new_state
 
 
 def deliver(
@@ -156,7 +159,7 @@ def deliver(
     :func:`project` is the first call of a user turn: it closes the last turn into a Card, scores the graph against the
     question and freezes the choice. A host that calls the model several times inside one turn (an autonomous tool loop)
     needs the other half for the second and later calls -- the delivery alone, reading the choice the first call froze --
-    which is what the Strands plugin does with its ``InvokeModelStage.Input`` handler. Recomputing the choice on every
+    which is what the OpenCode bridge does on a turn's later calls. Recomputing the choice on every
     call would also undo a retrieval tool's raise: ``expand_card`` rewrites the frozen choice for the rest of the turn,
     and a fresh choice computed from the Notes would put the Card's evidence back into Description (the evidence axis is
     decided by message order, never by the Note).
@@ -173,7 +176,8 @@ def deliver(
         A new list carrying the removal and the final block, or ``messages`` itself -- by object identity on a full pass,
         on an empty request and on any failure.
     """
-    return _deliver(state, messages, thresholds)
+    projected, _trailing_blocks = _deliver(state, messages, thresholds)
+    return projected
 
 
 def _copy_state(state: _GraphState) -> _GraphState:
@@ -225,8 +229,15 @@ def current_turn_ids(messages: Sequence[NeutralMessage]) -> frozenset[str]:
 # ---- the write half: the turn boundary ------------------------------------------------------------
 
 
-def _close_turns(state: _GraphState, messages: Sequence[NeutralMessage], thresholds: Thresholds) -> None:
-    """Derive the Card of the last closed turn, or the whole graph by scan.
+def close_turns(
+    state: _GraphState,
+    messages: Sequence[NeutralMessage],
+    thresholds: Thresholds = _DEFAULTS,
+) -> None:
+    """Derive the Card of the last closed turn, or the whole graph by scan. The write half, in place.
+
+    Unlike :func:`project`, this writes into ``state``: a binding that runs the phases on separate hooks owns its
+    state and updates it where the hook fires.
 
     A state holding no Card in front of a conversation that has at least one closed boundary is a process that
     inherited the history, and one scan derives the whole graph from the messages -- the same Cards, Links and Tags
@@ -308,14 +319,18 @@ def _identities_in(messages: Sequence[NeutralMessage]) -> tuple[str, ...]:
 # ---- the read half: the turn choice ---------------------------------------------------------------
 
 
-def _compute_choice(
+def choose(
     state: _GraphState,
     messages: Sequence[NeutralMessage],
     matcher: SimilarityMatcher | None,
-    body_budget: int | None,
-    thresholds: Thresholds,
+    body_budget: int | None = None,
+    thresholds: Thresholds = _DEFAULTS,
 ) -> TurnChoice:
     """Score the graph against the turn's question, fill the vector index, and hand out the body budget.
+
+    The read half. It returns the choice and does not store it, and it does not age the fed-back note or advance the
+    turn ordinal: those are the caller's bookkeeping, because the clock differs by binding (:func:`project` uses its
+    turn ordinal, the Strands plugin the agent's cycle count).
 
     Any failure at any step degrades to the full pass -- the behaviour without the feature -- with exactly one warning
     carrying ``exc_info`` and no failure state kept, so the next projection computes a choice again (Requirement 16.1).
@@ -403,7 +418,7 @@ def _cache_description_vectors(state: _GraphState, matcher: SimilarityMatcher, *
     makes every pair unmeasurable and the ``similar`` Link never forms at all. The three structural Link kinds still
     form, which is why a graph with no ``similar`` edge looks like a working graph in the counters.
 
-    Two properties keep it free. It runs only where :func:`_compute_choice` has already scored, so the document vectors
+    Two properties keep it free. It runs only where :func:`choose` has already scored, so the document vectors
     sit in the matcher's cache; and ``vectors`` is optional on the protocol, so a matcher that does not publish one
     leaves the index as it was rather than failing the turn.
 
@@ -452,8 +467,8 @@ def _cache_description_vectors(state: _GraphState, matcher: SimilarityMatcher, *
 def _deliver(
     state: _GraphState,
     messages: Sequence[NeutralMessage],
-    thresholds: Thresholds,
-) -> Sequence[NeutralMessage]:
+    thresholds: Thresholds = _DEFAULTS,
+) -> tuple[Sequence[NeutralMessage], int]:
     """Apply the removal and the compaction, as one step that either happens or does not.
 
     Requirement 16.2 does not admit the state in between, so a failure anywhere returns the **received** list by object
@@ -465,18 +480,21 @@ def _deliver(
         thresholds: What the projection decides under, for the entry ceiling and the guidance.
 
     Returns:
-        A new list carrying the removal and the final block, or the received list itself -- by object identity on a
-        full pass, on an empty request, and on any failure.
+        ``(projected, trailing_blocks)``. ``projected`` is a new list carrying the removal and the final block, or the
+        received list itself -- by object identity on a full pass, on an empty request, and on any failure.
+        ``trailing_blocks`` is how many trailing blocks of the last message are per-call content: 1 when the final
+        block was folded into the last message, 0 otherwise. A binding that keeps per-call text out of a provider's
+        cached prefix (Strands' ``dynamic_trailing_blocks``) passes it on; :func:`project` drops it.
     """
     try:
         # A fresh state is a full pass, so a conversation with no Card behaves as it does without the feature.
         if state.choice.full_pass:
-            return messages
+            return messages, 0
 
         removed, requested = apply_removal(messages, state, state.choice, current_turn_ids(messages))
         if not requested:
             # Nothing to drop, so nothing to describe: the same list object.
-            return messages
+            return messages, 0
 
         final_block = render_final_block(
             removed,
@@ -488,13 +506,12 @@ def _deliver(
         if final_block is None:
             # The removal happened and no part contributed a fragment: nothing to fold, so the removed list goes as it
             # is. Not the intermediate state Requirement 16.2 forbids -- there is no description to lose.
-            return removed
+            return removed, 0
 
-        folded, _ = _fold_into_last_user_message(removed, final_block)
-        return folded
+        return _fold_into_last_user_message(removed, final_block)
     except Exception:
         logger.warning("delivery failed | passing the received messages through unchanged", exc_info=True)
-        return messages
+        return messages, 0
 
 
 def _fold_into_last_user_message(

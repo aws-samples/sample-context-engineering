@@ -96,9 +96,9 @@ cd sample-context-engineering
 python3 -m venv .venv
 source .venv/bin/activate                   # Windows: .venv\Scripts\activate
 
-pip install -e community-plugins/strands-context-graph \
-            -e community-plugins/strands-progressive-tool-disclosure \
-            -e community-plugins/strands-relevance-filter \
+pip install -e strands-community-plugins/strands-context-graph \
+            -e strands-community-plugins/strands-progressive-tool-disclosure \
+            -e strands-community-plugins/strands-relevance-filter \
             "strands-agents>=1.44.0,<2.0.0"
 ```
 

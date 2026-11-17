@@ -615,8 +615,11 @@ rediscovered, not so they go into the first version.
 
 ## 9. Mechanism within a turn
 
-The loop has two halves and they sit on different turns: **it writes at the end of one, reads at the
-beginning of the next**. Nothing of the writing half is on the critical path.
+The loop has two halves, and both run inside one call of `context_core.graph.project()`, which the
+Strands binding makes from its `InvokeModelStage.Input` handler on **every model call**, as the LangGraph
+binding does. The writing half closes the turn that ended before this one; the reading half then
+chooses for the question now open. The writing half is a deterministic scan with no model call, so its
+cost on the critical path is the scan alone.
 
 The diagram below is of **one turn**. The conversation across several turns is in §9.1, and that is
 where the mechanism makes sense — in the isolated turn it has almost nothing to do.
@@ -628,39 +631,40 @@ sequenceDiagram
     participant G as Context Graph
     participant M as Model
 
-    rect rgb(58, 62, 66)
-    Note over AG,M: READING HALF — start of the turn, on the critical path
     U->>AG: message
-    Note over AG,G: BeforeInvocationEvent — locks the choice for the turn
-    AG->>G: choose the cards for this message
-    G->>G: step 1 — compares the message with each card's description
+    rect rgb(58, 62, 66)
+    Note over AG,G: InvokeModelStage.Input — project() on every model call
+    AG->>G: the call's message list
+    Note over G: WRITING HALF — close_turns, no model
+    G->>G: closes the card of the turn that ended, by the turn boundary
+    G->>G: derives links: tool called, artifact cited, previous turn
+    G->>G: recomposes the description with the turn's numeric lines
+    Note over G: READING HALF — choose
+    G->>G: step 1 — compares the question with each card's description
     G->>G: step 2 — whoever rose pulls its neighbors
     G->>G: sorts, spends body_budget, distributes across three resolutions
-    G-->>AG: full / description / title, per card
-    Note over AG: InvokeModelStage.Input — D removes from the history<br/>and folds the descriptions at the end · B projects<br/>tool_specs over what D left
+    Note over G: DELIVERY — removes from the history by resolution<br/>and folds the descriptions at the end
+    G-->>AG: projected messages + new graph state
+    Note over AG: B projects tool_specs over what D left
     AG->>M: call
     Note over AG: the in-memory conversation stays intact
     end
 
     opt the choice left out something necessary
         M-->>AG: toolUse — expand(card), the title was visible
-        AG->>G: executes: raises the resolution of that card, fixed for the turn
-        AG->>M: call — costs one cycle
+        AG->>G: executes: raises the resolution of that card
+        AG->>M: call — project() runs again, costs one cycle
     end
 
     M-->>AG: final response
     AG-->>U: response
-
-    rect rgb(44, 48, 52)
-    Note over AG,G: WRITING HALF — off the critical path
-    Note over AG,G: MessageAddedEvent already fired and returned immediately
-    G->>G: closes the turn's card by the turn boundary (no model)
-    G->>G: derives links: tool called, artifact cited, previous turn
-    G->>G: recomposes the description with the turn's numeric lines
     Note over G: D never calls a model at any point
-    Note over G: nothing is written: the graph is ephemeral
-    end
+    Note over G: nothing is persisted: the graph is ephemeral
 ```
+
+Because the choice is recomputed per model call, the Turn Choice, the reuse TTL clock and the
+retrieval budget advance per model call, not per user turn. A raise written by `expand` survives
+the next call through the fed-back note, which the next projection ages by turn ordinal.
 
 D has no classifier: the card comes out of the turn boundary, which is deterministic. That is what
 allows rebuilding the graph by a scan after a restart, without persisting anything (§20).
@@ -902,15 +906,16 @@ what is sent — it decides whether a card has a description or only a title. Er
 
 ## 11. Hook points
 
-D adds no new hook to the SDK. It uses four that already exist.
+D adds no new hook to the SDK. It uses two that already exist, and every decision runs in
+`context_core.graph`, the same code the LangGraph and Hermes bindings call.
 
 | What | Where |
 |---|---|
-| writes the card, derives links | `MessageAddedEvent` hook |
+| writes the card, derives links | `InvokeModelStage.Input` middleware, inside `project()` (`close_turns`) |
 | creates the artifact card | `AfterToolCallEvent` hook, fast path; otherwise the preview scan (§19.1) |
-| locks the turn's choice | `BeforeInvocationEvent` hook |
-| **removes**: filters the history by resolution | `InvokeModelStage.Input` middleware |
-| **compacts**: folds the descriptions as a final block | the same middleware, via the injection primitive (§9.2) |
+| chooses the resolutions | the same middleware, inside `project()` (`choose`), on every model call |
+| **removes**: filters the history by resolution | the same middleware, inside `project()` (the delivery) |
+| **compacts**: folds the descriptions as a final block | the same delivery, through the core's copy of the SDK's fold (§9.2) |
 
 D assembles **history**, not `tool_specs`. That is where the interference dies, and not by a bridge
 between the two: B decides on its own who gets the full specification and who gets the
@@ -1151,12 +1156,12 @@ artifact card**. D's `AfterToolCallEvent` hook reads references off `event.resul
 already rewritten that result the references are there and the hook registers the card immediately;
 when they are not — a host that replaces the content elsewhere, or a hook order that puts D first —
 the card comes from the second path, the scan of the preview text, which is the path the code declares
-makes hook order irrelevant (`strands_context_graph/plugin.py:876` docstring). Same card, at worst one event later.
+makes hook order irrelevant (`strands_context_graph/plugin.py:844` docstring). Same card, at worst one event later.
 
 One thing A takes off D's hands entirely: A's own retrieval tool, `retrieve_all_context`, has its
 exchanges removed from `agent.messages` at `AfterInvocationEvent`, once the turn has ended
 (`strands_relevance_filter/plugin.py:_on_after_invocation:589`). They are gone before the next
-`MessageAddedEvent` boundary closes a turn, so D's scan never sees them and no card is ever derived
+projection closes that turn, so D's scan never sees them and no card is ever derived
 from a recovery A performed. Under B that tool is also kept out of `always_available` and reached
 through the catalog, so it does not compete with D's three retrieval tools for the exempt slots.
 
@@ -1252,15 +1257,13 @@ embed call, not a loss of data. It is also the only remote call D makes in any c
            ──▶  scores recalculated (ephemeral anyway)
 ```
 
-### The turn after the restore goes in whole, and that is right
+### The turn after the restore is already projected
 
-The reading half runs before the writing half (§9). On the first turn after a restart, the rebuild has
-not happened yet, so there is no card and everything goes in whole. It is the warm-up again, and it is
-the safe direction: more context, never less.
-
-It could be different — the scan is free and could run lazily inside `BeforeInvocationEvent`, before
-the choice. It stays as an open decision (§22.7), because a scan on the critical path is new cost in a
-place the contract protects.
+The writing half runs before the reading half, inside the same `project()` call (§9). On the first
+model call after a restart the state holds no card, so `close_turns` rebuilds the whole graph by one
+scan of the history and `choose` then scores it, on that same call (`context_core/graph/projection.py`,
+`close_turns`). The scan is on the critical path once per restart; it reads no I/O and calls no model.
+If the scan fails, the turn goes in whole: the warm-up again, and the safe direction.
 
 ## 21. Where this already exists
 
@@ -1329,8 +1332,8 @@ The integrations are optional and degrade to less optimization, never to error:
    inside `expand`: line range and pattern only apply to an artifact, so the single signature carries
    useless fields in half the cases. Three tool descriptions in the prompt against one confusing
    signature; measure the cost of both before choosing.
-7. Does the rebuild scan run lazily in `BeforeInvocationEvent`, before the choice, or only in the
-   writing half? The scan is free in I/O and model, but the contract protects the critical path, and
+7. **Resolved by the code:** the rebuild scan runs in the writing half of the first `project()` call
+   after a restart, before the choice (§20). What stays open is its cost: the scan is free in I/O and model, but the contract protects the critical path, and
    "free" is not "instantaneous" over a history of 99 messages. Measure the scan before deciding.
 
 ### None blocks the spec — both were resolved

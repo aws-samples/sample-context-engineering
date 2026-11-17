@@ -19,7 +19,7 @@ tool schemas (OpenAI function-tool dicts converted to `context_core` `ToolSpec` 
 
 - `select_context(request_messages)` (`engine.py:126`): fold closed `get_tool_details` exchanges
   (`context_core.disclosure.fold_closed_exchanges`), build the one-line catalog of tools not yet active
-  (`build_catalog`, `catalog.py:376`), and inject it into the system message (`_inject_catalog`). Fail-open.
+  (`build_catalog`, `catalog.py:405`), and inject it into the system message (`_inject_catalog`). Fail-open.
 - `get_tool_schemas()` (`engine.py:169`): `[find_tools, get_tool_details]`.
 - `handle_tool_call` (`engine.py:172`): `find_tools` runs the lexical index (`_find_tools`,
   `engine.py:183`, over `LexicalToolIndex`, `tool_index.py:177`); `get_tool_details` returns the full

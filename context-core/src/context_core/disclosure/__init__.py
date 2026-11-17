@@ -20,6 +20,7 @@ from .catalog import (
     fold_closed_exchanges,
     fold_note,
     pairs_intact,
+    requires_parameters,
     summary_line,
     truncate_description,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "fold_closed_exchanges",
     "fold_note",
     "pairs_intact",
+    "requires_parameters",
     "summary_line",
     "truncate_description",
 ]

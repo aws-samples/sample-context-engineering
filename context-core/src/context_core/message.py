@@ -1,7 +1,7 @@
 """The neutral message shape and accessors — the contract between every framework binding and the core.
 
 **No framework import is permitted in this module or anywhere under ``context_core``.** A framework
-binding (LangGraph today, possibly Strands later) converts its native message objects to and from the
+binding (Strands, LangGraph, Hermes, OpenCode) converts its native message objects to and from the
 shapes defined here at its own boundary; the core only ever sees these plain dicts.
 
 Shape

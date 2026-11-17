@@ -5,9 +5,14 @@
 #
 # Installed editable from the repository so a run measures the code in this checkout, which is the
 # code a reader can read. The paths are relative to this file's directory; run.sh cd's there first.
--e ../../community-plugins/strands-context-graph
--e ../../community-plugins/strands-progressive-tool-disclosure
--e ../../community-plugins/strands-relevance-filter
+#
+# The three packages are thin Strands bindings over agent-context-core, which holds the decision
+# logic. It is installed editable FIRST, so pip takes this checkout's core rather than the PyPI
+# release: a run must measure the core in this repository, not an older published one.
+-e ../../context-core
+-e ../../strands-community-plugins/strands-context-graph
+-e ../../strands-community-plugins/strands-progressive-tool-disclosure
+-e ../../strands-community-plugins/strands-relevance-filter
 
 # The unmodified SDK. The three packages each pin this range themselves (>=1.44.0,<2.0.0) because
 # they couple to a private middleware seam; it is restated here so the resolved version is visible

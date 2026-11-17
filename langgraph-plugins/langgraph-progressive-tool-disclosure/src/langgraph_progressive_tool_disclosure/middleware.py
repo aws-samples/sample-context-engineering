@@ -55,6 +55,7 @@ from context_core.disclosure import (
     estimate_tokens,
     summary_line,
     fold_closed_exchanges,
+    requires_parameters,
 )
 
 from ._adapter import to_langchain, to_neutral_list, to_neutral_list_with_sources
@@ -233,30 +234,6 @@ def _specs_of(tools: Sequence[BaseTool | Mapping[str, Any]]) -> list[ToolSpec]:
     """Convert every entry of ``request.tools`` to a neutral specification, in arrival order."""
     specs = [_spec_of(bound) for bound in tools]
     return [spec for spec in specs if spec is not None]
-
-
-def _requires_parameters(spec: ToolSpec) -> bool:
-    """Report whether ``spec`` declares at least one required parameter.
-
-    Only the ``required`` list decides. A tool whose parameters are all optional is callable with no
-    arguments, so an empty call to it is a legitimate call and not the symptom of a schema the model
-    never saw — which is why such a tool is exempt from the guard.
-
-    Args:
-        spec: Specification to read. Left unmodified.
-
-    Returns:
-        ``True`` when the schema lists at least one required parameter; ``False`` when it lists none,
-        and for any schema shape this cannot read.
-    """
-    input_schema: object = spec.get("inputSchema")
-    if not isinstance(input_schema, dict):
-        return False
-    root = input_schema.get("json", input_schema)
-    if not isinstance(root, dict):
-        return False
-    required = root.get("required")
-    return isinstance(required, list) and len(required) > 0
 
 
 # --------------------------------------------------------------------------------------------------
@@ -892,7 +869,7 @@ class ProgressiveToolDisclosureMiddleware(AgentMiddleware):
 
             # Arguments or not, the model could not have known the parameters, so either way the call is
             # a guess. A tool that needs none is exempt: an empty call to it is a legitimate call.
-            if not _requires_parameters(spec):
+            if not requires_parameters(spec):
                 return None
 
             logger.info("guessed tool call cancelled | tool=<%s> | cycle=<%d>", name, chose_on)

@@ -11,6 +11,7 @@ from .preview import Chunk, PreviewStats, RelevancePreview
 from .read import DEFAULT_CONTEXT_LINES, ReadRequestError, has_read_options, read_content
 from .reranker import BedrockReranker, Reranker, RerankerError
 from .store import FileStore, InMemoryStore, S3Store, Store
+from .tokens import approximate_tokens
 
 __all__ = [
     "BedrockReranker",
@@ -27,4 +28,5 @@ __all__ = [
     "Store",
     "has_read_options",
     "read_content",
+    "approximate_tokens",
 ]

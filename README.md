@@ -54,9 +54,9 @@ This is consistent with published work: the Strands benchmark for compaction plu
 
 | | Practice | What it does | Strands | LangGraph | Hermes | Design |
 |---|---|---|---|---|---|---|
-| **A** | **Relevance filtering** | Scores a tool result's chunks against the question and keeps what answers it, before the result enters the history. | [`strands-relevance-filter`](community-plugins/strands-relevance-filter/) | [`langgraph-relevance-filter`](langgraph-plugins/langgraph-relevance-filter/) | [`hermes-relevance-filter`](hermes-plugins/hermes-relevance-filter/) | [design A](docs/design/design-a-relevance-filtering.md) |
-| **B** | **Progressive tool disclosure** | Sends a lean tool catalog and a tool's full spec only on demand, attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](community-plugins/strands-progressive-tool-disclosure/) | [`langgraph-progressive-tool-disclosure`](langgraph-plugins/langgraph-progressive-tool-disclosure/) | [`hermes-progressive-tool-disclosure`](hermes-plugins/hermes-progressive-tool-disclosure/) | [design B](docs/design/design-b-progressive-tool-disclosure.md) |
-| **D** | **Context graph** | Turns the history into Cards and sends each at the resolution the question needs (full, Description or Title), recoverable on demand. It subsumes an earlier curator idea (C). | [`strands-context-graph`](community-plugins/strands-context-graph/) | [`langgraph-context-graph`](langgraph-plugins/langgraph-context-graph/) | [`hermes-context-graph`](hermes-plugins/hermes-context-graph/) | [design D](docs/design/design-d-context-graph.md) |
+| **A** | **Relevance filtering** | Scores a tool result's chunks against the question and keeps what answers it, before the result enters the history. | [`strands-relevance-filter`](strands-community-plugins/strands-relevance-filter/) | [`langgraph-relevance-filter`](langgraph-plugins/langgraph-relevance-filter/) | [`hermes-relevance-filter`](hermes-plugins/hermes-relevance-filter/) | [design A](docs/design/design-a-relevance-filtering.md) |
+| **B** | **Progressive tool disclosure** | Sends a lean tool catalog and a tool's full spec only on demand, attacking the ~63k schema floor. | [`strands-progressive-tool-disclosure`](strands-community-plugins/strands-progressive-tool-disclosure/) | [`langgraph-progressive-tool-disclosure`](langgraph-plugins/langgraph-progressive-tool-disclosure/) | [`hermes-progressive-tool-disclosure`](hermes-plugins/hermes-progressive-tool-disclosure/) | [design B](docs/design/design-b-progressive-tool-disclosure.md) |
+| **D** | **Context graph** | Turns the history into Cards and sends each at the resolution the question needs (full, Description or Title), recoverable on demand. It subsumes an earlier curator idea (C). | [`strands-context-graph`](strands-community-plugins/strands-context-graph/) | [`langgraph-context-graph`](langgraph-plugins/langgraph-context-graph/) | [`hermes-context-graph`](hermes-plugins/hermes-context-graph/) | [design D](docs/design/design-d-context-graph.md) |
 
 Each package is independent: install one, two or all three. They compose because they act at different
 moments: the filter on a tool result before it enters the history, disclosure on the tool list, the
@@ -94,9 +94,10 @@ The packages are not on PyPI yet. Install them from a clone of this repository:
 
 ```bash
 # Strands
-pip install -e community-plugins/strands-relevance-filter \
-            -e community-plugins/strands-progressive-tool-disclosure \
-            -e community-plugins/strands-context-graph \
+pip install -e context-core \
+            -e strands-community-plugins/strands-relevance-filter \
+            -e strands-community-plugins/strands-progressive-tool-disclosure \
+            -e strands-community-plugins/strands-context-graph \
             "strands-agents>=1.44.0,<2.0.0"
 
 # LangChain / LangGraph
@@ -232,7 +233,7 @@ reformatted number fails even when the arithmetic is right, on purpose. See
 ```
 BENCHMARK.md                              every model, every cell, and how to read them
 context-core/                             the shared, framework-agnostic logic of A, B and D
-community-plugins/
+strands-community-plugins/
   strands-relevance-filter/               practice A for Strands
   strands-progressive-tool-disclosure/    practice B for Strands
   strands-context-graph/                  practice D for Strands

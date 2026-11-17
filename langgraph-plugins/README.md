@@ -7,7 +7,7 @@ This directory ports the repository's three context-engineering practices — **
 It follows an **interface + core** architecture: all decision logic lives in the framework-agnostic
 [`context-core`](../context-core/) package (no `strands`/`langchain` import), and each package here is a
 thin LangChain-middleware binding over it. The existing Strands community plugins in
-[`../community-plugins/`](../community-plugins/) are **read-only reference** — recreated in `context-core`,
+[`../strands-community-plugins/`](../strands-community-plugins/) are **read-only reference** — recreated in `context-core`,
 never modified by this work.
 
 ## Packages
