@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strands-context-graph"
-version = "0.1.0"
+version = "0.2.0"
 description = "Short-term memory as a graph of Cards for Strands Agents: one Card per turn, derived by deterministic scan, projected at Title, Description or Full Content"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,10 +25,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# The only runtime dependency, pinned to a range with a real upper bound. The plugin derives Cards by regex scan and
-# scores them through the SDK's Bedrock path, so it needs no graph library and no similarity library. The upper bound
-# is a major bound because the plugin depends on private SDK symbols (see the README's private-API caveats).
-dependencies = ["agent-context-core>=0.1.0,<0.2", "strands-agents>=1.44.0,<2.0.0"]
+# Pinned to a range with a real upper bound. The plugin derives Cards by regex scan and scores them through the SDK's
+# Bedrock path, so it needs no graph library and no similarity library. The lower bound is the first SDK release whose
+# InvokeModelContext carries dynamic_trailing_blocks, which the delivery writes (1.53.0); the upper bound is a major
+# bound because the plugin depends on private SDK symbols (see the README's private-API caveats).
+dependencies = ["agent-context-core>=0.1.0,<0.2", "strands-agents>=1.53.0,<2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/aws-samples/sample-context-engineering"
@@ -44,7 +45,7 @@ installer = "uv"
 dependencies = [
     "mypy>=1.15.0,<3.0.0",
     "ruff>=0.13.0,<0.17.0",
-    "strands-agents>=1.44.0,<2.0.0",
+    "strands-agents>=1.53.0,<2.0.0",
 ]
 python = "3.10"
 

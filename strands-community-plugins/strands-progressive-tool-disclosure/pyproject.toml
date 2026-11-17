@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strands-progressive-tool-disclosure"
-version = "0.1.0"
+version = "0.2.0"
 description = "Progressive Tool Disclosure for Strands Agents: project the model call's tool list down to a search tool, the live exposures and a compact catalog, and expose a full schema only when the model searches for it"
 readme = "README.md"
 requires-python = ">=3.10"

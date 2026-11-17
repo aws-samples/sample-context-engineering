@@ -22,7 +22,7 @@ from types import MappingProxyType
 import pytest
 from context_core.graph.matcher import EmbeddingSimilarityMatcher
 from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import InvokeModelContext
 
 from strands_context_graph import ContextGraph
 

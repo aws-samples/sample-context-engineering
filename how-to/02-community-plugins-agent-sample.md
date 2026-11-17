@@ -21,10 +21,11 @@ them cost a measured benchmark run its answers, and none of them fails loudly.
 
 ## Compatibility
 
-The three packages install next to an **unmodified** `strands-agents` from PyPI. Verified against
-**1.56.0**: the private middleware seam they couple to
-(`strands._middleware.stages.InvokeModelStage`, `strands.injection._message_injection`) is present on
-the public release. They are not published to PyPI yet, so they install from this repository.
+The three packages install next to an **unmodified** `strands-agents` from PyPI. Version 0.2.x of the
+plugins passed its test suites on `strands-agents` 1.44 to 1.65 (the context graph from 1.53). The middleware
+stage they attach to, `InvokeModelStage`, moved from the private `strands._middleware` to the public
+`strands.middleware` in 1.62; each plugin's `_compat.py` imports from whichever the installed SDK has. They
+are not published to PyPI yet, so they install from this repository.
 
 Everything you need to run them is in [Run it in five commands](#run-it-in-five-commands) below.
 
@@ -38,7 +39,7 @@ the three packages, and runs the agent below against a real Bedrock model.
 | | Requirement | Why |
 |---|---|---|
 | Python | **3.10 or newer** | the packages' `requires-python`; the benchmark harness wants 3.12 |
-| `strands-agents` | **>= 1.44.0, < 2.0.0** | the middleware seam the plugins attach to; verified on 1.56.0 |
+| `strands-agents` | **>= 1.53.0, < 2.0.0** | the middleware stage the plugins attach to; suites pass on 1.53 to 1.65 |
 | `boto3` | >= 1.26 | pulled in automatically; used by the reranker and the embedding matcher |
 | AWS CLI | **v2** | only to configure and verify credentials |
 
@@ -96,10 +97,11 @@ cd sample-context-engineering
 python3 -m venv .venv
 source .venv/bin/activate                   # Windows: .venv\Scripts\activate
 
-pip install -e strands-community-plugins/strands-context-graph \
+pip install -e context-core \
+            -e strands-community-plugins/strands-context-graph \
             -e strands-community-plugins/strands-progressive-tool-disclosure \
             -e strands-community-plugins/strands-relevance-filter \
-            "strands-agents>=1.44.0,<2.0.0"
+            "strands-agents>=1.53.0,<2.0.0"
 ```
 
 ### 3. Save the agent and run it

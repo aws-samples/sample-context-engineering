@@ -33,8 +33,8 @@ from typing import Any
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import MiddlewareRegistry
+from strands_context_graph._compat import InvokeModelContext
 from strands.hooks.events import AfterToolCallEvent
 from strands.types.tools import ToolContext
 

@@ -67,23 +67,29 @@ A call to a catalog name that skipped the load is cancelled with a message point
 teach the model that calling a catalog name directly works. A tool whose parameters are all optional
 is exempt: it is callable with no arguments, so the call is not a guess.
 
+## Compatibility
+
+| Plugin version | `strands-agents` tested |
+| --- | --- |
+| 0.2.x | 1.44 – 1.65 |
+| 0.1.x | 1.44 – 1.61; fails to import from 1.62 |
+
 ## Private-API caveat
 
-The plugin depends on one private SDK seam: importing `InvokeModelStage` and `InvokeModelContext`
-from `strands._middleware.stages`, and calling
+The plugin reaches the middleware stage through `InvokeModelStage` and `InvokeModelContext`, and calls
 `agent._middleware_registry.add_middleware(InvokeModelStage.Input, handler)`, where
 `InvokeModelContext.tool_specs`, `.system_prompt` and `.messages` are mutable, defensively-copied
-per-call fields — the three the handler replaces. The underscore prefixes mark these as
-SDK-internal: they carry no public-API stability guarantee and can change in a minor release.
+per-call fields — the three the handler replaces. `BeforeModelCallEvent`, the closest hook, does not
+carry `tool_specs` and cannot rewrite them.
 
-It is accepted because there is no public middleware API yet — `BeforeModelCallEvent`, the closest
-public hook, does not carry `tool_specs` and cannot rewrite them — and because vended plugins use the
-same seam.
+The two classes were private (`strands._middleware.stages`) until Strands 1.61 and are public
+(`strands.middleware`) from 1.62, which removed the private package without an alias. The
+`_middleware_registry` attribute is still underscore-prefixed in every version.
 
 How the package contains it:
 
-- The import is isolated in `_compat.py`, so an upstream rename touches one file. That module is also
-  the single adoption point when a public middleware API lands.
+- The import is isolated in `_compat.py`, which tries `strands.middleware` first and falls back to
+  `strands._middleware`, so the same code runs on both sides of 1.62 and an upstream rename touches one file.
 - `pyproject.toml` pins `strands-agents` to a conservative range whose upper bound excludes the next
   major release, so a new major SDK cannot silently pull in a moved seam.
 - `tests/test_compat.py` asserts, on every SDK version tested in CI, that `InvokeModelStage.Input` is

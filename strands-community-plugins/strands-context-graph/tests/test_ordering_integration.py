@@ -48,7 +48,7 @@ from typing import Any
 
 import pytest
 from strands import Agent
-from strands._middleware.stages import InvokeModelStage
+from strands_context_graph._compat import InvokeModelStage
 from strands.agent.conversation_manager import NullConversationManager
 from strands.memory import MemoryManager
 from strands.memory.types import MemoryEntry

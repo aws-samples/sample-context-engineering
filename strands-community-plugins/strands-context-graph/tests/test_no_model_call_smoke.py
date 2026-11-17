@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 from strands import Agent
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import InvokeModelContext
 from strands.agent.conversation_manager import NullConversationManager
 from strands.hooks.events import AfterToolCallEvent
 from strands.models.model import Model

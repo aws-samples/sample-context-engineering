@@ -14,10 +14,10 @@
 -e ../../strands-community-plugins/strands-progressive-tool-disclosure
 -e ../../strands-community-plugins/strands-relevance-filter
 
-# The unmodified SDK. The three packages each pin this range themselves (>=1.44.0,<2.0.0) because
-# they couple to a private middleware seam; it is restated here so the resolved version is visible
-# in one place rather than inferred from three.
-strands-agents>=1.44.0,<2.0.0
+# The unmodified SDK. The three packages each pin their own range (the context graph needs >=1.53.0,
+# the other two >=1.44.0); the narrowest is restated here so the resolved version is visible in one
+# place rather than inferred from three.
+strands-agents>=1.53.0,<2.0.0
 
 # The web tool and the harness's own dependencies.
 playwright==1.55.0

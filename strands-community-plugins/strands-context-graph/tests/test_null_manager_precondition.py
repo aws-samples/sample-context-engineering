@@ -31,7 +31,7 @@ from context_core.graph.cards import rebuild_into
 from context_core.graph.projection import _card_config
 from context_core.graph.state import CardChoice, TurnChoice
 from strands import Agent
-from strands._middleware.stages import InvokeModelContext
+from strands_context_graph._compat import InvokeModelContext
 from strands.agent.conversation_manager import NullConversationManager, SlidingWindowConversationManager
 from strands.models.model import Model
 

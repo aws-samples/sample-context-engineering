@@ -13,8 +13,8 @@ reference the agent.
 import warnings
 
 import pytest
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.stages import InvokeModelStage
+from strands_context_graph._compat import MiddlewareRegistry
+from strands_context_graph._compat import InvokeModelStage
 from strands.agent.conversation_manager import NullConversationManager
 
 from strands_context_graph.plugin import ContextGraph

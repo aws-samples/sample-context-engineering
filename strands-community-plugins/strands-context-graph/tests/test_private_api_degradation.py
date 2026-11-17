@@ -21,8 +21,8 @@ import weakref
 import pytest
 from _frozen_choice import apply_frozen_choice
 from context_core.graph import store as store_module
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.stages import InvokeModelStage
+from strands_context_graph._compat import MiddlewareRegistry
+from strands_context_graph._compat import InvokeModelStage
 from strands.agent.conversation_manager import NullConversationManager
 
 from strands_context_graph._compat import STRANDS_HOST_SYMBOLS

@@ -18,8 +18,8 @@ import pytest
 from _frozen_choice import apply_frozen_choice
 from context_core.graph.projection import current_turn_ids
 from context_core.graph.state import Card, CardChoice, TurnChoice, _GraphState
-from strands._middleware.registry import MiddlewareRegistry
-from strands._middleware.stages import InvokeModelContext, InvokeModelStage
+from strands_context_graph._compat import MiddlewareRegistry
+from strands_context_graph._compat import InvokeModelContext, InvokeModelStage
 
 from strands_context_graph.plugin import _Delivery as Projection
 

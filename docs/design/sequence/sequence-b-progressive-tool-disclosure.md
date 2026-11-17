@@ -148,7 +148,7 @@ of the core is only the clamping and the truncation fallback (`plugin.py:165`, `
 
 | Step | Band | Why it sits there |
 |------|------|-------------------|
-| `init_agent`, the middleware handler, the two `@hook` methods, the two `@tool` methods | 1 | Pure SDK attachment. Every Strands symbol arrives through `_compat.py`, including the private middleware seam `InvokeModelStage` (`_compat.py:13`). |
+| `init_agent`, the middleware handler, the two `@hook` methods, the two `@tool` methods | 1 | Pure SDK attachment. Every Strands symbol arrives through `_compat.py`, including the private middleware seam `InvokeModelStage` (`_compat.py:14`). |
 | `_DisclosureState`, `_state_for`, `_expire`, `_renew` | 1 | TTL state is per agent and per process, and it is keyed by the framework's own agent object (`plugin.py:369`). |
 | `_model_summarizer`, `_summarize_missing`, `self._summaries` | 1 | A model call is a framework concern, and so is the concurrency gate around a burst of them (`plugin.py:841`). |
 | `messages_to_neutral`, `messages_from_neutral`, `specs_to_neutral` | 2 | The single place both worlds are touched (`_adapter.py:11`). No conversion, only identity-preserving re-typing (`_adapter.py:28`). |
@@ -161,9 +161,9 @@ of the core is only the clamping and the truncation fallback (`plugin.py:165`, `
 
 | # | SDK seam | `file.py:LINE` | Callback / order | Reads | Mutates |
 |---|----------|----------------|------------------|-------|---------|
-| 1 | `Plugin` base class (subclassed) | `plugin.py:642` `class ProgressiveToolDisclosure(Plugin)` | `Plugin` auto-registers `@hook` and `@tool` members but NOT middleware (per `init_agent` docstring `plugin.py:733`). The base class is reached only through `_compat.py` (`_compat.py:18`) | — | — |
+| 1 | `Plugin` base class (subclassed) | `plugin.py:642` `class ProgressiveToolDisclosure(Plugin)` | `Plugin` auto-registers `@hook` and `@tool` members but NOT middleware (per `init_agent` docstring `plugin.py:733`). The base class is reached only through `_compat.py` (`_compat.py:24`) | — | — |
 | 2 | `init_agent(agent)` lifecycle callback | `plugin.py:730` | Called by the SDK when an agent is initialized | `agent._middleware_registry` | Adds one middleware to `InvokeModelStage.Input` (`plugin.py:747`) |
-| 3 | `InvokeModelStage.Input` middleware — the projection | `plugin.py:747` (registration), `_projection_handler` `plugin.py:749` (handler) | Middleware stage `InvokeModelStage.Input`; the seam is reached only through `_compat.py`, which imports `InvokeModelContext` and `InvokeModelStage` from `strands._middleware.stages` (`_compat.py:13`). **No explicit order is set** — the handler is appended in wiring order, so it runs after any middleware that forced itself to the front (see §11). | `context.tool_specs`, `context.messages`, `context.system_prompt`, `context.agent`, `agent.tool_registry.registry`, `agent.event_loop_metrics.cycle_count`, `agent.model` (default summarizer) | Returns a NEW context via `replace(context, tool_specs=..., messages=..., system_prompt=...)` (`plugin.py:634`), or `tool_specs` and `messages` alone when the catalog is suppressed (`plugin.py:631`); writes `state.projected` (`plugin.py:782`) and mutates per-agent `_DisclosureState` (`_expire` `plugin.py:404`) plus the shared summary cache and index fingerprint (`_ensure_index` `plugin.py:789`). Does NOT touch the registry or `agent.messages`. |
+| 3 | `InvokeModelStage.Input` middleware — the projection | `plugin.py:747` (registration), `_projection_handler` `plugin.py:749` (handler) | Middleware stage `InvokeModelStage.Input`; the seam is reached only through `_compat.py`, which imports `InvokeModelContext` and `InvokeModelStage` from `strands._middleware.stages` (`_compat.py:14`). **No explicit order is set** — the handler is appended in wiring order, so it runs after any middleware that forced itself to the front (see §11). | `context.tool_specs`, `context.messages`, `context.system_prompt`, `context.agent`, `agent.tool_registry.registry`, `agent.event_loop_metrics.cycle_count`, `agent.model` (default summarizer) | Returns a NEW context via `replace(context, tool_specs=..., messages=..., system_prompt=...)` (`plugin.py:634`), or `tool_specs` and `messages` alone when the catalog is suppressed (`plugin.py:631`); writes `state.projected` (`plugin.py:782`) and mutates per-agent `_DisclosureState` (`_expire` `plugin.py:404`) plus the shared summary cache and index fingerprint (`_ensure_index` `plugin.py:789`). Does NOT touch the registry or `agent.messages`. |
 | 4 | `@tool(context=True)` vended tool `get_tool_details` | `plugin.py:926` decorator, `plugin.py:927` method | Auto-registered by `Plugin`, by the `_PluginRegistry` AFTER `init_agent` (`plugin.py:730`) returns, as its docstring states, so early calls can arrive without it — covered by `_should_passthrough` (`plugin.py:520`). | `tool_context.agent`, `agent.event_loop_metrics.cycle_count`, `agent.tool_registry.registry`, the `names` argument | Increments `state.loads` (`plugin.py:944`); writes `state.exposed` via `_renew` for each known name (`plugin.py:961`). Returns a text result string. |
 | 5 | `@tool(context=True)` vended tool `find_tools` | `plugin.py:866` decorator, `plugin.py:867` method | Auto-registered by `Plugin`, same post-`init_agent` window as row 4. | `tool_context.agent`, `agent.tool_registry.registry`, the `need` argument, the index | Increments `state.searches` (`_record_search` `plugin.py:481`, called `plugin.py:890`). **Writes no exposure** — it only reads the index and the registry. |
 | 6 | `BeforeToolCallEvent` hook | `plugin.py:971` `@hook`, `_on_before_tool_call` `plugin.py:972` | Sync hook (the `# type: ignore` note at `plugin.py:971` says the `@hook` overloads only infer async). Auto-registered by `Plugin`. Fires before each tool call. No numeric order documented. | `event.tool_use["name"]` (`plugin.py:989`), `event.agent`, `agent.tool_registry.registry`, `state.projected`, `self._always_available`, `requires_parameters(spec)` (`catalog.py:203`) | On a premature call sets `event.cancel_tool` (`plugin.py:1004`) and increments `state.premature_cancellations` (`_record_premature_cancellation` `plugin.py:505`, called `plugin.py:1005`). **Writes no exposure at all** — it never calls `_renew`. |
@@ -171,9 +171,9 @@ of the core is only the clamping and the truncation fallback (`plugin.py:165`, `
 
 Supporting SDK type imports (not attachment points, but the surface used), all re-exported by `_compat`
 and imported from there at `plugin.py:55`: `AfterToolCallEvent` and `BeforeToolCallEvent`
-(`_compat.py:17`), `Plugin` and `hook` (`_compat.py:18`), `tool` (`_compat.py:19`), `Messages` and
-`SystemPrompt` (`_compat.py:20`), `ToolContext` and `ToolSpec` (`_compat.py:21`), with `Agent` and
-`Model` under `TYPE_CHECKING` (`_compat.py:24`, `_compat.py:25`). `SystemPrompt` is the type of the field
+(`_compat.py:23`), `Plugin` and `hook` (`_compat.py:24`), `tool` (`_compat.py:25`), `Messages` and
+`SystemPrompt` (`_compat.py:26`), `ToolContext` and `ToolSpec` (`_compat.py:27`), with `Agent` and
+`Model` under `TYPE_CHECKING` (`_compat.py:30`, `_compat.py:31`). `SystemPrompt` is the type of the field
 the catalog is appended to, `Messages` the type the fold rewrites. Everything the core contributes
 arrives in one import at `plugin.py:38`, and the adapter in one at `plugin.py:54`.
 
@@ -636,7 +636,7 @@ mode. It is **structural**, and it rests on three facts, each verified by readin
    registered at the back of the stage rather than crashing the wiring (same file, lines 169-175).
 
 2. **The SDK builds the chain BACK TO FRONT, so index 0 is the OUTERMOST layer and runs FIRST.** In the
-   installed SDK, `strands/_middleware/registry.py`, `compose` iterates the sorted handler list in
+   SDK, `strands/_middleware/registry.py` in 1.56 (`strands/middleware/_registry.py` from 1.62, same loop), `compose` iterates the sorted handler list in
    reverse (line 128 seeds `current` with the terminal, line 129 walks downward), wrapping each handler
    *around* what was built so far:
 

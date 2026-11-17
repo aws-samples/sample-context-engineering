@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strands-relevance-filter"
-version = "0.1.0"
+version = "0.2.0"
 description = "Relevance filtering of oversized tool results for Strands Agents: rewrite the result on the public AfterToolCallEvent hook into a budget-bounded, verbatim preview and offload the raw content to a store"
 readme = "README.md"
 requires-python = ">=3.10"

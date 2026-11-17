@@ -228,7 +228,7 @@ cannot claim is stated there: an unreadable registry, an empty list and a failed
 same way, so the answer is `False` and the caller warns rather than reassures.
 
 **The SDK builds the chain back to front.** `MiddlewareRegistry.compose`
-(`strands/_middleware/registry.py`, line 117 in the pinned SDK) walks the sorted handlers with
+(`strands/_middleware/registry.py`, line 117 in SDK 1.56; `strands/middleware/_registry.py` from 1.62) walks the sorted handlers with
 `for i in range(len(sorted_handlers) - 1, -1, -1)` — line 129 — wrapping each one around the chain built
 so far. The **last** handler becomes the innermost layer and the **first** becomes the outermost. So
 index 0 runs *first*.
