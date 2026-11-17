@@ -105,7 +105,7 @@ pip install -e context-core \
             -e langgraph-plugins/langgraph-relevance-filter \
             -e langgraph-plugins/langgraph-progressive-tool-disclosure \
             -e langgraph-plugins/langgraph-context-graph \
-            "langchain>=1.0,<2" "langgraph>=1.0,<2" "langchain-aws>=1.7,<2"
+            "langchain>=1.2.12,<2" "langgraph>=1.1.5,<2" "langchain-aws>=1.7,<2"
 
 # Hermes Agent (hermes-agent is version 0.0.0 and not on PyPI; install the host from source)
 pip install -e context-core \
@@ -119,7 +119,8 @@ pip install -e context-core \
 pip install -e context-core
 ```
 
-Verified against `langchain` 1.4.2 and OpenCode 1.18.34. For Strands, each plugin version declares the
+Verified against OpenCode 1.18.34. The LangGraph plugins pass their suites on `langchain` 1.2.12 – 1.5.0 with
+`langgraph` 1.1.5 – 1.2.22; the per-version table is in each plugin's README. For Strands, each plugin version declares the
 `strands-agents` range its test suite passed on:
 
 | Strands plugins | `strands-relevance-filter`, `strands-progressive-tool-disclosure` | `strands-context-graph` |

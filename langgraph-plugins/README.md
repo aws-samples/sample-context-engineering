@@ -76,10 +76,11 @@ uv pip install -e context-core
 uv pip install -e langgraph-plugins/langgraph-relevance-filter \
                -e langgraph-plugins/langgraph-progressive-tool-disclosure \
                -e langgraph-plugins/langgraph-context-graph
-uv pip install "langchain>=1.0,<2" "langgraph>=1.0,<2" langchain-aws
+uv pip install "langchain>=1.2.12,<2" "langgraph>=1.1.5,<2" langchain-aws
 ```
 
-Verified against `langchain` 1.4.2.
+Tested on `langchain` 1.2.12 – 1.5.0 with `langgraph` 1.1.5 – 1.2.22. Each plugin's README has the
+per-version table and what breaks below that floor.
 
 ## Compose all three on one agent
 

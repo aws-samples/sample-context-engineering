@@ -11,7 +11,8 @@ adapter.
 
 Because `request.override(messages=…)` is transient, no persisted state is deleted — the
 `NullConversationManager` precondition becomes "do not also install a summarization/pruning middleware",
-which the middleware warns about at construction. Verified against `langchain` 1.x.
+which the middleware warns about at construction. Tested `langchain` / `langgraph` versions are in
+[Compatibility](#compatibility).
 
 ## Install
 
@@ -24,6 +25,23 @@ uv pip install -e context-core -e langgraph-plugins/langgraph-context-graph
 This pulls in `agent-context-core`, `langchain` and
 `langgraph`. The default similarity matcher embeds with `cohere.embed-multilingual-v3` on Amazon Bedrock,
 so it needs AWS credentials and a region. Pass `matcher=` to use another backend.
+
+## Compatibility
+
+The package declares `langchain>=1.2.12,<2` and `langgraph>=1.1.5,<2`. These are the oldest versions where
+the three LangGraph plugin suites and the validation harness all pass.
+
+| `langchain` | `langgraph` | `langchain-core` | Result |
+| --- | --- | --- | --- |
+| 1.5.0 | 1.2.22 | 1.8.1 | passes |
+| 1.4.2 | 1.2.12 | 1.6.5 | passes |
+| 1.3.0 | 1.2.22 | 1.8.1 | passes |
+| 1.2.12 – 1.2.18 | 1.1.5 / 1.1.10 | 1.8.1 | passes |
+| 1.0.0 – 1.2.0 | 1.0.x | | fails to import |
+
+The middleware imports `ExtendedModelResponse`, which first ships in `langchain` 1.2.10. `langgraph` below
+1.1.5 could not be tested with `langchain` 1.2.12: those releases accept a `langgraph-prebuilt` that imports
+`ExecutionInfo`, which only exists in newer `langgraph`.
 
 ## Usage
 

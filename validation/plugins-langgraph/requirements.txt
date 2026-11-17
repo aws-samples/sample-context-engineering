@@ -15,8 +15,8 @@
 
 # The unmodified framework. The three packages each pin these ranges themselves; restated for the
 # same reason.
-langchain>=1.0,<2
-langgraph>=1.0,<2
+langchain>=1.2.12,<2
+langgraph>=1.1.5,<2
 
 # The Bedrock chat model. ChatBedrockConverse rather than init_chat_model("bedrock:…") because the
 # harness passes its own boto3 client, so log tagging, timeouts and credential resolution are shared
